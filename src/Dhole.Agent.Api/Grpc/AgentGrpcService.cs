@@ -1,5 +1,4 @@
-using CustomCodeFramework.Cqrs.Commands;
-using CustomCodeFramework.Cqrs.Queries;
+using CustomCodeFramework.Cqrs.Dispatching;
 using Dhole.Agent.Application.Agents;
 using Dhole.Agent.Contracts.Grpc;
 using Grpc.Core;
