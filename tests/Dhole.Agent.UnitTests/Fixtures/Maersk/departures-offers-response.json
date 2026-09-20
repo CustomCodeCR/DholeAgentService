@@ -1,0 +1,74 @@
+{
+  "offers": [
+    {
+      "status": "OFFERED",
+      "availabilityFlag": true,
+      "routeId": "ROUTE-001",
+      "productDataCollection": [
+        {
+          "dataBundle": [
+            {
+              "dataBundleType": "PRICE_BREAKDOWN",
+              "productName": "MaerskSpot",
+              "currencyCode": "USD",
+              "totalAmount": 2500.00,
+              "charges": [
+                {
+                  "chargeTypeCode": "BAS",
+                  "chargeApplicationCode": "Freight",
+                  "chargeName": "Basic Ocean Freight",
+                  "currencyCode": "USD",
+                  "totalBasicFreightAmount": 1900.00,
+                  "amount": 1900.00
+                },
+                {
+                  "chargeTypeCode": "DHC",
+                  "chargeApplicationCode": "Freight",
+                  "chargeName": "Destination Handling",
+                  "currencyCode": "USD",
+                  "amount": 600.00
+                }
+              ]
+            },
+            {
+              "dataBundleType": "ROUTE_SCHEDULE",
+              "from": "Shanghai, China",
+              "to": "Puerto Caldera, Costa Rica",
+              "departureDateTime": "2026-09-21T08:00:00Z",
+              "arrivalDateTime": "2026-10-18T08:00:00Z",
+              "vesselName": "MAERSK TEST",
+              "voyageNumber": "123W"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "status": "OFFERED",
+      "availabilityFlag": true,
+      "routeId": "ROUTE-001",
+      "productDataCollection": [
+        {
+          "dataBundle": [
+            {
+              "dataBundleType": "PRICE_BREAKDOWN",
+              "productName": "MaerskSpotWithVR"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "status": "PENDING",
+      "availabilityFlag": true,
+      "routeId": "ROUTE-NOT-OFFERED",
+      "productDataCollection": []
+    },
+    {
+      "status": "OFFERED",
+      "availabilityFlag": false,
+      "routeId": "ROUTE-UNAVAILABLE",
+      "productDataCollection": []
+    }
+  ]
+}

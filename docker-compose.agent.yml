@@ -1,0 +1,63 @@
+services:
+  dhole-agent-api:
+    container_name: dhole-agent-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api-final
+      args:
+        NUGET_USERNAME: ${NUGET_USERNAME:-github}
+        NUGET_TOKEN: ${NUGET_TOKEN:-}
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Postgres__ConnectionString: ${AGENT_POSTGRES_CONNECTION_STRING}
+      Redis__ConnectionString: ${AGENT_REDIS_CONNECTION_STRING}
+      Hermes__BaseUrl: http://hermes-agent:${HERMES_PORT:-8000}
+      Browser__ProfilesPath: /data/browser-profiles
+    ports:
+      - "${AGENT_API_PORT:-5210}:8080"
+    networks:
+      - dhole-internal
+    restart: unless-stopped
+
+  dhole-agent-workers:
+    container_name: dhole-agent-workers
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-final
+      args:
+        NUGET_USERNAME: ${NUGET_USERNAME:-github}
+        NUGET_TOKEN: ${NUGET_TOKEN:-}
+    environment:
+      DOTNET_ENVIRONMENT: ${DOTNET_ENVIRONMENT:-Production}
+      Postgres__ConnectionString: ${AGENT_POSTGRES_CONNECTION_STRING}
+      Redis__ConnectionString: ${AGENT_REDIS_CONNECTION_STRING}
+      Hermes__BaseUrl: http://hermes-agent:${HERMES_PORT:-8000}
+      Browser__ProfilesPath: /data/browser-profiles
+    volumes:
+      - agent-browser-profiles:/data/browser-profiles
+    shm_size: "2gb"
+    depends_on:
+      - hermes-agent
+    networks:
+      - dhole-internal
+    restart: unless-stopped
+
+  hermes-agent:
+    container_name: hermes-agent
+    image: ${HERMES_IMAGE:?Set HERMES_IMAGE to the Hermes Agent image}
+    environment:
+      PORT: ${HERMES_PORT:-8000}
+    expose:
+      - "${HERMES_PORT:-8000}"
+    networks:
+      - dhole-internal
+    restart: unless-stopped
+
+volumes:
+  agent-browser-profiles:
+
+networks:
+  dhole-internal:
+    name: dhole-internal

@@ -1,36 +1,55 @@
-using CustomCodeFramework.Auth.Scopes;
-using CustomCodeFramework.ServiceDefaults.DependencyInjection;
+using Dhole.Agent.Api.Grpc;
+using Dhole.Agent.Api.Endpoints;
+using CustomCodeFramework.Api.DependencyInjection;
+using CustomCodeFramework.Api.Swagger;
+using Dhole.Agent.Application.DependencyInjection;
+using Dhole.Agent.Infrastructure.DependencyInjection;
+using Dhole.Agent.Persistence.DependencyInjection;
+using Dhole.Agent.Persistence.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
+const string CorsPolicyName = "DholeWebCors";
 
-builder.Services.AddCustomCodeServiceDefaults(
-    builder.Configuration,
-    options =>
-    {
-        options.AddMongo = false;
-        options.AddRedisStreams = false;
-    }
-);
+builder.Services.AddCustomCodeApiWithSwagger(title: "Dhole Agent Service", version: "v1");
+builder.Services.AddCors(options => options.AddPolicy(
+    CorsPolicyName,
+    policy => policy
+        .WithOrigins(
+            "https://dhole.customcodecr.com",
+            "https://sistema.logisticacastrofallas.com",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173")
+        .AllowAnyHeader()
+        .AllowAnyMethod()));
+builder.Services.AddGrpc();
+builder.Services.AddApplication();
+builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
+await app.Services.SeedAgentDataAsync();
+
+app.UseCustomCodeApi();
+app.UseCors(CorsPolicyName);
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.UseCustomCodeSwagger();
 }
 
-app.UseHttpsRedirection();
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapHealthChecks("/health");
-
-app.MapGet("/api/v1/ping", () => Results.Ok(new { service = "Dhole.Agent", status = "ok" }))
-    .WithName("Ping")
+app.MapGet(
+        "/health",
+        () => Results.Ok(new
+        {
+            service = "DholeAgentService",
+            status = "Healthy",
+            timestamp = DateTimeOffset.UtcNow
+        }))
     .AllowAnonymous();
 
-app.MapGet("/api/v1/secure-ping", () => Results.Ok(new { service = "Dhole.Agent", status = "authorized" }))
-    .WithName("SecurePing")
-    .RequireAuthorization(new RequireScopeAttribute("dhole.agent.view").Policy!);
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapAgentEndpoints();
+app.MapGrpcService<AgentGrpcService>();
 
 app.Run();
