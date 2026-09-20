@@ -1,5 +1,6 @@
 using CustomCodeFramework.Api.Responses;
 using CustomCodeFramework.Cqrs.Commands;
+using CustomCodeFramework.Cqrs.Dispatching;
 using CustomCodeFramework.Cqrs.Queries;
 using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Agents;
