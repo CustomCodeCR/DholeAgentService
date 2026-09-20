@@ -44,3 +44,15 @@ public sealed class GetAgentExecutionsQueryHandler(IAgentExecutionRepository rep
 public sealed record GetAgentExecutionByIdQuery(Guid Id):IQuery<Result<AgentExecutionDto>>;
 public sealed class GetAgentExecutionByIdQueryHandler(IAgentExecutionRepository repo):IQueryHandler<GetAgentExecutionByIdQuery,Result<AgentExecutionDto>>
 {public async Task<Result<AgentExecutionDto>> HandleAsync(GetAgentExecutionByIdQuery q,CancellationToken ct=default){var e=await repo.GetByIdAsync(q.Id,ct);return e is null?Result.Failure<AgentExecutionDto>(AgentErrors.ExecutionNotFound):Result.Success(e.ToDto());}}
+
+public sealed record GetAgentExecutionResultQuery(Guid ExecutionId):IQuery<Result<AgentResultDto>>;
+public sealed class GetAgentExecutionResultQueryHandler(IAgentResultRepository repo):IQueryHandler<GetAgentExecutionResultQuery,Result<AgentResultDto>>
+{
+    public async Task<Result<AgentResultDto>> HandleAsync(GetAgentExecutionResultQuery q,CancellationToken ct=default)
+    {
+        var e=await repo.GetByExecutionIdAsync(q.ExecutionId,ct);
+        return e is null
+            ? Result.Failure<AgentResultDto>(AgentErrors.ExecutionResultNotFound)
+            : Result.Success(e.ToDto());
+    }
+}

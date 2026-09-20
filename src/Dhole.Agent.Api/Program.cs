@@ -1,3 +1,4 @@
+using Dhole.Agent.Api.Grpc;
 using Dhole.Agent.Api.Endpoints;
 using CustomCodeFramework.Api.DependencyInjection;
 using CustomCodeFramework.Api.Swagger;
@@ -20,4 +21,5 @@ app.MapGet("/health", () => Results.Ok(new { service = "DholeAgentService", stat
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapAgentEndpoints();
+app.MapGrpcService<AgentGrpcService>();
 app.Run();

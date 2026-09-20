@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+option csharp_namespace = "Dhole.Agent.Contracts.Grpc";
+package dhole.agent.v1;
+
+service AgentService {
+  rpc SearchOceanRates (SearchOceanRatesRequest) returns (SearchOceanRatesResponse);
+  rpc GetExecution (GetExecutionRequest) returns (GetExecutionResponse);
+  rpc GetExecutionResult (GetExecutionResultRequest) returns (GetExecutionResultResponse);
+}
+
+message SearchOceanRatesRequest {
+  string agent_definition_id = 1;
+  string provider_id = 2;
+  string credential_id = 3;
+  int32 priority = 4;
+  string input_json = 5;
+  int32 max_attempts = 6;
+  string correlation_id = 7;
+  string trace_id = 8;
+}
+
+message SearchOceanRatesResponse {
+  string execution_id = 1;
+  string status = 2;
+}
+
+message GetExecutionRequest {
+  string execution_id = 1;
+}
+
+message GetExecutionResponse {
+  string execution_id = 1;
+  string status = 2;
+  string execution_type = 3;
+  int32 priority = 4;
+  string input_json = 5;
+  string output_json = 6;
+  string started_at = 7;
+  string completed_at = 8;
+  int64 duration_ms = 9;
+  int32 attempt = 10;
+  int32 max_attempts = 11;
+  string error_code = 12;
+  string error_message = 13;
+  string correlation_id = 14;
+  string trace_id = 15;
+}
+
+message GetExecutionResultRequest {
+  string execution_id = 1;
+}
+
+message GetExecutionResultResponse {
+  string execution_id = 1;
+  string result_type = 2;
+  string schema_version = 3;
+  string data_json = 4;
+  string created_at = 5;
+}
