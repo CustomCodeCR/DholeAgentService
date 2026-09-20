@@ -37,6 +37,69 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
 
+      - name: Ensure Agent database exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -r "$DHOLE_ENV_FILE"
+
+          AGENT_CONNECTION="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
+          if [ -z "$AGENT_CONNECTION" ]; then
+            echo "AGENT_POSTGRES_CONNECTION_STRING is missing from $DHOLE_ENV_FILE" >&2
+            exit 1
+          fi
+
+          connection_value() {
+            printf '%s' "$AGENT_CONNECTION" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
+          }
+
+          DB_HOST="$(connection_value Host)"
+          DB_PORT="$(connection_value Port)"
+          DB_NAME="$(connection_value Database)"
+          DB_USER="$(connection_value Username)"
+          DB_PASSWORD="$(connection_value Password)"
+
+          DB_HOST="${DB_HOST:-postgres}"
+          DB_PORT="${DB_PORT:-5432}"
+
+          if ! [[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+            echo "Unsafe or empty Agent database name: $DB_NAME" >&2
+            exit 1
+          fi
+          if [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
+            echo "Agent database username/password are missing." >&2
+            exit 1
+          fi
+
+          for attempt in $(seq 1 30); do
+            if docker run --rm --network "$DHOLE_NETWORK" \
+              -e PGPASSWORD="$DB_PASSWORD" \
+              postgres:16-alpine \
+              pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "PostgreSQL is not reachable from network $DHOLE_NETWORK." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          EXISTS="$(docker run --rm --network "$DHOLE_NETWORK" \
+            -e PGPASSWORD="$DB_PASSWORD" \
+            postgres:16-alpine \
+            psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")"
+
+          if [ "$EXISTS" != "1" ]; then
+            docker run --rm --network "$DHOLE_NETWORK" \
+              -e PGPASSWORD="$DB_PASSWORD" \
+              postgres:16-alpine \
+              createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME"
+            echo "Created Agent database: $DB_NAME"
+          else
+            echo "Agent database already exists: $DB_NAME"
+          fi
+
       - name: Ensure local Ollama and staging Hermes
         shell: bash
         run: |
@@ -90,11 +153,12 @@ jobs:
 
           docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:staging             -t "dhole/agent-workers:staging-$SHA_TAG"             .
 
-      - name: Deploy Agent staging
+      - name: Deploy Agent API staging
         shell: bash
         run: |
           set -euo pipefail
-          docker compose             --env-file "$DHOLE_ENV_FILE"             -f "$COMPOSE_FILE"             -f "$COMPOSE_OVERRIDE"             -p "$COMPOSE_PROJECT"             up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-agent-workers
+          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" \
+            up -d --no-deps --force-recreate --pull never dhole-agent-api
 
       - name: Verify Agent API
         shell: bash
@@ -108,13 +172,23 @@ jobs:
               docker logs --tail 200 "$CONTAINER_ID" || true
               exit 1
             fi
-            if docker exec "$CONTAINER_ID" sh -ec 'curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health >/dev/null'; then
-              exit 0
+            if docker run --rm --network "$DHOLE_NETWORK" curlimages/curl:8.12.1 \
+              --fail --silent --show-error --max-time 3 http://dhole-agent-api:8080/health >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs --tail 200 "$CONTAINER_ID" || true
+              exit 1
             fi
             sleep 2
           done
-          docker logs --tail 200 "$CONTAINER_ID" || true
-          exit 1
+
+      - name: Deploy Agent workers staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" \
+            up -d --no-deps --force-recreate --pull never dhole-agent-workers
 
       - name: Cleanup old images
         if: always()
