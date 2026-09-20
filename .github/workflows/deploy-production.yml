@@ -64,15 +64,55 @@ jobs:
 
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" config -q
 
+      - name: Build CustomCodeFramework local feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .ccf-feed "$RUNNER_TEMP/CustomCodeFramework"
+          mkdir -p .ccf-feed
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/CustomCodeFramework.git "$RUNNER_TEMP/CustomCodeFramework"
+
+          projects=(
+            CustomCodeFramework.Core
+            CustomCodeFramework.Validation
+            CustomCodeFramework.Cqrs
+            CustomCodeFramework.Auth
+            CustomCodeFramework.Observability
+            CustomCodeFramework.Persistence
+            CustomCodeFramework.Messaging
+            CustomCodeFramework.Redis
+            CustomCodeFramework.Workers
+            CustomCodeFramework.Api
+            CustomCodeFramework.Auth.Redis
+            CustomCodeFramework.Postgres
+            CustomCodeFramework.Postgres.EntityFramework
+            CustomCodeFramework.Redis.Streams
+            CustomCodeFramework.Messaging.Outbox
+          )
+
+          for name in "${projects[@]}"; do
+            dotnet pack "$RUNNER_TEMP/CustomCodeFramework/src/$name/$name.csproj" \
+              --configuration Release \
+              --output "$GITHUB_WORKSPACE/.ccf-feed"
+          done
+
+          test -n "$(find .ccf-feed -maxdepth 1 -name '*.nupkg' -print -quit)"
+
       - name: Build Agent images
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           SHA_TAG="${GITHUB_SHA::12}"
-          docker build --pull             --target api-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-api:latest             -t "dhole/agent-api:$SHA_TAG"             .
-          docker build --pull             --target worker-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
+          docker build --pull \
+            --target api-final \
+            -t dhole/agent-api:latest \
+            -t "dhole/agent-api:$SHA_TAG" \
+            .
+          docker build --pull \
+            --target worker-final \
+            -t dhole/agent-workers:latest \
+            -t "dhole/agent-workers:$SHA_TAG" \
+            .
 
       - name: Deploy Agent production
         shell: bash
