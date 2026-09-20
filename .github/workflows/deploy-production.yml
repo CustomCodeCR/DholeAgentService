@@ -54,13 +54,16 @@ jobs:
 
           docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
 
-          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --pull always hermes-agent
+          docker build --pull             -f .dhole-system/deploy/hermes/Dockerfile             -t dhole/hermes-agent:latest             .dhole-system
+
+          docker compose             --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --pull never hermes-config-init hermes-agent
 
           curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:8642/health >/dev/null
 
           HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.infrastructure.yml -p dhole-infrastructure ps -q hermes-agent)"
           test -n "$HERMES_ID"
           docker exec "$HERMES_ID" curl -fsS http://ollama:11434/v1/models >/dev/null
+          docker exec "$HERMES_ID" test -x /usr/bin/chromium
 
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" config -q
 
@@ -71,8 +74,10 @@ jobs:
         run: |
           set -euo pipefail
           SHA_TAG="${GITHUB_SHA::12}"
-          docker build --pull             --target api-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-api:latest             -t "dhole/agent-api:$SHA_TAG"             .
-          docker build --pull             --target worker-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
+
+          docker build --pull             --target api-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-api:latest             -t "dhole/agent-api:$SHA_TAG"             .
+
+          docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
 
       - name: Deploy Agent production
         shell: bash

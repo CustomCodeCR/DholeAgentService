@@ -3,21 +3,31 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-ARG NUGET_USERNAME
-ARG NUGET_TOKEN
+ARG GITHUB_ACTOR=github-actions
 
 COPY NuGet.Config ./
 COPY src ./src
 
-RUN if [ -n "$NUGET_TOKEN" ]; then       dotnet nuget update source github         --username "${NUGET_USERNAME:-github}"         --password "$NUGET_TOKEN"         --store-password-in-clear-text         --configfile NuGet.Config;     fi
-
-RUN dotnet restore src/Dhole.Agent.Api/Dhole.Agent.Api.csproj     && dotnet restore src/Dhole.Agent.Workers/Dhole.Agent.Workers.csproj
+RUN --mount=type=secret,id=github_token,required=true \
+    export NuGetPackageSourceCredentials_github="Username=${GITHUB_ACTOR};Password=$(cat /run/secrets/github_token);ValidAuthenticationTypes=Basic" && \
+    dotnet restore src/Dhole.Agent.Api/Dhole.Agent.Api.csproj --configfile /src/NuGet.Config && \
+    dotnet restore src/Dhole.Agent.Workers/Dhole.Agent.Workers.csproj --configfile /src/NuGet.Config
 
 FROM build AS publish-api
-RUN dotnet publish src/Dhole.Agent.Api/Dhole.Agent.Api.csproj     --configuration Release     --no-restore     --output /app/publish/api
+RUN --mount=type=secret,id=github_token,required=true \
+    export NuGetPackageSourceCredentials_github="Username=${GITHUB_ACTOR};Password=$(cat /run/secrets/github_token);ValidAuthenticationTypes=Basic" && \
+    dotnet publish src/Dhole.Agent.Api/Dhole.Agent.Api.csproj \
+      --configuration Release \
+      --no-restore \
+      --output /app/publish/api
 
 FROM build AS publish-worker
-RUN dotnet publish src/Dhole.Agent.Workers/Dhole.Agent.Workers.csproj     --configuration Release     --no-restore     --output /app/publish/worker
+RUN --mount=type=secret,id=github_token,required=true \
+    export NuGetPackageSourceCredentials_github="Username=${GITHUB_ACTOR};Password=$(cat /run/secrets/github_token);ValidAuthenticationTypes=Basic" && \
+    dotnet publish src/Dhole.Agent.Workers/Dhole.Agent.Workers.csproj \
+      --configuration Release \
+      --no-restore \
+      --output /app/publish/worker
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS api-final
 WORKDIR /app
@@ -26,8 +36,6 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Dhole.Agent.Api.dll"]
 
-# Playwright image contains Chromium and its Linux dependencies.
-# Keep this image version aligned with Microsoft.Playwright in Dhole.Agent.Infrastructure.
 FROM mcr.microsoft.com/playwright/dotnet:v1.55.0-noble AS worker-final
 WORKDIR /app
 COPY --from=publish-worker /app/publish/worker ./
