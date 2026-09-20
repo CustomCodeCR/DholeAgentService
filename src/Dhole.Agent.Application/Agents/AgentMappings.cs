@@ -1,0 +1,14 @@
+using Dhole.Agent.Contracts.Agents;
+using Dhole.Agent.Domain.Agents;
+
+namespace Dhole.Agent.Application.Agents;
+
+internal static class AgentMappings
+{
+    public static AgentProviderDto ToDto(this AgentProvider x) => new(x.Id,x.Code,x.Name,x.ProviderType.ToString(),x.BaseUrl,x.DefaultExecutionStrategy.ToString(),x.IsSystem,x.IsActive,x.MetadataJson,x.CreatedAtUtc,x.UpdatedAtUtc);
+    public static AgentDefinitionDto ToDto(this AgentDefinition x) => new(x.Id,x.ProviderId,x.Code,x.Name,x.Description,x.ActionType.ToString(),x.ExecutionStrategy.ToString(),x.ConfigurationJson,x.IsActive,x.CreatedAtUtc,x.UpdatedAtUtc);
+    public static AgentCredentialDto ToDto(this AgentCredential x) => new(x.Id,x.ProviderId,x.Name,x.IsActive,x.CreatedAtUtc,x.UpdatedAtUtc);
+    public static BrowserProfileDto ToDto(this BrowserProfile x) => new(x.Id,x.ProviderId,x.CredentialId,x.Name,x.ProfileKey,x.StoragePath,x.Status.ToString(),x.LastLoginAt,x.LastUsedAt,x.SessionExpiresAt,x.IsActive);
+    public static AgentScheduleDto ToDto(this AgentSchedule x) => new(x.Id,x.Name,x.AgentDefinitionId,x.ProviderId,x.CredentialId,x.ScheduleType.ToString(),x.CronExpression,x.IntervalMinutes,x.ExecuteAt,x.Timezone,x.InputJson,x.IsActive,x.LastExecutionAt,x.NextExecutionAt,x.MaxRetries,x.TimeoutSeconds);
+    public static AgentExecutionDto ToDto(this AgentExecution x) => new(x.Id,x.AgentDefinitionId,x.ProviderId,x.ScheduleId,x.CredentialId,x.ExecutionType.ToString(),x.Status.ToString(),x.Priority,x.InputJson,x.OutputJson,x.StartedAt,x.CompletedAt,x.DurationMs,x.Attempt,x.MaxAttempts,x.ErrorCode,x.ErrorMessage,x.CorrelationId,x.TraceId,x.CreatedAtUtc);
+}
