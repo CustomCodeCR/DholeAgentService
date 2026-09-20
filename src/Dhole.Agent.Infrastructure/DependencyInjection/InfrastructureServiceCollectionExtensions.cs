@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Infrastructure.Runtime;
 namespace Dhole.Agent.Infrastructure.DependencyInjection;
 public static class InfrastructureServiceCollectionExtensions
 {
@@ -17,6 +19,7 @@ public static class InfrastructureServiceCollectionExtensions
             options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
         });
         services.AddCustomCodeRedis(configuration);
+        services.AddScoped<IAgentProviderResolver, AgentProviderResolver>();
         return services;
     }
 }

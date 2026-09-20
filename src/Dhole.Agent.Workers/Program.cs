@@ -1,3 +1,4 @@
+using Dhole.Agent.Infrastructure.DependencyInjection;
 using Dhole.Agent.Workers.DependencyInjection;
 using Dhole.Agent.Application.DependencyInjection;
 using Dhole.Agent.Persistence.DependencyInjection;
@@ -8,5 +9,6 @@ builder.Configuration.Sources.Clear();
 builder.Configuration.SetBasePath(contentRoot).AddJsonFile("appsettings.json", optional:false, reloadOnChange:true).AddJsonFile("appsettings.Development.json", optional:true, reloadOnChange:true).AddEnvironmentVariables();
 builder.Services.AddApplication();
 builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddAgentWorker(builder.Configuration);
 await builder.Build().RunAsync();
