@@ -13,21 +13,17 @@ public sealed class HermesClient : IDisposable
     public HermesClient(IOptions<HermesOptions> options)
     {
         _options = options.Value;
-
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
-            throw new InvalidOperationException("Hermes:BaseUrl is required.");
-
-        if (string.IsNullOrWhiteSpace(_options.ApiKey))
-            throw new InvalidOperationException("Hermes:ApiKey is required.");
-
         _http = new HttpClient
         {
-            BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/", UriKind.Absolute),
+            BaseAddress = new Uri(_options.BaseUrl, UriKind.Absolute),
             Timeout = TimeSpan.FromSeconds(Math.Max(5, _options.TimeoutSeconds))
         };
 
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+        if (!string.IsNullOrWhiteSpace(_options.ApiKey))
+        {
+            _http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+        }
     }
 
     public async Task<string> ExecuteAsync(
@@ -35,89 +31,45 @@ public sealed class HermesClient : IDisposable
         string? contextJson,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(instruction))
-            throw new ArgumentException("Hermes instruction is required.", nameof(instruction));
-
-        var prompt = BuildPrompt(instruction, contextJson);
+        var context = NormalizeContext(contextJson);
+        var instructions = context is null
+            ? "Execute the requested task using the available Hermes tools."
+            : $"Execute the requested task using the available Hermes tools. Context: {context}";
 
         using var response = await _http.PostAsJsonAsync(
-            _options.ExecutePath.TrimStart('/'),
+            _options.ExecutePath,
             new
             {
-                model = string.IsNullOrWhiteSpace(_options.Model) ? "hermes-agent" : _options.Model,
-                messages = new[]
-                {
-                    new
-                    {
-                        role = "user",
-                        content = prompt
-                    }
-                },
-                stream = false
+                model = _options.ModelName,
+                input = instruction,
+                instructions,
+                store = false
             },
             cancellationToken);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
         if (!response.IsSuccessStatusCode)
+        {
             throw new InvalidOperationException(
                 $"Hermes returned HTTP {(int)response.StatusCode}: {body}");
+        }
 
-        return ExtractAssistantContent(body) ?? body;
+        return body;
     }
 
-    private static string BuildPrompt(string instruction, string? contextJson)
+    private static string? NormalizeContext(string? contextJson)
     {
         if (string.IsNullOrWhiteSpace(contextJson))
-            return instruction.Trim();
+            return null;
 
         try
         {
             using var document = JsonDocument.Parse(contextJson);
-            var normalizedContext = JsonSerializer.Serialize(document.RootElement);
-
-            return $"""
-{instruction.Trim()}
-
-Context JSON:
-{normalizedContext}
-""";
+            return JsonSerializer.Serialize(document.RootElement);
         }
         catch (JsonException)
         {
-            return $"""
-{instruction.Trim()}
-
-Context:
-{contextJson.Trim()}
-""";
-        }
-    }
-
-    private static string? ExtractAssistantContent(string responseBody)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(responseBody);
-
-            if (!document.RootElement.TryGetProperty("choices", out var choices)
-                || choices.ValueKind != JsonValueKind.Array
-                || choices.GetArrayLength() == 0)
-                return null;
-
-            var first = choices[0];
-
-            if (!first.TryGetProperty("message", out var message)
-                || !message.TryGetProperty("content", out var content))
-                return null;
-
-            return content.ValueKind == JsonValueKind.String
-                ? content.GetString()
-                : content.GetRawText();
-        }
-        catch (JsonException)
-        {
-            return null;
+            return contextJson;
         }
     }
 
