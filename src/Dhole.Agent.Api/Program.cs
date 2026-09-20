@@ -1,3 +1,4 @@
+using Dhole.Agent.Api.Endpoints;
 using CustomCodeFramework.Api.DependencyInjection;
 using CustomCodeFramework.Api.Swagger;
 using Dhole.Agent.Application.DependencyInjection;
@@ -18,4 +19,5 @@ if (app.Environment.IsDevelopment()) app.UseCustomCodeSwagger();
 app.MapGet("/health", () => Results.Ok(new { service = "DholeAgentService", status = "Healthy", timestamp = DateTimeOffset.UtcNow })).AllowAnonymous();
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapAgentEndpoints();
 app.Run();
