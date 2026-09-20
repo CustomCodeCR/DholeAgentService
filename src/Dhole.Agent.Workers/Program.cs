@@ -1,7 +1,10 @@
-using Dhole.Agent.Workers;
-
-var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddHostedService<Worker>();
-
-var host = builder.Build();
-host.Run();
+using Dhole.Agent.Application.DependencyInjection;
+using Dhole.Agent.Persistence.DependencyInjection;
+var contentRoot = Path.Combine(Directory.GetCurrentDirectory(), "src", "Dhole.Agent.Workers");
+if (!Directory.Exists(contentRoot)) contentRoot = Directory.GetCurrentDirectory();
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = args, ContentRootPath = contentRoot });
+builder.Configuration.Sources.Clear();
+builder.Configuration.SetBasePath(contentRoot).AddJsonFile("appsettings.json", optional:false, reloadOnChange:true).AddJsonFile("appsettings.Development.json", optional:true, reloadOnChange:true).AddEnvironmentVariables();
+builder.Services.AddApplication();
+builder.Services.AddPersistence(builder.Configuration);
+await builder.Build().RunAsync();
