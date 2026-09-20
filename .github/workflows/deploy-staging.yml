@@ -55,13 +55,16 @@ jobs:
 
           docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
 
-          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.staging-infra.yml             -p dhole-staging-infra             up -d --pull always hermes-agent-staging
+          docker build --pull             -f .dhole-system/deploy/hermes/Dockerfile             -t dhole/hermes-agent:staging             .dhole-system
+
+          docker compose             --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.staging-infra.yml             -p dhole-staging-infra             up -d --pull never hermes-config-init-staging hermes-agent-staging
 
           curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:18642/health >/dev/null
 
           HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.staging-infra.yml -p dhole-staging-infra ps -q hermes-agent-staging)"
           test -n "$HERMES_ID"
           docker exec "$HERMES_ID" curl -fsS http://ollama:11434/v1/models >/dev/null
+          docker exec "$HERMES_ID" test -x /usr/bin/chromium
 
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" config -q
 
@@ -72,8 +75,10 @@ jobs:
         run: |
           set -euo pipefail
           SHA_TAG="${GITHUB_SHA::12}"
-          docker build --pull             --target api-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-api:staging             -t "dhole/agent-api:staging-$SHA_TAG"             .
-          docker build --pull             --target worker-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-workers:staging             -t "dhole/agent-workers:staging-$SHA_TAG"             .
+
+          docker build --pull             --target api-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-api:staging             -t "dhole/agent-api:staging-$SHA_TAG"             .
+
+          docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:staging             -t "dhole/agent-workers:staging-$SHA_TAG"             .
 
       - name: Deploy Agent staging
         shell: bash
