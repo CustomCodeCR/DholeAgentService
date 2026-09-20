@@ -19,3 +19,10 @@ public sealed record AgentExecutionFailedDomainEvent(Guid ExecutionId, Guid Prov
 
 public sealed record BrowserProfileAuthenticatedDomainEvent(Guid BrowserProfileId, Guid ProviderId, DateTime AuthenticatedAt) : DomainEvent;
 public sealed record BrowserProfileExpiredDomainEvent(Guid BrowserProfileId, Guid ProviderId, DateTime ExpiredAt) : DomainEvent;
+
+public sealed record OceanFreightRatesExtractedDomainEvent(
+    Guid ResultId,
+    Guid ExecutionId,
+    Guid ProviderId,
+    string ResultType,
+    string SchemaVersion) : DomainEvent;
