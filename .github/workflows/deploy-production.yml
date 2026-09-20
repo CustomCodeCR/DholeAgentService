@@ -58,7 +58,17 @@ jobs:
 
           docker compose             --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --pull never hermes-config-init hermes-agent
 
-          curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:8642/health >/dev/null
+          for attempt in $(seq 1 40); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8642/health >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.infrastructure.yml -p dhole-infrastructure ps -q hermes-agent)"
+              if [ -n "$HERMES_ID" ]; then docker logs --tail 200 "$HERMES_ID" || true; fi
+              exit 1
+            fi
+            sleep 3
+          done
 
           HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.infrastructure.yml -p dhole-infrastructure ps -q hermes-agent)"
           test -n "$HERMES_ID"
