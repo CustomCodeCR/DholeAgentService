@@ -1,0 +1,105 @@
+name: Deploy Dhole Agent - Staging
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dhole-agent-staging
+  cancel-in-progress: false
+
+env:
+  COMPOSE_FILE: .dhole-system/deploy/docker-compose.services.yml
+  COMPOSE_OVERRIDE: .dhole-system/deploy/docker-compose.staging.yml
+  DHOLE_IMAGE_TAG: staging
+  DHOLE_NETWORK: dhole-staging
+  COMPOSE_PROJECT: dhole-staging
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, dhole]
+    steps:
+      - name: Checkout Agent
+        uses: actions/checkout@v4
+
+      - name: Load Dhole staging infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .dhole-system
+          git clone --depth 1 --branch develop https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/dhole-env"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
+          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
+
+      - name: Ensure local Ollama and staging Hermes
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network inspect "$DHOLE_NETWORK" >/dev/null 2>&1 || docker network create "$DHOLE_NETWORK"
+          test -r "$DHOLE_ENV_FILE"
+
+          OLLAMA_ID="$(docker ps -q --filter name=^/ollama$ | head -n1 || true)"
+          if [[ -z "$OLLAMA_ID" ]]; then
+            OLLAMA_ID="$(docker ps -q --filter label=com.docker.compose.service=ollama | head -n1 || true)"
+          fi
+          if [[ -z "$OLLAMA_ID" ]]; then
+            echo "Ollama container not found. Hermes requires local Ollama." >&2
+            exit 1
+          fi
+
+          docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
+
+          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.staging-infra.yml             -p dhole-staging-infra             up -d --pull always hermes-agent-staging
+
+          curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:18642/health >/dev/null
+
+          HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.staging-infra.yml -p dhole-staging-infra ps -q hermes-agent-staging)"
+          test -n "$HERMES_ID"
+          docker exec "$HERMES_ID" curl -fsS http://ollama:11434/v1/models >/dev/null
+
+          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" config -q
+
+      - name: Build Agent images
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHA_TAG="${GITHUB_SHA::12}"
+          docker build --pull             --target api-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-api:staging             -t "dhole/agent-api:staging-$SHA_TAG"             .
+          docker build --pull             --target worker-final             --build-arg NUGET_USERNAME="$GITHUB_ACTOR"             --build-arg NUGET_TOKEN="$GITHUB_TOKEN"             -t dhole/agent-workers:staging             -t "dhole/agent-workers:staging-$SHA_TAG"             .
+
+      - name: Deploy Agent staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose             --env-file "$DHOLE_ENV_FILE"             -f "$COMPOSE_FILE"             -f "$COMPOSE_OVERRIDE"             -p "$COMPOSE_PROJECT"             up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-agent-workers
+
+      - name: Verify Agent API
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" ps -q dhole-agent-api)"
+          test -n "$CONTAINER_ID"
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_ID" 2>/dev/null || true)" != "true" ]; then
+              docker logs --tail 200 "$CONTAINER_ID" || true
+              exit 1
+            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:18211/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs --tail 200 "$CONTAINER_ID" || true
+          exit 1
+
+      - name: Cleanup old images
+        if: always()
+        run: docker image prune -f
