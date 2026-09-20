@@ -14,6 +14,8 @@ public static class AgentSeedDataExtensions
         using var scope = services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ServiceDbContext>();
 
+        await dbContext.Database.MigrateAsync(cancellationToken);
+
         var provider = await dbContext.AgentProviders
             .IgnoreQueryFilters()
             .SingleOrDefaultAsync(x => x.Code == "MAERSK", cancellationToken);
