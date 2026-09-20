@@ -12,7 +12,8 @@ public sealed class SecretRedactorTests
 
         var redacted = new SecretRedactor().Redact(value);
 
-        StringAssert.Contains(redacted, "Bearer [REDACTED]");
+        StringAssert.Contains(redacted, "Authorization: [REDACTED]");
+        Assert.IsFalse(redacted.Contains("Bearer", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(redacted.Contains("abc.def-123_XYZ", StringComparison.Ordinal));
     }
 
