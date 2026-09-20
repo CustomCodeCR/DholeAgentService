@@ -1,4 +1,5 @@
 using CustomCodeFramework.Auth.DependencyInjection;
+using CustomCodeFramework.Core.Abstractions;
 using CustomCodeFramework.Redis.DependencyInjection;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Infrastructure.Browser;
@@ -11,6 +12,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
 using Dhole.Agent.Infrastructure.Runtime;
 using Dhole.Agent.Infrastructure.Runtime.Hermes;
 using Dhole.Agent.Infrastructure.Secrets;
+using Dhole.Agent.Infrastructure.Time;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -22,6 +24,7 @@ public static class InfrastructureServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
         services.AddCustomCodeAuth(configuration);
         services.PostConfigure<AuthenticationOptions>(options =>
         {
