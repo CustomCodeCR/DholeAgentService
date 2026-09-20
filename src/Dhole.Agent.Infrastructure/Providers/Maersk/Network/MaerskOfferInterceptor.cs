@@ -10,7 +10,6 @@ public sealed class MaerskOfferInterceptor
     public Task<CapturedMaerskOfferResponse> WaitForOfferAsync(IPage page, TimeSpan timeout, CancellationToken cancellationToken)
     {
         _capture = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         page.Response += OnResponse;
 
         var timeoutTask = Task.Delay(timeout, cancellationToken).ContinueWith(
@@ -22,7 +21,7 @@ public sealed class MaerskOfferInterceptor
         return AwaitAndDetachAsync(page, _capture.Task, timeoutTask);
     }
 
-    private async Task OnResponse(object? sender, IResponse response)
+    private void OnResponse(object? sender, IResponse response)
     {
         if (_capture is null || _capture.Task.IsCompleted)
             return;
@@ -31,6 +30,11 @@ public sealed class MaerskOfferInterceptor
             !string.Equals(response.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
             return;
 
+        _ = ProcessResponseAsync(response);
+    }
+
+    private async Task ProcessResponseAsync(IResponse response)
+    {
         try
         {
             var headers = await response.AllHeadersAsync();
@@ -39,7 +43,7 @@ public sealed class MaerskOfferInterceptor
                 headers.TryGetValue("x-correlation-id", out correlationId);
 
             var json = await response.TextAsync();
-            _capture.TrySetResult(new CapturedMaerskOfferResponse(
+            _capture?.TrySetResult(new CapturedMaerskOfferResponse(
                 response.Request.PostData,
                 response.Status,
                 correlationId,
@@ -47,7 +51,7 @@ public sealed class MaerskOfferInterceptor
         }
         catch (Exception ex)
         {
-            _capture.TrySetException(ex);
+            _capture?.TrySetException(ex);
         }
     }
 
