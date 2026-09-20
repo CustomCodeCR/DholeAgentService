@@ -65,6 +65,7 @@ jobs:
             --name ccf-local \
             --configfile NuGet.Config
           dotnet nuget disable source github --configfile NuGet.Config
+          sed -i 's/packageSource key="github"/packageSource key="ccf-local"/' NuGet.Config
 
       - name: Restore
         run: dotnet restore DholeAgentService.slnx --configfile NuGet.Config
