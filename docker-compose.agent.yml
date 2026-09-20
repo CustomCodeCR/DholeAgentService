@@ -42,6 +42,8 @@ services:
       Hermes__ExecutePath: /v1/chat/completions
       Browser__ProfilesPath: /data/browser-profiles
       Browser__Headless: "true"
+      MAERSK_USERNAME: ${MAERSK_USERNAME:-}
+      MAERSK_PASSWORD: ${MAERSK_PASSWORD:-}
     volumes:
       - agent-browser-profiles:/data/browser-profiles
     shm_size: "2gb"
