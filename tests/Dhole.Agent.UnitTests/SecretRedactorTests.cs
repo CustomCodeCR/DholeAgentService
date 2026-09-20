@@ -26,7 +26,7 @@ public sealed class SecretRedactorTests
         Assert.IsFalse(redacted.Contains("S3cret!", StringComparison.Ordinal));
         Assert.IsFalse(redacted.Contains("session=abc123", StringComparison.Ordinal));
         StringAssert.Contains(redacted, "[REDACTED]");
-        StringAssert.Contains(redacted, ""safe":"ok"");
+        StringAssert.Contains(redacted, "\"safe\":\"ok\"");
     }
 
     [TestMethod]
