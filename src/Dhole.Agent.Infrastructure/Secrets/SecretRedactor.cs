@@ -24,20 +24,23 @@ public sealed partial class SecretRedactor
     public string Redact(string? value)
     {
         if (string.IsNullOrEmpty(value))
+        {
             return value ?? string.Empty;
+        }
 
-        var redacted = BearerRegex().Replace(value, "$1[REDACTED]");
+        var redacted = value;
+
         foreach (var key in SensitiveKeys)
         {
             redacted = Regex.Replace(
                 redacted,
-                $@"(?i)([""']?{Regex.Escape(key)}[""']?s*[:=]s*[""']?)([^"",'s}}]+)",
+                $@"(?i)([""']?{Regex.Escape(key)}[""']?\s*[:=]\s*)([""'][^""']*[""']|[^,;\r\n}}]+)",
                 "$1[REDACTED]");
         }
 
-        return redacted;
+        return BearerRegex().Replace(redacted, "$1[REDACTED]");
     }
 
-    [GeneratedRegex(@"(?i)(Bearers+)[A-Za-z0-9-._~+/]+=*")]
+    [GeneratedRegex(@"(?i)(Bearer\s+)[A-Za-z0-9\-._~+/]+=*")]
     private static partial Regex BearerRegex();
 }
