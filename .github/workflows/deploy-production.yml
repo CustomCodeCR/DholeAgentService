@@ -54,7 +54,7 @@ jobs:
 
           docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
 
-          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --no-deps --pull always hermes-agent
+          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --pull always hermes-agent
 
           curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:8642/health >/dev/null
 
