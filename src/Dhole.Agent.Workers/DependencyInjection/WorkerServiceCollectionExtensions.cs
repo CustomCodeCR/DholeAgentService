@@ -5,6 +5,8 @@ using CustomCodeFramework.Redis.Streams.DependencyInjection;
 using CustomCodeFramework.Workers.DependencyInjection;
 using Dhole.Agent.Workers.Outbox;
 using Dhole.Agent.Workers.Streams;
+using Dhole.Agent.Workers.Scheduling;
+using Dhole.Agent.Workers.Workers;
 
 namespace Dhole.Agent.Workers.DependencyInjection;
 
@@ -22,6 +24,8 @@ public static class WorkerServiceCollectionExtensions
         services.AddCustomCodeRedisStreamConsumerBackgroundService();
         services.AddCustomCodeRedisStreamHandler<AgentExecutionRequestedStreamHandler>();
         services.AddCustomCodeWorkers(configuration);
+        services.AddSingleton<ScheduleCalculator>();
+        services.AddCustomCodePeriodicWorker<AgentScheduleDispatcherWorker>();
         return services;
     }
 }
