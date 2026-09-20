@@ -29,11 +29,28 @@ jobs:
           set -euo pipefail
           git clone --depth 1 --branch master https://github.com/CustomCodeCR/CustomCodeFramework.git "$RUNNER_TEMP/CustomCodeFramework"
           mkdir -p "$RUNNER_TEMP/ccf-feed"
-          while IFS= read -r project; do
-            dotnet pack "$project" \
+          projects=(
+            CustomCodeFramework.Core
+            CustomCodeFramework.Validation
+            CustomCodeFramework.Cqrs
+            CustomCodeFramework.Auth
+            CustomCodeFramework.Observability
+            CustomCodeFramework.Persistence
+            CustomCodeFramework.Messaging
+            CustomCodeFramework.Redis
+            CustomCodeFramework.Workers
+            CustomCodeFramework.Api
+            CustomCodeFramework.Auth.Redis
+            CustomCodeFramework.Postgres
+            CustomCodeFramework.Postgres.EntityFramework
+            CustomCodeFramework.Redis.Streams
+            CustomCodeFramework.Messaging.Outbox
+          )
+          for name in "${projects[@]}"; do
+            dotnet pack "$RUNNER_TEMP/CustomCodeFramework/src/$name/$name.csproj" \
               --configuration Release \
               --output "$RUNNER_TEMP/ccf-feed"
-          done < <(find "$RUNNER_TEMP/CustomCodeFramework/src" -name 'CustomCodeFramework.*.csproj' ! -path '*/CustomCodeFramework.Templates/*' | sort)
+          done
           dotnet nuget add source "$RUNNER_TEMP/ccf-feed" \
             --name ccf-local \
             --configfile NuGet.Config
