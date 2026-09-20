@@ -1,4 +1,5 @@
 using CustomCodeFramework.Core.Domain.Entities;
+using Dhole.Agent.Domain.Agents.Events;
 
 namespace Dhole.Agent.Domain.Agents;
 
@@ -27,7 +28,12 @@ public sealed class AgentResult : AuditableAggregateRoot<Guid>
 
     public static AgentResult Create(Guid executionId, Guid providerId, string resultType, string schemaVersion,
         string dataJson, DateTime? createdAt = null)
-        => new(Guid.NewGuid(), executionId, providerId, resultType, schemaVersion, dataJson, createdAt ?? DateTime.UtcNow);
+    {
+        var entity = new AgentResult(Guid.NewGuid(), executionId, providerId, resultType, schemaVersion, dataJson, createdAt ?? DateTime.UtcNow);
+        if (string.Equals(entity.ResultType, OceanFreightRates, StringComparison.OrdinalIgnoreCase))
+            entity.AddDomainEvent(new OceanFreightRatesExtractedDomainEvent(entity.Id, executionId, providerId, entity.ResultType, entity.SchemaVersion));
+        return entity;
+    }
 
     private static string Required(string value)
         => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.") : value.Trim();
