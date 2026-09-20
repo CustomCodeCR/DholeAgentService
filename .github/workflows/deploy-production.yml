@@ -31,7 +31,20 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf .dhole-system
-          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          for attempt in $(seq 1 5); do
+            if git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system; then
+              break
+            fi
+
+            rm -rf .dhole-system
+            if [ "$attempt" -eq 5 ]; then
+              echo "Unable to clone DholeSystem after 5 attempts. Check DNS/network access to github.com." >&2
+              exit 1
+            fi
+
+            echo "DholeSystem clone failed (attempt $attempt/5). Retrying..."
+            sleep $((attempt * 5))
+          done
           mkdir -p "$RUNNER_TEMP/dhole-env"
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.production" >> "$GITHUB_ENV"
@@ -116,6 +129,32 @@ jobs:
           fi
 
           docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
+
+          ensure_docker_image() {
+            local image="$1"
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              return 0
+            fi
+
+            for attempt in $(seq 1 5); do
+              if docker pull "$image"; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 5 ]; then
+                echo "Unable to pull required Docker image: $image" >&2
+                return 1
+              fi
+
+              echo "Pull failed for $image (attempt $attempt/5). Retrying..."
+              sleep $((attempt * 5))
+            done
+          }
+
+          # DholeSystem uses this image for the one-shot Hermes config initializer.
+          # The Hermes compose command intentionally uses --pull never for the locally
+          # built Hermes image, so preload Alpine explicitly when the runner cache is empty.
+          ensure_docker_image alpine:3.20
 
           docker build --pull             -f .dhole-system/deploy/hermes/Dockerfile             -t dhole/hermes-agent:latest             .dhole-system
 
