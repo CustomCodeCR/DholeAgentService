@@ -9,6 +9,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Parsers;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
 using Dhole.Agent.Infrastructure.Runtime;
+using Dhole.Agent.Infrastructure.Runtime.Hermes;
 using Dhole.Agent.Infrastructure.Secrets;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -44,6 +45,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<MaerskEquipmentResolver>();
         services.AddScoped<MaerskCommodityResolver>();
         services.AddScoped<IAgentProvider, MaerskAgentProvider>();
+
+        services.Configure<HermesOptions>(configuration.GetSection(HermesOptions.SectionName));
+        services.AddSingleton<HermesClient>();
+        services.AddSingleton<IAgentRuntime, HermesAgentRuntime>();
 
         services.AddScoped<IAgentProviderResolver, AgentProviderResolver>();
         return services;
