@@ -18,3 +18,5 @@ coverage*
 .env
 appsettings.Local.json
 appsettings.*.local.json
+
+.ccf-feed/*.nupkg
