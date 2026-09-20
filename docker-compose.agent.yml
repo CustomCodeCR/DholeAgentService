@@ -12,10 +12,13 @@ services:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       Postgres__ConnectionString: ${AGENT_POSTGRES_CONNECTION_STRING}
       Redis__ConnectionString: ${AGENT_REDIS_CONNECTION_STRING}
-      Hermes__BaseUrl: http://hermes-agent:${HERMES_PORT:-8000}
+      Hermes__BaseUrl: http://hermes-agent:8642
+      Hermes__ApiKey: ${HERMES_API_SERVER_KEY}
+      Hermes__Model: ${HERMES_API_SERVER_MODEL_NAME:-hermes-agent}
+      Hermes__ExecutePath: /v1/chat/completions
       Browser__ProfilesPath: /data/browser-profiles
     ports:
-      - "${AGENT_API_PORT:-5210}:8080"
+      - "${AGENT_API_PORT:-5211}:8080"
     networks:
       - dhole-internal
     restart: unless-stopped
@@ -33,24 +36,15 @@ services:
       DOTNET_ENVIRONMENT: ${DOTNET_ENVIRONMENT:-Production}
       Postgres__ConnectionString: ${AGENT_POSTGRES_CONNECTION_STRING}
       Redis__ConnectionString: ${AGENT_REDIS_CONNECTION_STRING}
-      Hermes__BaseUrl: http://hermes-agent:${HERMES_PORT:-8000}
+      Hermes__BaseUrl: http://hermes-agent:8642
+      Hermes__ApiKey: ${HERMES_API_SERVER_KEY}
+      Hermes__Model: ${HERMES_API_SERVER_MODEL_NAME:-hermes-agent}
+      Hermes__ExecutePath: /v1/chat/completions
       Browser__ProfilesPath: /data/browser-profiles
+      Browser__Headless: "true"
     volumes:
       - agent-browser-profiles:/data/browser-profiles
     shm_size: "2gb"
-    depends_on:
-      - hermes-agent
-    networks:
-      - dhole-internal
-    restart: unless-stopped
-
-  hermes-agent:
-    container_name: hermes-agent
-    image: ${HERMES_IMAGE:?Set HERMES_IMAGE to the Hermes Agent image}
-    environment:
-      PORT: ${HERMES_PORT:-8000}
-    expose:
-      - "${HERMES_PORT:-8000}"
     networks:
       - dhole-internal
     restart: unless-stopped
@@ -60,4 +54,5 @@ volumes:
 
 networks:
   dhole-internal:
-    name: dhole-internal
+    external: true
+    name: ${DHOLE_NETWORK:-dhole}
