@@ -277,15 +277,15 @@ public sealed class InitialAgentSchema : Migration
             });
 
         migrationBuilder.CreateIndex("IX_outbox_messages_event_id", "agent", "outbox_messages", "event_id", unique: true);
-        migrationBuilder.CreateIndex("IX_outbox_messages_status_created_at", "agent", "outbox_messages", new[] { "status", "created_at" });
-        migrationBuilder.CreateIndex("IX_inbox_messages_event_id_consumer_service", "agent", "inbox_messages", new[] { "event_id", "consumer_service" }, unique: true);
-        migrationBuilder.CreateIndex("IX_inbox_messages_status_created_at", "agent", "inbox_messages", new[] { "status", "created_at" });
+        migrationBuilder.CreateIndex(name: "IX_outbox_messages_status_created_at", schema: "agent", table: "outbox_messages", columns: new[] { "status", "created_at" });
+        migrationBuilder.CreateIndex(name: "IX_inbox_messages_event_id_consumer_service", schema: "agent", table: "inbox_messages", columns: new[] { "event_id", "consumer_service" }, unique: true);
+        migrationBuilder.CreateIndex(name: "IX_inbox_messages_status_created_at", schema: "agent", table: "inbox_messages", columns: new[] { "status", "created_at" });
         migrationBuilder.CreateIndex("IX_AgentProviders_Code", "agent", "AgentProviders", "Code", unique: true);
         migrationBuilder.CreateIndex("IX_AgentDefinitions_Code", "agent", "AgentDefinitions", "Code", unique: true);
         migrationBuilder.CreateIndex("IX_AgentDefinitions_ProviderId", "agent", "AgentDefinitions", "ProviderId");
         migrationBuilder.CreateIndex("IX_AgentCredentials_ProviderId", "agent", "AgentCredentials", "ProviderId");
         migrationBuilder.CreateIndex("IX_BrowserProfiles_ProfileKey", "agent", "BrowserProfiles", "ProfileKey", unique: true);
-        migrationBuilder.CreateIndex("IX_BrowserProfiles_ProviderId_CredentialId", "agent", "BrowserProfiles", new[] { "ProviderId", "CredentialId" });
+        migrationBuilder.CreateIndex(name: "IX_BrowserProfiles_ProviderId_CredentialId", schema: "agent", table: "BrowserProfiles", columns: new[] { "ProviderId", "CredentialId" });
         migrationBuilder.CreateIndex("IX_AgentSchedules_NextExecutionAt", "agent", "AgentSchedules", "NextExecutionAt");
         migrationBuilder.CreateIndex("IX_AgentSchedules_IsActive", "agent", "AgentSchedules", "IsActive");
         migrationBuilder.CreateIndex("IX_AgentSchedules_AgentDefinitionId", "agent", "AgentSchedules", "AgentDefinitionId");
@@ -297,7 +297,7 @@ public sealed class InitialAgentSchema : Migration
         migrationBuilder.CreateIndex("IX_AgentExecutions_AgentDefinitionId", "agent", "AgentExecutions", "AgentDefinitionId");
         migrationBuilder.CreateIndex("IX_AgentExecutions_ScheduleId", "agent", "AgentExecutions", "ScheduleId");
         migrationBuilder.CreateIndex("IX_AgentExecutions_CredentialId", "agent", "AgentExecutions", "CredentialId");
-        migrationBuilder.CreateIndex("IX_AgentExecutionLogs_ExecutionId_OccurredAt", "agent", "AgentExecutionLogs", new[] { "ExecutionId", "OccurredAt" });
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutionLogs_ExecutionId_OccurredAt", schema: "agent", table: "AgentExecutionLogs", columns: new[] { "ExecutionId", "OccurredAt" });
         migrationBuilder.CreateIndex("IX_AgentResults_ExecutionId", "agent", "AgentResults", "ExecutionId", unique: true);
         migrationBuilder.CreateIndex("IX_AgentResults_ProviderId", "agent", "AgentResults", "ProviderId");
     }
