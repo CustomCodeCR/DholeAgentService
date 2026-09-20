@@ -103,11 +103,12 @@ jobs:
           CONTAINER_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" ps -q dhole-agent-api)"
           test -n "$CONTAINER_ID"
           for attempt in $(seq 1 60); do
-            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_ID" 2>/dev/null || true)" != "true" ]; then
+            STATUS="$(docker inspect --format='{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || true)"
+            if [ "$STATUS" = "exited" ] || [ "$STATUS" = "dead" ]; then
               docker logs --tail 200 "$CONTAINER_ID" || true
               exit 1
             fi
-            if curl -fsS --max-time 2 http://127.0.0.1:18211/health >/dev/null; then
+            if docker exec "$CONTAINER_ID" sh -ec 'curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health >/dev/null'; then
               exit 0
             fi
             sleep 2
