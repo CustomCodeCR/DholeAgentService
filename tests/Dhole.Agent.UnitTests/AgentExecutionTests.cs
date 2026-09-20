@@ -26,6 +26,7 @@ public sealed class AgentExecutionTests
         Assert.AreEqual(AgentExecutionStatus.Completed, execution.Status);
         Assert.AreEqual(1, execution.Attempt);
         Assert.AreEqual(2000L, execution.DurationMs);
+        Assert.AreEqual("{\"ok\":true}", execution.OutputJson);
     }
 
     private static AgentExecution Create() =>
