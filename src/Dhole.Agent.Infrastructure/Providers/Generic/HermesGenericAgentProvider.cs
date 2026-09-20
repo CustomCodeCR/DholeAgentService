@@ -36,8 +36,10 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
 
         if (!string.IsNullOrWhiteSpace(context.Definition.ConfigurationJson))
         {
-            instruction += $"
-Definition configuration: {context.Definition.ConfigurationJson}";
+            instruction += string.Concat(
+                Environment.NewLine,
+                "Definition configuration: ",
+                context.Definition.ConfigurationJson);
         }
 
         try
