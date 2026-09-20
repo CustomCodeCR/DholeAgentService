@@ -36,14 +36,33 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.production" >> "$GITHUB_ENV"
 
-      - name: Verify production dependencies
+      - name: Ensure local Ollama and production Hermes
         shell: bash
         run: |
           set -euo pipefail
-          docker network inspect "$DHOLE_NETWORK" >/dev/null
+          docker network inspect "$DHOLE_NETWORK" >/dev/null 2>&1 || docker network create "$DHOLE_NETWORK"
           test -r "$DHOLE_ENV_FILE"
+
+          OLLAMA_ID="$(docker ps -q --filter name=^/ollama$ | head -n1 || true)"
+          if [[ -z "$OLLAMA_ID" ]]; then
+            OLLAMA_ID="$(docker ps -q --filter label=com.docker.compose.service=ollama | head -n1 || true)"
+          fi
+          if [[ -z "$OLLAMA_ID" ]]; then
+            echo "Ollama container not found. Hermes requires local Ollama." >&2
+            exit 1
+          fi
+
+          docker network connect --alias ollama "$DHOLE_NETWORK" "$OLLAMA_ID" 2>/dev/null || true
+
+          docker compose --env-file "$DHOLE_ENV_FILE"             -f .dhole-system/deploy/docker-compose.infrastructure.yml             -p dhole-infrastructure             up -d --no-deps --pull always hermes-agent
+
+          curl -fsS --retry 20 --retry-delay 3 --retry-connrefused --max-time 10             http://127.0.0.1:8642/health >/dev/null
+
+          HERMES_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.infrastructure.yml -p dhole-infrastructure ps -q hermes-agent)"
+          test -n "$HERMES_ID"
+          docker exec "$HERMES_ID" curl -fsS http://ollama:11434/v1/models >/dev/null
+
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" config -q
-          curl -fsS --max-time 10 http://127.0.0.1:8642/health >/dev/null
 
       - name: Build Agent images
         shell: bash
