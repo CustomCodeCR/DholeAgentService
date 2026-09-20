@@ -9,6 +9,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Parsers;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
 using Dhole.Agent.Infrastructure.Runtime;
+using Dhole.Agent.Infrastructure.Secrets;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -32,6 +33,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.Configure<BrowserOptions>(configuration.GetSection(BrowserOptions.SectionName));
         services.AddSingleton<IBrowserProfileManager, BrowserProfileManager>();
         services.AddScoped<IBrowserManager, PlaywrightBrowserManager>();
+        services.AddSingleton<ISecretProvider, EnvironmentSecretProvider>();
+        services.AddSingleton<SecretRedactor>();
 
         services.AddScoped<MaerskLoginService>();
         services.AddScoped<MaerskBrowserAutomation>();
