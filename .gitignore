@@ -1,0 +1,68 @@
+# Ignorar archivos y carpetas generados por Visual Studio
+.vscode/
+.vs/
+bin/
+obj/
+TestResults/
+
+# Ignorar archivos de configuración local
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Ignorar archivos de caché y logs
+*.log
+*.vspscc
+.vscode/tasks.json
+.vscode/launch.json
+
+# Ignorar archivos de NuGet
+packages/
+*.nupkg
+*.pdb
+
+# Ignorar archivos de estilo y análisis de código
+*.resharper
+*.resharper.user
+*.DotSettings.user
+
+# Ignorar archivos de configuración de MSBuild
+*.VisualState.xml
+BuildLog.htm
+
+# Ignorar archivos temporales
+*.bak
+*.cache
+
+# Ignorar archivos de respaldo de Visual Studio
+_UpgradeReport_Files/
+Backup*/
+UpgradeLog*.XML
+UpgradeLog*.htm
+
+# Ignorar archivos de caché de Rider
+.idea/
+*.sln.iml
+
+# Ignorar archivos de caché de Roslyn
+.vscode/analyzers/
+
+# Ignorar archivos de caché de .NET
+*.userprefs
+.NET/
+
+# Ignorar archivos de registro y eventos de Azure
+ApplicationInsights*.json
+AzureWebJobsDashboard.json
+AzureWebJobsStorage.json
+
+# Ignorar archivos de caché y configuración de Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+*.db
+obj/
+bin/

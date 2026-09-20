@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CustomCodeFramework.Core" Version="0.2.0" />
+    <PackageReference Include="CustomCodeFramework.Postgres.EntityFramework" Version="0.2.0" />
+    <PackageReference Include="CustomCodeFramework.Messaging" Version="0.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dhole.Agent.Domain\Dhole.Agent.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
