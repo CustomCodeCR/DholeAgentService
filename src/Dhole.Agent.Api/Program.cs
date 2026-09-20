@@ -2,14 +2,17 @@ using Dhole.Agent.Api.Grpc;
 using Dhole.Agent.Api.Endpoints;
 using CustomCodeFramework.Api.DependencyInjection;
 using CustomCodeFramework.Api.Swagger;
+using CustomCodeFramework.Core.Abstractions;
 using Dhole.Agent.Application.DependencyInjection;
 using Dhole.Agent.Infrastructure.DependencyInjection;
+using Dhole.Agent.Infrastructure.Time;
 using Dhole.Agent.Persistence.DependencyInjection;
 using Dhole.Agent.Persistence.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "DholeWebCors";
 
+builder.Services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
 builder.Services.AddCustomCodeApiWithSwagger(title: "Dhole Agent Service", version: "v1");
 builder.Services.AddCors(options => options.AddPolicy(
     CorsPolicyName,
