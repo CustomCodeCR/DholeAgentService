@@ -15,6 +15,45 @@ public sealed class InitialAgentSchema : Migration
         migrationBuilder.EnsureSchema(name: "agent");
 
         migrationBuilder.CreateTable(
+            name: "outbox_messages",
+            schema: "agent",
+            columns: table => new
+            {
+                Id = table.Column<Guid>(type: "uuid", nullable: false),
+                event_id = table.Column<Guid>(type: "uuid", nullable: false),
+                event_type = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                event_name = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                source_service = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                payload_json = table.Column<string>(type: "jsonb", nullable: false),
+                headers_json = table.Column<string>(type: "jsonb", nullable: true),
+                correlation_id = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                status = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
+                retry_count = table.Column<int>(type: "integer", nullable: false),
+                error_message = table.Column<string>(type: "text", nullable: true),
+                created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                processed_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+            },
+            constraints: table => table.PrimaryKey("PK_outbox_messages", x => x.Id));
+
+        migrationBuilder.CreateTable(
+            name: "inbox_messages",
+            schema: "agent",
+            columns: table => new
+            {
+                Id = table.Column<Guid>(type: "uuid", nullable: false),
+                event_id = table.Column<Guid>(type: "uuid", nullable: false),
+                event_type = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                event_name = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                source_service = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                consumer_service = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                correlation_id = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                status = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
+                processed_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+            },
+            constraints: table => table.PrimaryKey("PK_inbox_messages", x => x.Id));
+
+        migrationBuilder.CreateTable(
             name: "AgentProviders",
             schema: "agent",
             columns: table => new
@@ -237,6 +276,10 @@ public sealed class InitialAgentSchema : Migration
                 table.ForeignKey("FK_AgentResults_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Restrict);
             });
 
+        migrationBuilder.CreateIndex("IX_outbox_messages_event_id", "agent", "outbox_messages", "event_id", unique: true);
+        migrationBuilder.CreateIndex("IX_outbox_messages_status_created_at", "agent", "outbox_messages", new[] { "status", "created_at" });
+        migrationBuilder.CreateIndex("IX_inbox_messages_event_id_consumer_service", "agent", "inbox_messages", new[] { "event_id", "consumer_service" }, unique: true);
+        migrationBuilder.CreateIndex("IX_inbox_messages_status_created_at", "agent", "inbox_messages", new[] { "status", "created_at" });
         migrationBuilder.CreateIndex("IX_AgentProviders_Code", "agent", "AgentProviders", "Code", unique: true);
         migrationBuilder.CreateIndex("IX_AgentDefinitions_Code", "agent", "AgentDefinitions", "Code", unique: true);
         migrationBuilder.CreateIndex("IX_AgentDefinitions_ProviderId", "agent", "AgentDefinitions", "ProviderId");
@@ -269,5 +312,7 @@ public sealed class InitialAgentSchema : Migration
         migrationBuilder.DropTable(name: "AgentCredentials", schema: "agent");
         migrationBuilder.DropTable(name: "AgentDefinitions", schema: "agent");
         migrationBuilder.DropTable(name: "AgentProviders", schema: "agent");
+        migrationBuilder.DropTable(name: "inbox_messages", schema: "agent");
+        migrationBuilder.DropTable(name: "outbox_messages", schema: "agent");
     }
 }
