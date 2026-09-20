@@ -3,6 +3,7 @@ using CustomCodeFramework.Core.Abstractions;
 using CustomCodeFramework.Redis.DependencyInjection;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Infrastructure.Browser;
+using Dhole.Agent.Infrastructure.Providers.Generic;
 using Dhole.Agent.Infrastructure.Providers.Maersk;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
@@ -48,6 +49,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<MaerskEquipmentResolver>();
         services.AddScoped<MaerskCommodityResolver>();
         services.AddScoped<IAgentProvider, MaerskAgentProvider>();
+        services.AddScoped<IAgentProvider, HermesGenericAgentProvider>();
 
         services.Configure<HermesOptions>(configuration.GetSection(HermesOptions.SectionName));
         services.AddSingleton<HermesClient>();
