@@ -101,7 +101,7 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentDefinitions", x => x.Id);
-                table.ForeignKey("FK_AgentDefinitions_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentDefinitions_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
             });
 
         migrationBuilder.CreateTable(
@@ -126,7 +126,7 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentCredentials", x => x.Id);
-                table.ForeignKey("FK_AgentCredentials_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Cascade);
+                table.ForeignKey(name: "FK_AgentCredentials_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Cascade);
             });
 
         migrationBuilder.CreateTable(
@@ -155,8 +155,8 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_BrowserProfiles", x => x.Id);
-                table.ForeignKey("FK_BrowserProfiles_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Cascade);
-                table.ForeignKey("FK_BrowserProfiles_AgentCredentials_CredentialId", x => x.CredentialId, "agent", "AgentCredentials", "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_BrowserProfiles_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Cascade);
+                table.ForeignKey(name: "FK_BrowserProfiles_AgentCredentials_CredentialId", column: x => x.CredentialId, principalSchema: "agent", principalTable: "AgentCredentials", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
             });
 
         migrationBuilder.CreateTable(
@@ -190,9 +190,9 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentSchedules", x => x.Id);
-                table.ForeignKey("FK_AgentSchedules_AgentDefinitions_AgentDefinitionId", x => x.AgentDefinitionId, "agent", "AgentDefinitions", "Id", onDelete: ReferentialAction.Restrict);
-                table.ForeignKey("FK_AgentSchedules_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Restrict);
-                table.ForeignKey("FK_AgentSchedules_AgentCredentials_CredentialId", x => x.CredentialId, "agent", "AgentCredentials", "Id", onDelete: ReferentialAction.SetNull);
+                table.ForeignKey(name: "FK_AgentSchedules_AgentDefinitions_AgentDefinitionId", column: x => x.AgentDefinitionId, principalSchema: "agent", principalTable: "AgentDefinitions", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentSchedules_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentSchedules_AgentCredentials_CredentialId", column: x => x.CredentialId, principalSchema: "agent", principalTable: "AgentCredentials", principalColumn: "Id", onDelete: ReferentialAction.SetNull);
             });
 
         migrationBuilder.CreateTable(
@@ -226,10 +226,10 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentExecutions", x => x.Id);
-                table.ForeignKey("FK_AgentExecutions_AgentDefinitions_AgentDefinitionId", x => x.AgentDefinitionId, "agent", "AgentDefinitions", "Id", onDelete: ReferentialAction.Restrict);
-                table.ForeignKey("FK_AgentExecutions_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Restrict);
-                table.ForeignKey("FK_AgentExecutions_AgentSchedules_ScheduleId", x => x.ScheduleId, "agent", "AgentSchedules", "Id", onDelete: ReferentialAction.SetNull);
-                table.ForeignKey("FK_AgentExecutions_AgentCredentials_CredentialId", x => x.CredentialId, "agent", "AgentCredentials", "Id", onDelete: ReferentialAction.SetNull);
+                table.ForeignKey(name: "FK_AgentExecutions_AgentDefinitions_AgentDefinitionId", column: x => x.AgentDefinitionId, principalSchema: "agent", principalTable: "AgentDefinitions", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentExecutions_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentExecutions_AgentSchedules_ScheduleId", column: x => x.ScheduleId, principalSchema: "agent", principalTable: "AgentSchedules", principalColumn: "Id", onDelete: ReferentialAction.SetNull);
+                table.ForeignKey(name: "FK_AgentExecutions_AgentCredentials_CredentialId", column: x => x.CredentialId, principalSchema: "agent", principalTable: "AgentCredentials", principalColumn: "Id", onDelete: ReferentialAction.SetNull);
             });
 
         migrationBuilder.CreateTable(
@@ -251,7 +251,7 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentExecutionLogs", x => x.Id);
-                table.ForeignKey("FK_AgentExecutionLogs_AgentExecutions_ExecutionId", x => x.ExecutionId, "agent", "AgentExecutions", "Id", onDelete: ReferentialAction.Cascade);
+                table.ForeignKey(name: "FK_AgentExecutionLogs_AgentExecutions_ExecutionId", column: x => x.ExecutionId, principalSchema: "agent", principalTable: "AgentExecutions", principalColumn: "Id", onDelete: ReferentialAction.Cascade);
             });
 
         migrationBuilder.CreateTable(
@@ -272,34 +272,34 @@ public sealed class InitialAgentSchema : Migration
             constraints: table =>
             {
                 table.PrimaryKey("PK_AgentResults", x => x.Id);
-                table.ForeignKey("FK_AgentResults_AgentExecutions_ExecutionId", x => x.ExecutionId, "agent", "AgentExecutions", "Id", onDelete: ReferentialAction.Cascade);
-                table.ForeignKey("FK_AgentResults_AgentProviders_ProviderId", x => x.ProviderId, "agent", "AgentProviders", "Id", onDelete: ReferentialAction.Restrict);
+                table.ForeignKey(name: "FK_AgentResults_AgentExecutions_ExecutionId", column: x => x.ExecutionId, principalSchema: "agent", principalTable: "AgentExecutions", principalColumn: "Id", onDelete: ReferentialAction.Cascade);
+                table.ForeignKey(name: "FK_AgentResults_AgentProviders_ProviderId", column: x => x.ProviderId, principalSchema: "agent", principalTable: "AgentProviders", principalColumn: "Id", onDelete: ReferentialAction.Restrict);
             });
 
-        migrationBuilder.CreateIndex("IX_outbox_messages_event_id", "agent", "outbox_messages", "event_id", unique: true);
+        migrationBuilder.CreateIndex(name: "IX_outbox_messages_event_id", schema: "agent", table: "outbox_messages", column: "event_id", unique: true);
         migrationBuilder.CreateIndex(name: "IX_outbox_messages_status_created_at", schema: "agent", table: "outbox_messages", columns: new[] { "status", "created_at" });
         migrationBuilder.CreateIndex(name: "IX_inbox_messages_event_id_consumer_service", schema: "agent", table: "inbox_messages", columns: new[] { "event_id", "consumer_service" }, unique: true);
         migrationBuilder.CreateIndex(name: "IX_inbox_messages_status_created_at", schema: "agent", table: "inbox_messages", columns: new[] { "status", "created_at" });
-        migrationBuilder.CreateIndex("IX_AgentProviders_Code", "agent", "AgentProviders", "Code", unique: true);
-        migrationBuilder.CreateIndex("IX_AgentDefinitions_Code", "agent", "AgentDefinitions", "Code", unique: true);
-        migrationBuilder.CreateIndex("IX_AgentDefinitions_ProviderId", "agent", "AgentDefinitions", "ProviderId");
-        migrationBuilder.CreateIndex("IX_AgentCredentials_ProviderId", "agent", "AgentCredentials", "ProviderId");
-        migrationBuilder.CreateIndex("IX_BrowserProfiles_ProfileKey", "agent", "BrowserProfiles", "ProfileKey", unique: true);
+        migrationBuilder.CreateIndex(name: "IX_AgentProviders_Code", schema: "agent", table: "AgentProviders", column: "Code", unique: true);
+        migrationBuilder.CreateIndex(name: "IX_AgentDefinitions_Code", schema: "agent", table: "AgentDefinitions", column: "Code", unique: true);
+        migrationBuilder.CreateIndex(name: "IX_AgentDefinitions_ProviderId", schema: "agent", table: "AgentDefinitions", column: "ProviderId");
+        migrationBuilder.CreateIndex(name: "IX_AgentCredentials_ProviderId", schema: "agent", table: "AgentCredentials", column: "ProviderId");
+        migrationBuilder.CreateIndex(name: "IX_BrowserProfiles_ProfileKey", schema: "agent", table: "BrowserProfiles", column: "ProfileKey", unique: true);
         migrationBuilder.CreateIndex(name: "IX_BrowserProfiles_ProviderId_CredentialId", schema: "agent", table: "BrowserProfiles", columns: new[] { "ProviderId", "CredentialId" });
-        migrationBuilder.CreateIndex("IX_AgentSchedules_NextExecutionAt", "agent", "AgentSchedules", "NextExecutionAt");
-        migrationBuilder.CreateIndex("IX_AgentSchedules_IsActive", "agent", "AgentSchedules", "IsActive");
-        migrationBuilder.CreateIndex("IX_AgentSchedules_AgentDefinitionId", "agent", "AgentSchedules", "AgentDefinitionId");
-        migrationBuilder.CreateIndex("IX_AgentSchedules_ProviderId", "agent", "AgentSchedules", "ProviderId");
-        migrationBuilder.CreateIndex("IX_AgentSchedules_CredentialId", "agent", "AgentSchedules", "CredentialId");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_Status", "agent", "AgentExecutions", "Status");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_ProviderId", "agent", "AgentExecutions", "ProviderId");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_CreatedAtUtc", "agent", "AgentExecutions", "CreatedAtUtc");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_AgentDefinitionId", "agent", "AgentExecutions", "AgentDefinitionId");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_ScheduleId", "agent", "AgentExecutions", "ScheduleId");
-        migrationBuilder.CreateIndex("IX_AgentExecutions_CredentialId", "agent", "AgentExecutions", "CredentialId");
+        migrationBuilder.CreateIndex(name: "IX_AgentSchedules_NextExecutionAt", schema: "agent", table: "AgentSchedules", column: "NextExecutionAt");
+        migrationBuilder.CreateIndex(name: "IX_AgentSchedules_IsActive", schema: "agent", table: "AgentSchedules", column: "IsActive");
+        migrationBuilder.CreateIndex(name: "IX_AgentSchedules_AgentDefinitionId", schema: "agent", table: "AgentSchedules", column: "AgentDefinitionId");
+        migrationBuilder.CreateIndex(name: "IX_AgentSchedules_ProviderId", schema: "agent", table: "AgentSchedules", column: "ProviderId");
+        migrationBuilder.CreateIndex(name: "IX_AgentSchedules_CredentialId", schema: "agent", table: "AgentSchedules", column: "CredentialId");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_Status", schema: "agent", table: "AgentExecutions", column: "Status");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_ProviderId", schema: "agent", table: "AgentExecutions", column: "ProviderId");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_CreatedAtUtc", schema: "agent", table: "AgentExecutions", column: "CreatedAtUtc");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_AgentDefinitionId", schema: "agent", table: "AgentExecutions", column: "AgentDefinitionId");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_ScheduleId", schema: "agent", table: "AgentExecutions", column: "ScheduleId");
+        migrationBuilder.CreateIndex(name: "IX_AgentExecutions_CredentialId", schema: "agent", table: "AgentExecutions", column: "CredentialId");
         migrationBuilder.CreateIndex(name: "IX_AgentExecutionLogs_ExecutionId_OccurredAt", schema: "agent", table: "AgentExecutionLogs", columns: new[] { "ExecutionId", "OccurredAt" });
-        migrationBuilder.CreateIndex("IX_AgentResults_ExecutionId", "agent", "AgentResults", "ExecutionId", unique: true);
-        migrationBuilder.CreateIndex("IX_AgentResults_ProviderId", "agent", "AgentResults", "ProviderId");
+        migrationBuilder.CreateIndex(name: "IX_AgentResults_ExecutionId", schema: "agent", table: "AgentResults", column: "ExecutionId", unique: true);
+        migrationBuilder.CreateIndex(name: "IX_AgentResults_ProviderId", schema: "agent", table: "AgentResults", column: "ProviderId");
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
