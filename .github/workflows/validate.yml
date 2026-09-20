@@ -1,0 +1,43 @@
+name: Validate Dhole Agent
+
+on:
+  pull_request:
+    branches: [develop, master]
+  push:
+    branches:
+      - "feature/**"
+      - "fix/**"
+      - "chore/**"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Authenticate GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget update source github \
+            --configfile NuGet.Config \
+            --username "$GITHUB_ACTOR" \
+            --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text
+
+      - name: Restore
+        run: dotnet restore DholeAgentService.slnx
+
+      - name: Build
+        run: dotnet build DholeAgentService.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test DholeAgentService.slnx --configuration Release --no-build
