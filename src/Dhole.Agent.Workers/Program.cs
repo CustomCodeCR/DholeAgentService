@@ -1,4 +1,6 @@
+using CustomCodeFramework.Core.Abstractions;
 using Dhole.Agent.Infrastructure.DependencyInjection;
+using Dhole.Agent.Infrastructure.Time;
 using Dhole.Agent.Workers.DependencyInjection;
 using Dhole.Agent.Application.DependencyInjection;
 using Dhole.Agent.Persistence.DependencyInjection;
@@ -23,6 +25,7 @@ builder.Configuration
     .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
+builder.Services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
 builder.Services.AddApplication();
 builder.Services.AddPersistence(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
