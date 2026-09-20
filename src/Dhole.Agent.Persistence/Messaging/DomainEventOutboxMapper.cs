@@ -21,6 +21,7 @@ internal static class DomainEventOutboxMapper
         AgentExecutionFailedDomainEvent => "agent.execution.failed",
         BrowserProfileAuthenticatedDomainEvent => "agent.browser-profile.authenticated",
         BrowserProfileExpiredDomainEvent => "agent.browser-session.expired",
+        OceanFreightRatesExtractedDomainEvent => "agent.ocean-freight-rates.extracted",
         _ => $"agent.{domainEvent.GetType().Name}"
     };
 
