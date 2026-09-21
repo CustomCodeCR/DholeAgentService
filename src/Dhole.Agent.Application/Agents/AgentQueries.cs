@@ -1,6 +1,7 @@
 using CustomCodeFramework.Core.Results;
 using CustomCodeFramework.Cqrs.Queries;
 using Dhole.Agent.Application.Abstractions.Repositories;
+using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Contracts.Agents;
 using Dhole.Agent.Domain.Agents;
 
@@ -21,8 +22,26 @@ public sealed class GetAgentDefinitionByIdQueryHandler(IAgentDefinitionRepositor
 {public async Task<Result<AgentDefinitionDto>> HandleAsync(GetAgentDefinitionByIdQuery q,CancellationToken ct=default){var e=await repo.GetByIdAsync(q.Id,ct);return e is null||e.IsDeleted?Result.Failure<AgentDefinitionDto>(AgentErrors.DefinitionNotFound):Result.Success(e.ToDto());}}
 
 public sealed record GetAgentCredentialsQuery(Guid? ProviderId):IQuery<IReadOnlyCollection<AgentCredentialDto>>;
-public sealed class GetAgentCredentialsQueryHandler(IAgentCredentialRepository repo):IQueryHandler<GetAgentCredentialsQuery,IReadOnlyCollection<AgentCredentialDto>>
-{public async Task<IReadOnlyCollection<AgentCredentialDto>> HandleAsync(GetAgentCredentialsQuery q,CancellationToken ct=default)=>(await repo.GetAllAsync(q.ProviderId,ct)).Select(x=>x.ToDto()).ToArray();}
+public sealed class GetAgentCredentialsQueryHandler(
+    IAgentCredentialRepository repo,
+    ICredentialProtector protector):IQueryHandler<GetAgentCredentialsQuery,IReadOnlyCollection<AgentCredentialDto>>
+{
+    public async Task<IReadOnlyCollection<AgentCredentialDto>> HandleAsync(GetAgentCredentialsQuery q,CancellationToken ct=default)
+        =>(await repo.GetAllAsync(q.ProviderId,ct)).Select(x=>x.ToDto(protector)).ToArray();
+}
+public sealed record GetAgentCredentialByIdQuery(Guid Id):IQuery<Result<AgentCredentialDto>>;
+public sealed class GetAgentCredentialByIdQueryHandler(
+    IAgentCredentialRepository repo,
+    ICredentialProtector protector):IQueryHandler<GetAgentCredentialByIdQuery,Result<AgentCredentialDto>>
+{
+    public async Task<Result<AgentCredentialDto>> HandleAsync(GetAgentCredentialByIdQuery q,CancellationToken ct=default)
+    {
+        var e=await repo.GetByIdAsync(q.Id,ct);
+        return e is null||e.IsDeleted
+            ? Result.Failure<AgentCredentialDto>(AgentErrors.CredentialNotFound)
+            : Result.Success(e.ToDto(protector));
+    }
+}
 
 public sealed record GetBrowserProfilesQuery(Guid? ProviderId):IQuery<IReadOnlyCollection<BrowserProfileDto>>;
 public sealed class GetBrowserProfilesQueryHandler(IBrowserProfileRepository repo):IQueryHandler<GetBrowserProfilesQuery,IReadOnlyCollection<BrowserProfileDto>>

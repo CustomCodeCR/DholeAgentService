@@ -32,9 +32,11 @@ public static class AgentEndpoints
 
         var creds=root.MapGroup("/credentials");
         creds.MapGet("/",async(Guid? providerId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<AgentCredentialDto>>.Ok(await d.DispatchAsync(new GetAgentCredentialsQuery(providerId),ct)))).RequireScope(AgentScopeNames.CredentialsView);
-        creds.MapPost("/",async(CreateAgentCredentialRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateAgentCredentialCommand(r.ProviderId,r.Name,r.UsernameSecretKey,r.PasswordSecretKey,r.AdditionalSecretsJson,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
-        creds.MapPut("/{id:guid}",async(Guid id,UpdateAgentCredentialRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new UpdateAgentCredentialCommand(id,r.Name,r.UsernameSecretKey,r.PasswordSecretKey,r.AdditionalSecretsJson,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
+        creds.MapGet("/{id:guid}",async(Guid id,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetAgentCredentialByIdQuery(id),ct),h)).RequireScope(AgentScopeNames.CredentialsView);
+        creds.MapPost("/",async(CreateAgentCredentialRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateAgentCredentialCommand(r.ProviderId,r.Name,r.Username,r.Password,r.AdditionalSecretsJson,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
+        creds.MapPut("/{id:guid}",async(Guid id,UpdateAgentCredentialRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new UpdateAgentCredentialCommand(id,r.Name,r.Username,r.Password,r.AdditionalSecretsJson,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
         creds.MapPatch("/{id:guid}/active",async(Guid id,SetActiveRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new SetAgentCredentialActiveCommand(id,r.IsActive,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
+        creds.MapPost("/{id:guid}/verify",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new VerifyAgentCredentialCommand(id),ct),h)).RequireScope(AgentScopeNames.CredentialsVerify);
 
         var profiles=root.MapGroup("/browser-profiles");
         profiles.MapGet("/",async(Guid? providerId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<BrowserProfileDto>>.Ok(await d.DispatchAsync(new GetBrowserProfilesQuery(providerId),ct)))).RequireScope(AgentScopeNames.BrowserProfilesView);
@@ -67,4 +69,3 @@ public static class AgentEndpoints
 
     private sealed record SetActiveRequest(bool IsActive);
 }
-

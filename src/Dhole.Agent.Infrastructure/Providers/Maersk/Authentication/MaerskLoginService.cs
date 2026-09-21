@@ -1,26 +1,25 @@
-using Dhole.Agent.Application.Abstractions.Runtime;
 using Microsoft.Playwright;
 
 namespace Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 
-public sealed class MaerskLoginService(ISecretProvider secrets)
+public sealed class MaerskLoginService
 {
     public async Task EnsureAuthenticatedAsync(
         IPage page,
-        string usernameSecretKey,
-        string passwordSecretKey,
+        string username,
+        string password,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(username))
+            throw new ArgumentException("Maersk username is required.", nameof(username));
+        if (string.IsNullOrWhiteSpace(password))
+            throw new ArgumentException("Maersk password is required.", nameof(password));
+
         await page.GotoAsync("https://www.maersk.com/", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
         cancellationToken.ThrowIfCancellationRequested();
 
         if (await IsAuthenticatedAsync(page))
             return;
-
-        var username = await secrets.GetSecretAsync(usernameSecretKey, cancellationToken)
-            ?? throw new InvalidOperationException($"Secret '{usernameSecretKey}' is not configured.");
-        var password = await secrets.GetSecretAsync(passwordSecretKey, cancellationToken)
-            ?? throw new InvalidOperationException($"Secret '{passwordSecretKey}' is not configured.");
 
         var loginLink = page.Locator("a[href*='login'],button:has-text('Log in'),button:has-text('Login')").First;
         if (await loginLink.CountAsync() > 0)
