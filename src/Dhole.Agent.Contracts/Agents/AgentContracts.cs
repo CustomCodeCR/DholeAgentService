@@ -8,9 +8,9 @@ public sealed record AgentDefinitionDto(Guid Id,Guid ProviderId,string Code,stri
 public sealed record CreateAgentDefinitionRequest(Guid ProviderId,string Code,string Name,string? Description,string ActionType,string ExecutionStrategy,string? ConfigurationJson);
 public sealed record UpdateAgentDefinitionRequest(string Name,string? Description,string ActionType,string ExecutionStrategy,string? ConfigurationJson);
 
-public sealed record AgentCredentialDto(Guid Id,Guid ProviderId,string Name,bool IsActive,DateTime CreatedAtUtc,DateTime? UpdatedAtUtc);
-public sealed record CreateAgentCredentialRequest(Guid ProviderId,string Name,string UsernameSecretKey,string PasswordSecretKey,string? AdditionalSecretsJson);
-public sealed record UpdateAgentCredentialRequest(string Name,string UsernameSecretKey,string PasswordSecretKey,string? AdditionalSecretsJson);
+public sealed record AgentCredentialDto(Guid Id,Guid ProviderId,string Name,string UsernameMasked,bool HasPassword,bool IsActive,DateTime CreatedAtUtc,DateTime? UpdatedAtUtc);
+public sealed record CreateAgentCredentialRequest(Guid ProviderId,string Name,string Username,string Password,string? AdditionalSecretsJson);
+public sealed record UpdateAgentCredentialRequest(string Name,string Username,string? Password,string? AdditionalSecretsJson);
 
 public sealed record BrowserProfileDto(Guid Id,Guid ProviderId,Guid CredentialId,string Name,string ProfileKey,string StoragePath,string Status,DateTime? LastLoginAt,DateTime? LastUsedAt,DateTime? SessionExpiresAt,bool IsActive);
 public sealed record CreateBrowserProfileRequest(Guid ProviderId,Guid CredentialId,string Name,string ProfileKey,string StoragePath);
