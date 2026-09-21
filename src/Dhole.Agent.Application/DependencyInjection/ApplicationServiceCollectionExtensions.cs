@@ -12,6 +12,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddCustomCodeCqrs(AssemblyReference.Assembly);
         services.AddCustomCodeCqrsBehaviors();
         services.AddScoped<IAgentExecutionOrchestrator, AgentExecutionOrchestrator>();
+        services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.EndpointCaptureMatcher>();
         return services;
     }
 }
