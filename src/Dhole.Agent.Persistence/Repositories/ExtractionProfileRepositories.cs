@@ -24,3 +24,14 @@ public sealed class AgentExtractionRouteRepository(ServiceDbContext dbContext)
             .ThenBy(x => x.PodName)
             .ToListAsync(cancellationToken);
 }
+
+public sealed class AgentExtractionEquipmentRepository(ServiceDbContext dbContext)
+    : EfRepository<AgentExtractionEquipment, Guid>(dbContext), IAgentExtractionEquipmentRepository
+{
+    public async Task<IReadOnlyCollection<AgentExtractionEquipment>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default)
+        => await dbContext.AgentExtractionEquipment.AsNoTracking()
+            .Where(x => x.ProfileId == profileId && !x.IsDeleted)
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.Code)
+            .ToListAsync(cancellationToken);
+}

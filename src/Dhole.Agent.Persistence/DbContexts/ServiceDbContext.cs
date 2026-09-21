@@ -19,6 +19,7 @@ public sealed class ServiceDbContext(DbContextOptions<ServiceDbContext> options)
     public DbSet<AgentCredential> AgentCredentials => Set<AgentCredential>();
     public DbSet<AgentExtractionProfile> AgentExtractionProfiles => Set<AgentExtractionProfile>();
     public DbSet<AgentExtractionRoute> AgentExtractionRoutes => Set<AgentExtractionRoute>();
+    public DbSet<AgentExtractionEquipment> AgentExtractionEquipment => Set<AgentExtractionEquipment>();
     public DbSet<BrowserProfile> BrowserProfiles => Set<BrowserProfile>();
     public DbSet<AgentSchedule> AgentSchedules => Set<AgentSchedule>();
     public DbSet<AgentExecution> AgentExecutions => Set<AgentExecution>();
