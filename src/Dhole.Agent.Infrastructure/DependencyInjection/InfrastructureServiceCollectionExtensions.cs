@@ -2,7 +2,9 @@ using CustomCodeFramework.Auth.DependencyInjection;
 using CustomCodeFramework.Core.Abstractions;
 using CustomCodeFramework.Redis.DependencyInjection;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Infrastructure.Browser;
+using Dhole.Agent.Infrastructure.Providers.Generic;
 using Dhole.Agent.Infrastructure.Providers.Maersk;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
@@ -15,6 +17,7 @@ using Dhole.Agent.Infrastructure.Secrets;
 using Dhole.Agent.Infrastructure.Time;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -34,6 +37,17 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddCustomCodeRedis(configuration);
+
+        var keyRingPath = configuration["CredentialProtection:KeyRingPath"];
+        if (string.IsNullOrWhiteSpace(keyRingPath))
+            keyRingPath = "/data/agent-keys";
+
+        Directory.CreateDirectory(keyRingPath);
+        services.AddDataProtection()
+            .SetApplicationName("DholeAgentService")
+            .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
+        services.AddSingleton<ICredentialProtector, DataProtectionCredentialProtector>();
+
         services.Configure<BrowserOptions>(configuration.GetSection(BrowserOptions.SectionName));
         services.AddSingleton<IBrowserProfileManager, BrowserProfileManager>();
         services.AddScoped<IBrowserManager, PlaywrightBrowserManager>();
@@ -48,6 +62,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<MaerskEquipmentResolver>();
         services.AddScoped<MaerskCommodityResolver>();
         services.AddScoped<IAgentProvider, MaerskAgentProvider>();
+        services.AddScoped<IAgentProvider, HermesGenericAgentProvider>();
 
         services.Configure<HermesOptions>(configuration.GetSection(HermesOptions.SectionName));
         services.AddSingleton<HermesClient>();

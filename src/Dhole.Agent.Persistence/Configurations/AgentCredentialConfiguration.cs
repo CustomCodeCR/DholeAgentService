@@ -13,9 +13,15 @@ internal sealed class AgentCredentialConfiguration : EntityTypeConfigurationBase
         builder.ToTable("AgentCredentials");
         builder.Property(x => x.Id).ValueGeneratedNever();
         builder.Property(x => x.Name).HasMaxLength(200).IsRequired();
-        builder.Property(x => x.UsernameSecretKey).HasMaxLength(250).IsRequired();
-        builder.Property(x => x.PasswordSecretKey).HasMaxLength(250).IsRequired();
+
+        builder.Property(x => x.UsernameEncrypted).HasColumnType("text");
+        builder.Property(x => x.PasswordEncrypted).HasColumnType("text");
+        builder.Property(x => x.AdditionalSecretsEncrypted).HasColumnType("text");
+
+        builder.Property(x => x.UsernameSecretKey).HasMaxLength(250);
+        builder.Property(x => x.PasswordSecretKey).HasMaxLength(250);
         builder.Property(x => x.AdditionalSecretsJson).HasColumnType("jsonb");
+
         builder.HasOne<AgentProvider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(x => x.ProviderId);
         builder.Property(x => x.IsActive).IsRequired();

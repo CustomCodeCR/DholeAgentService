@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Infrastructure.Browser;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
@@ -19,7 +20,9 @@ public sealed class MaerskAgentProvider(
     MaerskOfferParser parser,
     MaerskLocationResolver locations,
     MaerskEquipmentResolver equipment,
-    MaerskCommodityResolver commodities) : IAgentProvider
+    MaerskCommodityResolver commodities,
+    ICredentialProtector credentialProtector,
+    ISecretProvider legacySecrets) : IAgentProvider
 {
     public string ProviderCode => "MAERSK";
 
@@ -54,7 +57,27 @@ public sealed class MaerskAgentProvider(
             return AgentProviderExecutionResult.Failed("browser_session_invalid", "The configured browser session is not Playwright.");
 
         var page = playwrightSession.Context.Pages.FirstOrDefault() ?? await playwrightSession.Context.NewPageAsync();
-        await login.EnsureAuthenticatedAsync(page, context.Credential.UsernameSecretKey, context.Credential.PasswordSecretKey, cancellationToken);
+
+        string username;
+        string password;
+        if (context.Credential.HasEncryptedSecrets)
+        {
+            username = credentialProtector.Unprotect(context.Credential.UsernameEncrypted!);
+            password = credentialProtector.Unprotect(context.Credential.PasswordEncrypted!);
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(context.Credential.UsernameSecretKey) ||
+                string.IsNullOrWhiteSpace(context.Credential.PasswordSecretKey))
+                return AgentProviderExecutionResult.Failed("missing_credential", "Maersk credential does not contain encrypted values or legacy secret references.");
+
+            username = await legacySecrets.GetSecretAsync(context.Credential.UsernameSecretKey, cancellationToken)
+                ?? throw new InvalidOperationException("Legacy Maersk username secret is not configured.");
+            password = await legacySecrets.GetSecretAsync(context.Credential.PasswordSecretKey, cancellationToken)
+                ?? throw new InvalidOperationException("Legacy Maersk password secret is not configured.");
+        }
+
+        await login.EnsureAuthenticatedAsync(page, username, password, cancellationToken);
 
         var captureTask = interceptor.WaitForOfferAsync(page, TimeSpan.FromSeconds(90), cancellationToken);
         await automation.FillSearchAsync(page, input, cancellationToken);
