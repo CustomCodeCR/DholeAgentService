@@ -17,3 +17,8 @@ public interface IAgentExtractionEquipmentRepository : IRepository<AgentExtracti
 {
     Task<IReadOnlyCollection<AgentExtractionEquipment>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default);
 }
+
+public interface IAgentEndpointCaptureRepository : IRepository<AgentEndpointCapture, Guid>
+{
+    Task<IReadOnlyCollection<AgentEndpointCapture>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default);
+}
