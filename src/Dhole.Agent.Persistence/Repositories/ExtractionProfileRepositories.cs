@@ -35,3 +35,14 @@ public sealed class AgentExtractionEquipmentRepository(ServiceDbContext dbContex
             .ThenBy(x => x.Code)
             .ToListAsync(cancellationToken);
 }
+
+public sealed class AgentEndpointCaptureRepository(ServiceDbContext dbContext)
+    : EfRepository<AgentEndpointCapture, Guid>(dbContext), IAgentEndpointCaptureRepository
+{
+    public async Task<IReadOnlyCollection<AgentEndpointCapture>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default)
+        => await dbContext.AgentEndpointCaptures.AsNoTracking()
+            .Where(x => x.ProfileId == profileId && !x.IsDeleted)
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.Name)
+            .ToListAsync(cancellationToken);
+}
