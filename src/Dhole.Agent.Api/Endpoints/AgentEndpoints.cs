@@ -5,7 +5,9 @@ using CustomCodeFramework.Cqrs.Queries;
 using Dhole.Agent.Api.Authorization;
 using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Agents;
+using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Contracts.Agents;
+using Dhole.Agent.Contracts.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
 
 namespace Dhole.Agent.Api.Endpoints;
@@ -37,6 +39,12 @@ public static class AgentEndpoints
         creds.MapPut("/{id:guid}",async(Guid id,UpdateAgentCredentialRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new UpdateAgentCredentialCommand(id,r.Name,r.Username,r.Password,r.AdditionalSecretsJson,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
         creds.MapPatch("/{id:guid}/active",async(Guid id,SetActiveRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new SetAgentCredentialActiveCommand(id,r.IsActive,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.CredentialsManage);
         creds.MapPost("/{id:guid}/verify",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new VerifyAgentCredentialCommand(id),ct),h)).RequireScope(AgentScopeNames.CredentialsVerify);
+
+        var extractionRoutes=root.MapGroup("/extraction-profiles/{profileId:guid}/routes");
+        extractionRoutes.MapGet("/",async(Guid profileId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<AgentExtractionRouteDto>>.Ok(await d.DispatchAsync(new GetExtractionRoutesQuery(profileId),ct)))).RequireScope(AgentScopeNames.RoutesManage);
+        extractionRoutes.MapPost("/",async(Guid profileId,SaveAgentExtractionRouteRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateExtractionRouteCommand(profileId,r,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.RoutesManage);
+        extractionRoutes.MapPut("/{routeId:guid}",async(Guid profileId,Guid routeId,SaveAgentExtractionRouteRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new UpdateExtractionRouteCommand(profileId,routeId,r,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.RoutesManage);
+        extractionRoutes.MapDelete("/{routeId:guid}",async(Guid profileId,Guid routeId,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new DeleteExtractionRouteCommand(profileId,routeId,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.RoutesManage);
 
         var profiles=root.MapGroup("/browser-profiles");
         profiles.MapGet("/",async(Guid? providerId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<BrowserProfileDto>>.Ok(await d.DispatchAsync(new GetBrowserProfilesQuery(providerId),ct)))).RequireScope(AgentScopeNames.BrowserProfilesView);
