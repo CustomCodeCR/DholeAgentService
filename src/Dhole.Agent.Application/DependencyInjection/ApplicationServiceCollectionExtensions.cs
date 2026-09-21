@@ -13,6 +13,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddCustomCodeCqrsBehaviors();
         services.AddScoped<IAgentExecutionOrchestrator, AgentExecutionOrchestrator>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.EndpointCaptureMatcher>();
+        services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.AgentPromptBuilder>();
         return services;
     }
 }
