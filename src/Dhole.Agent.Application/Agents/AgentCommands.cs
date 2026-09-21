@@ -123,9 +123,9 @@ public sealed class VerifyAgentCredentialCommandHandler(
         {
             if(e.HasEncryptedSecrets)
             {
-                var username=protector.Unprotect(e.UsernameEncrypted!);
-                var password=protector.Unprotect(e.PasswordEncrypted!);
-                return string.IsNullOrWhiteSpace(username)||string.IsNullOrWhiteSpace(password)
+                var decryptedUsername=protector.Unprotect(e.UsernameEncrypted!);
+                var decryptedPassword=protector.Unprotect(e.PasswordEncrypted!);
+                return string.IsNullOrWhiteSpace(decryptedUsername)||string.IsNullOrWhiteSpace(decryptedPassword)
                     ? Result.Failure(AgentErrors.CredentialVerificationFailed)
                     : Result.Success();
             }
@@ -133,9 +133,9 @@ public sealed class VerifyAgentCredentialCommandHandler(
             if(string.IsNullOrWhiteSpace(e.UsernameSecretKey)||string.IsNullOrWhiteSpace(e.PasswordSecretKey))
                 return Result.Failure(AgentErrors.CredentialVerificationFailed);
 
-            var username=await legacySecrets.GetSecretAsync(e.UsernameSecretKey,ct);
-            var password=await legacySecrets.GetSecretAsync(e.PasswordSecretKey,ct);
-            return string.IsNullOrWhiteSpace(username)||string.IsNullOrWhiteSpace(password)
+            var legacyUsername=await legacySecrets.GetSecretAsync(e.UsernameSecretKey,ct);
+            var legacyPassword=await legacySecrets.GetSecretAsync(e.PasswordSecretKey,ct);
+            return string.IsNullOrWhiteSpace(legacyUsername)||string.IsNullOrWhiteSpace(legacyPassword)
                 ? Result.Failure(AgentErrors.CredentialVerificationFailed)
                 : Result.Success();
         }
