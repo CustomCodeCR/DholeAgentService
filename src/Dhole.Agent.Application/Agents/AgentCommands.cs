@@ -2,6 +2,8 @@ using CustomCodeFramework.Core.Results;
 using CustomCodeFramework.Cqrs.Commands;
 using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
+using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Domain.Agents;
 
 namespace Dhole.Agent.Application.Agents;
@@ -43,20 +45,105 @@ public sealed class SetAgentDefinitionActiveCommandHandler(IAgentDefinitionRepos
     public async Task<Result> HandleAsync(SetAgentDefinitionActiveCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.DefinitionNotFound);e.SetActive(c.IsActive,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
 }
 
-public sealed record CreateAgentCredentialCommand(Guid ProviderId,string Name,string UsernameSecretKey,string PasswordSecretKey,string? AdditionalSecretsJson,Guid? ActorId):ICommand<Result<Guid>>;
-public sealed class CreateAgentCredentialCommandHandler(IAgentCredentialRepository repo,IAgentProviderRepository providers,IUnitOfWork uow):ICommandHandler<CreateAgentCredentialCommand,Result<Guid>>
+public sealed record CreateAgentCredentialCommand(Guid ProviderId,string Name,string Username,string Password,string? AdditionalSecretsJson,Guid? ActorId):ICommand<Result<Guid>>;
+public sealed class CreateAgentCredentialCommandHandler(
+    IAgentCredentialRepository repo,
+    IAgentProviderRepository providers,
+    ICredentialProtector protector,
+    IUnitOfWork uow):ICommandHandler<CreateAgentCredentialCommand,Result<Guid>>
 {
-    public async Task<Result<Guid>> HandleAsync(CreateAgentCredentialCommand c,CancellationToken ct=default){var p=await providers.GetByIdAsync(c.ProviderId,ct);if(p is null||p.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);var e=AgentCredential.Create(c.ProviderId,c.Name,c.UsernameSecretKey,c.PasswordSecretKey,c.AdditionalSecretsJson,c.ActorId);await repo.AddAsync(e,ct);await uow.SaveChangesAsync(ct);return Result.Success(e.Id);}
+    public async Task<Result<Guid>> HandleAsync(CreateAgentCredentialCommand c,CancellationToken ct=default)
+    {
+        var p=await providers.GetByIdAsync(c.ProviderId,ct);
+        if(p is null||p.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);
+
+        var e=AgentCredential.CreateEncrypted(
+            c.ProviderId,
+            c.Name,
+            protector.Protect(c.Username),
+            protector.Protect(c.Password),
+            string.IsNullOrWhiteSpace(c.AdditionalSecretsJson)?null:protector.Protect(c.AdditionalSecretsJson),
+            c.ActorId);
+
+        await repo.AddAsync(e,ct);
+        await uow.SaveChangesAsync(ct);
+        return Result.Success(e.Id);
+    }
 }
-public sealed record UpdateAgentCredentialCommand(Guid Id,string Name,string UsernameSecretKey,string PasswordSecretKey,string? AdditionalSecretsJson,Guid? ActorId):ICommand<Result>;
-public sealed class UpdateAgentCredentialCommandHandler(IAgentCredentialRepository repo,IUnitOfWork uow):ICommandHandler<UpdateAgentCredentialCommand,Result>
+
+public sealed record UpdateAgentCredentialCommand(Guid Id,string Name,string Username,string? Password,string? AdditionalSecretsJson,Guid? ActorId):ICommand<Result>;
+public sealed class UpdateAgentCredentialCommandHandler(
+    IAgentCredentialRepository repo,
+    ICredentialProtector protector,
+    IUnitOfWork uow):ICommandHandler<UpdateAgentCredentialCommand,Result>
 {
-    public async Task<Result> HandleAsync(UpdateAgentCredentialCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.CredentialNotFound);e.Update(c.Name,c.UsernameSecretKey,c.PasswordSecretKey,c.AdditionalSecretsJson,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
+    public async Task<Result> HandleAsync(UpdateAgentCredentialCommand c,CancellationToken ct=default)
+    {
+        var e=await repo.GetByIdAsync(c.Id,ct);
+        if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.CredentialNotFound);
+
+        string passwordEncrypted;
+        if(!string.IsNullOrWhiteSpace(c.Password))
+            passwordEncrypted=protector.Protect(c.Password);
+        else if(!string.IsNullOrWhiteSpace(e.PasswordEncrypted))
+            passwordEncrypted=e.PasswordEncrypted;
+        else
+            return Result.Failure(AgentErrors.CredentialPasswordRequired);
+
+        e.UpdateEncrypted(
+            c.Name,
+            protector.Protect(c.Username),
+            passwordEncrypted,
+            string.IsNullOrWhiteSpace(c.AdditionalSecretsJson)?null:protector.Protect(c.AdditionalSecretsJson),
+            c.ActorId);
+
+        await uow.SaveChangesAsync(ct);
+        return Result.Success();
+    }
 }
+
 public sealed record SetAgentCredentialActiveCommand(Guid Id,bool IsActive,Guid? ActorId):ICommand<Result>;
 public sealed class SetAgentCredentialActiveCommandHandler(IAgentCredentialRepository repo,IUnitOfWork uow):ICommandHandler<SetAgentCredentialActiveCommand,Result>
 {
     public async Task<Result> HandleAsync(SetAgentCredentialActiveCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.CredentialNotFound);e.SetActive(c.IsActive,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
+}
+
+public sealed record VerifyAgentCredentialCommand(Guid Id):ICommand<Result>;
+public sealed class VerifyAgentCredentialCommandHandler(
+    IAgentCredentialRepository repo,
+    ICredentialProtector protector,
+    ISecretProvider legacySecrets):ICommandHandler<VerifyAgentCredentialCommand,Result>
+{
+    public async Task<Result> HandleAsync(VerifyAgentCredentialCommand c,CancellationToken ct=default)
+    {
+        var e=await repo.GetByIdAsync(c.Id,ct);
+        if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.CredentialNotFound);
+
+        try
+        {
+            if(e.HasEncryptedSecrets)
+            {
+                var username=protector.Unprotect(e.UsernameEncrypted!);
+                var password=protector.Unprotect(e.PasswordEncrypted!);
+                return string.IsNullOrWhiteSpace(username)||string.IsNullOrWhiteSpace(password)
+                    ? Result.Failure(AgentErrors.CredentialVerificationFailed)
+                    : Result.Success();
+            }
+
+            if(string.IsNullOrWhiteSpace(e.UsernameSecretKey)||string.IsNullOrWhiteSpace(e.PasswordSecretKey))
+                return Result.Failure(AgentErrors.CredentialVerificationFailed);
+
+            var username=await legacySecrets.GetSecretAsync(e.UsernameSecretKey,ct);
+            var password=await legacySecrets.GetSecretAsync(e.PasswordSecretKey,ct);
+            return string.IsNullOrWhiteSpace(username)||string.IsNullOrWhiteSpace(password)
+                ? Result.Failure(AgentErrors.CredentialVerificationFailed)
+                : Result.Success();
+        }
+        catch
+        {
+            return Result.Failure(AgentErrors.CredentialVerificationFailed);
+        }
+    }
 }
 
 public sealed record CreateBrowserProfileCommand(Guid ProviderId,Guid CredentialId,string Name,string ProfileKey,string StoragePath,Guid? ActorId):ICommand<Result<Guid>>;

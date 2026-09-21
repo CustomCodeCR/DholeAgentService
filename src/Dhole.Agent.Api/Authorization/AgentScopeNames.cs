@@ -8,6 +8,7 @@ internal static class AgentScopeNames
     public const string DefinitionsManage = "agent.definitions.manage";
     public const string CredentialsView = "agent.credentials.view";
     public const string CredentialsManage = "agent.credentials.manage";
+    public const string CredentialsVerify = "agent.credentials.verify";
     public const string BrowserProfilesView = "agent.browser-profiles.view";
     public const string BrowserProfilesAuthenticate = "agent.browser-profiles.authenticate";
     public const string SchedulesView = "agent.schedules.view";
