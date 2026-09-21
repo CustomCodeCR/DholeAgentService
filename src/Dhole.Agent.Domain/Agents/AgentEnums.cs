@@ -7,3 +7,4 @@ public enum BrowserProfileStatus { Unknown, Ready, LoginRequired, Authenticating
 public enum AgentScheduleType { Once, Interval, Cron }
 public enum AgentExecutionType { Manual, Scheduled, Api, Grpc }
 public enum AgentExecutionStatus { Pending, Queued, Running, WaitingForAuthentication, Completed, PartiallyCompleted, Failed, Cancelled }
+public enum AgentEndpointMatchType { Contains, Exact, Regex }
