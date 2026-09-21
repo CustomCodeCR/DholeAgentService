@@ -8,3 +8,5 @@ public enum AgentScheduleType { Once, Interval, Cron }
 public enum AgentExecutionType { Manual, Scheduled, Api, Grpc }
 public enum AgentExecutionStatus { Pending, Queued, Running, WaitingForAuthentication, Completed, PartiallyCompleted, Failed, Cancelled }
 public enum AgentEndpointMatchType { Contains, Exact, Regex }
+public enum AgentExtractionDataType { String, Number, Decimal, Date, DateTime, Boolean, Object, Array }
+public enum AgentExtractionSourceType { Auto, ProviderParser, JsonPath, Hermes }
