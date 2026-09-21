@@ -30,6 +30,9 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
     public Guid ProviderId { get; private set; }
     public Guid? ScheduleId { get; private set; }
     public Guid? CredentialId { get; private set; }
+    public Guid? ExtractionProfileId { get; private set; }
+    public string? PromptSnapshot { get; private set; }
+    public string? ConfigurationSnapshotJson { get; private set; }
     public AgentExecutionType ExecutionType { get; private set; }
     public AgentExecutionStatus Status { get; private set; }
     public int Priority { get; private set; }
@@ -53,6 +56,21 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
             executionType, priority, inputJson, maxAttempts, correlationId, traceId, createdBy);
         entity.AddDomainEvent(new AgentExecutionRequestedDomainEvent(entity.Id, providerId, agentDefinitionId, correlationId));
         return entity;
+    }
+
+    public void AttachProfileSnapshot(
+        Guid extractionProfileId,
+        string promptSnapshot,
+        string configurationSnapshotJson,
+        Guid? updatedBy = null)
+    {
+        if (Status is not (AgentExecutionStatus.Pending or AgentExecutionStatus.Queued))
+            throw new InvalidOperationException("Profile snapshot can only be attached before execution starts.");
+
+        ExtractionProfileId = extractionProfileId;
+        PromptSnapshot = Required(promptSnapshot);
+        ConfigurationSnapshotJson = string.IsNullOrWhiteSpace(configurationSnapshotJson) ? "{}" : configurationSnapshotJson;
+        MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
     }
 
     public void Queue(Guid? updatedBy = null)

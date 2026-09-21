@@ -14,6 +14,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAgentExecutionOrchestrator, AgentExecutionOrchestrator>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.EndpointCaptureMatcher>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.AgentPromptBuilder>();
+        services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.AgentExecutionSnapshotBuilder>();
         return services;
     }
 }
