@@ -7,6 +7,11 @@ public sealed record AgentProviderUpdatedDomainEvent(Guid ProviderId, string Cod
 public sealed record AgentProviderActivatedDomainEvent(Guid ProviderId, string Code, Guid? UpdatedBy) : DomainEvent;
 public sealed record AgentProviderInactivatedDomainEvent(Guid ProviderId, string Code, Guid? UpdatedBy) : DomainEvent;
 
+public sealed record AgentExtractionProfileCreatedDomainEvent(Guid ProfileId, Guid ProviderId, string Name, Guid? CreatedBy) : DomainEvent;
+public sealed record AgentExtractionProfileUpdatedDomainEvent(Guid ProfileId, Guid ProviderId, string Name, Guid? UpdatedBy) : DomainEvent;
+public sealed record AgentExtractionProfileActivatedDomainEvent(Guid ProfileId, Guid ProviderId, Guid? UpdatedBy) : DomainEvent;
+public sealed record AgentExtractionProfileInactivatedDomainEvent(Guid ProfileId, Guid ProviderId, Guid? UpdatedBy) : DomainEvent;
+
 public sealed record AgentScheduleCreatedDomainEvent(Guid ScheduleId, string Name, Guid? CreatedBy) : DomainEvent;
 public sealed record AgentScheduleUpdatedDomainEvent(Guid ScheduleId, string Name, Guid? UpdatedBy) : DomainEvent;
 public sealed record AgentScheduleActivatedDomainEvent(Guid ScheduleId, string Name, Guid? UpdatedBy) : DomainEvent;
