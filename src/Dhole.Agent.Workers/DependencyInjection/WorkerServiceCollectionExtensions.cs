@@ -1,6 +1,5 @@
 using CustomCodeFramework.Messaging.DependencyInjection;
 using CustomCodeFramework.Messaging.Outbox.DependencyInjection;
-using CustomCodeFramework.Redis.DependencyInjection;
 using CustomCodeFramework.Redis.Streams.DependencyInjection;
 using CustomCodeFramework.Workers.DependencyInjection;
 using Dhole.Agent.Workers.Outbox;
@@ -14,7 +13,8 @@ public static class WorkerServiceCollectionExtensions
 {
     public static IServiceCollection AddAgentWorker(this IServiceCollection services,IConfiguration configuration)
     {
-        services.AddCustomCodeRedis(configuration);
+        // Redis base services (including the "redis" health check) are registered
+        // once by AddInfrastructure. Workers only add Redis Streams here.
         services.AddCustomCodeRedisStreams(configuration);
         services.AddCustomCodeMessaging(configuration);
         services.AddCustomCodeMessagingOutbox(configuration);
