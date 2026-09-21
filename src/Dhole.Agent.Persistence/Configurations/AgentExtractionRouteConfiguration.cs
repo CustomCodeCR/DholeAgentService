@@ -18,7 +18,7 @@ internal sealed class AgentExtractionRouteConfiguration : EntityTypeConfiguratio
         builder.Property(x => x.PoeCode).HasMaxLength(100);
         builder.Property(x => x.PoeName).HasMaxLength(300);
         builder.Property(x => x.PodCode).HasMaxLength(100);
-        builder.Property(x => x.PodName).HasMaxLength(300).IsRequired();
+        builder.Property(x => x.PodName).HasMaxLength(300);
         builder.Property(x => x.IsActive).IsRequired();
         builder.Property(x => x.SortOrder).IsRequired();
         builder.HasOne<AgentExtractionProfile>().WithMany().HasForeignKey(x => x.ProfileId).OnDelete(DeleteBehavior.Cascade);

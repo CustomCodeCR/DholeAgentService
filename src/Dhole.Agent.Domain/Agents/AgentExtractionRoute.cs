@@ -15,7 +15,7 @@ public sealed class AgentExtractionRoute : SoftDeletableAggregateRoot<Guid>
         string? poeCode,
         string? poeName,
         string? podCode,
-        string podName,
+        string? podName,
         bool isActive,
         int sortOrder,
         Guid? createdBy) : base(id)
@@ -32,7 +32,7 @@ public sealed class AgentExtractionRoute : SoftDeletableAggregateRoot<Guid>
     public string? PoeCode { get; private set; }
     public string? PoeName { get; private set; }
     public string? PodCode { get; private set; }
-    public string PodName { get; private set; } = string.Empty;
+    public string? PodName { get; private set; }
     public bool IsActive { get; private set; }
     public int SortOrder { get; private set; }
 
@@ -44,7 +44,7 @@ public sealed class AgentExtractionRoute : SoftDeletableAggregateRoot<Guid>
         string? poeCode,
         string? poeName,
         string? podCode,
-        string podName,
+        string? podName,
         bool isActive = true,
         int sortOrder = 0,
         Guid? createdBy = null)
@@ -57,7 +57,7 @@ public sealed class AgentExtractionRoute : SoftDeletableAggregateRoot<Guid>
         string? poeCode,
         string? poeName,
         string? podCode,
-        string podName,
+        string? podName,
         bool isActive,
         int sortOrder,
         Guid? updatedBy = null)
@@ -73,20 +73,20 @@ public sealed class AgentExtractionRoute : SoftDeletableAggregateRoot<Guid>
         MarkAsDeleted(DateTime.UtcNow, deletedBy?.ToString());
     }
 
-    private void Apply(string? name, string? polCode, string polName, string? poeCode, string? poeName, string? podCode, string podName, bool isActive, int sortOrder)
+    private void Apply(string? name, string? polCode, string polName, string? poeCode, string? poeName, string? podCode, string? podName, bool isActive, int sortOrder)
     {
         Name = Optional(name);
         PolCode = Optional(polCode);
         PolName = Required(polName);
         PoeCode = Optional(poeCode);
-        PoeName = Optional(poeName);
+        PoeName = Required(poeName);
         PodCode = Optional(podCode);
-        PodName = Required(podName);
+        PodName = Optional(podName);
         IsActive = isActive;
         SortOrder = Math.Max(0, sortOrder);
     }
 
-    private static string Required(string value)
+    private static string Required(string? value)
         => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.") : value.Trim();
     private static string? Optional(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

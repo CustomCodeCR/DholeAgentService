@@ -9,7 +9,7 @@ public sealed record AgentExtractionRouteDto(
     string? PoeCode,
     string? PoeName,
     string? PodCode,
-    string PodName,
+    string? PodName,
     bool IsActive,
     int SortOrder);
 
@@ -18,8 +18,8 @@ public sealed record SaveAgentExtractionRouteRequest(
     string? PolCode,
     string PolName,
     string? PoeCode,
-    string? PoeName,
+    string PoeName,
     string? PodCode,
-    string PodName,
+    string? PodName,
     bool IsActive,
     int SortOrder);
