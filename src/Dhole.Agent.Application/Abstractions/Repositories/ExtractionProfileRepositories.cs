@@ -27,3 +27,8 @@ public interface IAgentExtractionFieldRepository : IRepository<AgentExtractionFi
 {
     Task<IReadOnlyCollection<AgentExtractionField>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default);
 }
+
+public interface IAgentExecutionTaskRepository : IRepository<AgentExecutionTask, Guid>
+{
+    Task<IReadOnlyCollection<AgentExecutionTask>> GetByExecutionAsync(Guid executionId, CancellationToken cancellationToken = default);
+}

@@ -10,3 +10,4 @@ public enum AgentExecutionStatus { Pending, Queued, Running, WaitingForAuthentic
 public enum AgentEndpointMatchType { Contains, Exact, Regex }
 public enum AgentExtractionDataType { String, Number, Decimal, Date, DateTime, Boolean, Object, Array }
 public enum AgentExtractionSourceType { Auto, ProviderParser, JsonPath, Hermes }
+public enum AgentExecutionTaskStatus { Pending, Running, Completed, Failed, Skipped }

@@ -57,3 +57,13 @@ public sealed class AgentExtractionFieldRepository(ServiceDbContext dbContext)
             .ThenBy(x => x.Key)
             .ToListAsync(cancellationToken);
 }
+
+public sealed class AgentExecutionTaskRepository(ServiceDbContext dbContext)
+    : EfRepository<AgentExecutionTask, Guid>(dbContext), IAgentExecutionTaskRepository
+{
+    public async Task<IReadOnlyCollection<AgentExecutionTask>> GetByExecutionAsync(Guid executionId, CancellationToken cancellationToken = default)
+        => await dbContext.AgentExecutionTasks
+            .Where(x => x.ExecutionId == executionId)
+            .OrderBy(x => x.SortOrder)
+            .ToListAsync(cancellationToken);
+}

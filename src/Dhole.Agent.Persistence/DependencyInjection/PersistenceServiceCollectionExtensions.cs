@@ -23,6 +23,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IAgentExtractionEquipmentRepository, AgentExtractionEquipmentRepository>();
         services.AddScoped<IAgentEndpointCaptureRepository, AgentEndpointCaptureRepository>();
         services.AddScoped<IAgentExtractionFieldRepository, AgentExtractionFieldRepository>();
+        services.AddScoped<IAgentExecutionTaskRepository, AgentExecutionTaskRepository>();
         services.AddScoped<IBrowserProfileRepository, BrowserProfileRepository>();
         services.AddScoped<IAgentScheduleRepository, AgentScheduleRepository>();
         services.AddScoped<IAgentExecutionRepository, AgentExecutionRepository>();
