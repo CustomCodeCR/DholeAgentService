@@ -65,6 +65,9 @@ public static class AgentEndpoints
         extractionFields.MapPut("/{fieldId:guid}",async(Guid profileId,Guid fieldId,SaveAgentExtractionFieldRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new UpdateExtractionFieldCommand(profileId,fieldId,r,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExtractionFieldsManage);
         extractionFields.MapDelete("/{fieldId:guid}",async(Guid profileId,Guid fieldId,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new DeleteExtractionFieldCommand(profileId,fieldId,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExtractionFieldsManage);
 
+        var promptProfiles=root.MapGroup("/extraction-profiles");
+        promptProfiles.MapPost("/{profileId:guid}/prompt-preview",async(Guid profileId,AgentPromptPreviewRequest r,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetAgentPromptPreviewQuery(profileId,r),ct),h)).RequireScope(AgentScopeNames.PromptsManage);
+
         var profiles=root.MapGroup("/browser-profiles");
         profiles.MapGet("/",async(Guid? providerId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<BrowserProfileDto>>.Ok(await d.DispatchAsync(new GetBrowserProfilesQuery(providerId),ct)))).RequireScope(AgentScopeNames.BrowserProfilesView);
         profiles.MapGet("/{id:guid}",async(Guid id,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetBrowserProfileByIdQuery(id),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesView);
