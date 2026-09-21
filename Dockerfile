@@ -36,7 +36,13 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Dhole.Agent.Api.dll"]
 
+# Playwright 1.55 ships the browsers and Linux dependencies required by the
+# worker, but its pinned image only contains .NET 8. Overlay the .NET 10
+# ASP.NET runtime so the net10.0 worker and its Microsoft.AspNetCore.App
+# framework reference can start without losing the Playwright browser stack.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS worker-dotnet-runtime
 FROM mcr.microsoft.com/playwright/dotnet:v1.55.0-noble AS worker-final
+COPY --from=worker-dotnet-runtime /usr/share/dotnet /usr/share/dotnet
 WORKDIR /app
 COPY --from=publish-worker /app/publish/worker ./
 ENV Browser__ProfilesPath=/data/browser-profiles
