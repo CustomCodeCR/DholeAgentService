@@ -22,3 +22,8 @@ public interface IAgentEndpointCaptureRepository : IRepository<AgentEndpointCapt
 {
     Task<IReadOnlyCollection<AgentEndpointCapture>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default);
 }
+
+public interface IAgentExtractionFieldRepository : IRepository<AgentExtractionField, Guid>
+{
+    Task<IReadOnlyCollection<AgentExtractionField>> GetByProfileAsync(Guid profileId, CancellationToken cancellationToken = default);
+}
