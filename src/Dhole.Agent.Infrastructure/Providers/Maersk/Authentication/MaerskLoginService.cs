@@ -1,3 +1,4 @@
+using Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 using Microsoft.Playwright;
 
 namespace Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
@@ -5,7 +6,6 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 public sealed class MaerskLoginService
 {
     private const string LoginUrl = "https://www.maersk.com/portaluser/login";
-    private const float FieldTimeoutMs = 20_000;
 
     private static readonly string[] UsernameSelectors =
     [
@@ -42,8 +42,6 @@ public sealed class MaerskLoginService
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("Maersk password is required.", nameof(password));
 
-        // Navigate directly to the current Maersk portal login instead of relying on
-        // the homepage account button, whose markup/navigation changes frequently.
         await page.GotoAsync(
             LoginUrl,
             new PageGotoOptions
@@ -57,173 +55,88 @@ public sealed class MaerskLoginService
         if (await IsAuthenticatedAsync(page))
             return;
 
-        var userInput = await FindVisibleAsync(page, UsernameSelectors, cancellationToken);
-        if (userInput is null)
+        var usernameFilled =
+            await MaerskShadowDom.FillAsync(page, UsernameSelectors, username, cancellationToken, timeoutMs: 12_000)
+            || await MaerskShadowDom.FillMdsInputAsync(page, ["username", "user"], username, cancellationToken);
+
+        if (!usernameFilled)
             throw await CreateLoginUiExceptionAsync(page, "username");
 
-        await userInput.FillAsync(username, new LocatorFillOptions { Timeout = FieldTimeoutMs });
+        // The current Maersk Global Accounts screen shows username and password
+        // together, but keep the two-step flow as a compatibility fallback.
+        var passwordFilled =
+            await MaerskShadowDom.FillAsync(page, PasswordSelectors, password, cancellationToken, timeoutMs: 3_000)
+            || await MaerskShadowDom.FillMdsInputAsync(page, ["password"], password, cancellationToken);
 
-        // Maersk has used both a single-page username/password form and a two-step
-        // username -> Continue -> password flow. Support both.
-        var passwordInput = await FindVisibleAsync(page, PasswordSelectors, cancellationToken, timeoutMs: 2_000);
-        if (passwordInput is null)
+        if (!passwordFilled)
         {
-            var continueButton = await FindVisibleAsync(
-                page,
-                [
-                    "button:has-text('Continue')",
-                    "button:has-text('Next')",
-                    "button[type='submit']",
-                    "input[type='submit']"
-                ],
-                cancellationToken,
-                timeoutMs: 5_000);
+            var advanced =
+                await MaerskShadowDom.ClickByTextAsync(page, ["Continue", "Next"], cancellationToken, timeoutMs: 5_000)
+                || await MaerskShadowDom.ClickFirstAsync(
+                    page,
+                    ["button[type='submit']", "input[type='submit']"],
+                    cancellationToken,
+                    timeoutMs: 2_000);
 
-            if (continueButton is null)
-                throw await CreateLoginUiExceptionAsync(page, "continue button");
+            if (!advanced)
+                throw await CreateLoginUiExceptionAsync(page, "password/continue control");
 
-            await continueButton.ClickAsync(new LocatorClickOptions { Timeout = FieldTimeoutMs });
-
-            passwordInput = await FindVisibleAsync(page, PasswordSelectors, cancellationToken);
-            if (passwordInput is null)
-                throw await CreateLoginUiExceptionAsync(page, "password");
+            passwordFilled =
+                await MaerskShadowDom.FillAsync(page, PasswordSelectors, password, cancellationToken, timeoutMs: 12_000)
+                || await MaerskShadowDom.FillMdsInputAsync(page, ["password"], password, cancellationToken);
         }
 
-        await passwordInput.FillAsync(password, new LocatorFillOptions { Timeout = FieldTimeoutMs });
+        if (!passwordFilled)
+            throw await CreateLoginUiExceptionAsync(page, "password");
 
-        var submit = await FindVisibleAsync(
-            page,
-            [
-                "button:has-text('Log in')",
-                "button:has-text('Login')",
-                "button:has-text('Sign in')",
-                "button[type='submit']",
-                "input[type='submit']"
-            ],
-            cancellationToken,
-            timeoutMs: 10_000);
+        var submitted =
+            await MaerskShadowDom.ClickByTextAsync(page, ["Log in", "Login", "Sign in"], cancellationToken, timeoutMs: 8_000)
+            || await MaerskShadowDom.ClickFirstAsync(
+                page,
+                ["button[type='submit']", "input[type='submit']"],
+                cancellationToken,
+                timeoutMs: 3_000);
 
-        if (submit is null)
+        if (!submitted)
             throw await CreateLoginUiExceptionAsync(page, "login button");
 
-        await submit.ClickAsync(new LocatorClickOptions { Timeout = FieldTimeoutMs });
-
-        try
-        {
-            await page.WaitForLoadStateAsync(
-                LoadState.DOMContentLoaded,
-                new PageWaitForLoadStateOptions { Timeout = 20_000 });
-        }
-        catch (TimeoutException)
-        {
-            // Some Maersk SPA transitions do not produce a traditional document load.
-            // Authentication is verified below from the resulting page state.
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (!await IsAuthenticatedAsync(page))
-        {
-            // Give the SPA a short opportunity to complete redirects/account hydration.
-            for (var attempt = 0; attempt < 10; attempt++)
-            {
-                await Task.Delay(500, cancellationToken);
-                if (await IsAuthenticatedAsync(page))
-                    return;
-            }
-
-            throw await CreateLoginUiExceptionAsync(page, "authenticated account state");
-        }
-    }
-
-    private static async Task<ILocator?> FindVisibleAsync(
-        IPage page,
-        IReadOnlyCollection<string> selectors,
-        CancellationToken cancellationToken,
-        float timeoutMs = FieldTimeoutMs)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-
-        while (DateTime.UtcNow < deadline)
+        for (var attempt = 0; attempt < 30; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            foreach (var selector in selectors)
-            {
-                var locator = page.Locator(selector).First;
-                if (await locator.CountAsync() == 0)
-                    continue;
+            if (await IsAuthenticatedAsync(page))
+                return;
 
-                try
-                {
-                    if (await locator.IsVisibleAsync())
-                        return locator;
-                }
-                catch (PlaywrightException)
-                {
-                    // DOM may be replacing the login component while redirects finish.
-                }
-            }
-
-            await Task.Delay(250, cancellationToken);
+            await Task.Delay(500, cancellationToken);
         }
 
-        return null;
+        throw await CreateLoginUiExceptionAsync(page, "authenticated account state");
     }
 
     private static async Task<Exception> CreateLoginUiExceptionAsync(IPage page, string missingElement)
     {
-        var title = string.Empty;
-        try
-        {
-            title = await page.TitleAsync();
-        }
-        catch (PlaywrightException)
-        {
-            // Best-effort diagnostic only.
-        }
-
-        var detectedInputs = new List<string>();
-        try
-        {
-            var inputs = page.Locator("input");
-            var count = Math.Min(await inputs.CountAsync(), 12);
-
-            for (var i = 0; i < count; i++)
-            {
-                var input = inputs.Nth(i);
-                var type = await input.GetAttributeAsync("type") ?? string.Empty;
-                var name = await input.GetAttributeAsync("name") ?? string.Empty;
-                var id = await input.GetAttributeAsync("id") ?? string.Empty;
-                var autocomplete = await input.GetAttributeAsync("autocomplete") ?? string.Empty;
-                var placeholder = await input.GetAttributeAsync("placeholder") ?? string.Empty;
-
-                detectedInputs.Add(
-                    $"type={Sanitize(type)},name={Sanitize(name)},id={Sanitize(id)},autocomplete={Sanitize(autocomplete)},placeholder={Sanitize(placeholder)}");
-            }
-        }
-        catch (PlaywrightException)
-        {
-            // Best-effort diagnostic only.
-        }
-
-        var inputsDescription = detectedInputs.Count == 0
-            ? "none"
-            : string.Join(" | ", detectedInputs);
-
+        var diagnostics = await MaerskShadowDom.DescribeAsync(page);
         return new InvalidOperationException(
-            $"Maersk login could not find the {missingElement}. URL='{page.Url}', Title='{Sanitize(title)}', Inputs=[{inputsDescription}].");
+            $"Maersk login could not find or complete the {missingElement}. " +
+            $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
     }
-
-    private static string Sanitize(string value)
-        => value.Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal)
-            .Trim();
 
     private static async Task<bool> IsAuthenticatedAsync(IPage page)
     {
-        // If the browser has already left the login route, also look for known account
-        // controls. This keeps persistent Playwright profiles reusable between executions.
+        var currentUrl = page.Url;
+
+        var onAccountsLogin =
+            currentUrl.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase) &&
+            currentUrl.Contains("/auth/login", StringComparison.OrdinalIgnoreCase);
+
+        var onPortalLogin =
+            currentUrl.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase);
+
+        if (!onAccountsLogin && !onPortalLogin &&
+            currentUrl.Contains("maersk.com", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Persistent profiles may already be authenticated while still resolving redirects.
         var accountMarker = page.Locator(
             "[data-test*='account' i]," +
             "[data-testid*='account' i]," +
@@ -232,30 +145,13 @@ public sealed class MaerskLoginService
             "button:has-text('Log out')," +
             "button:has-text('Logout')").First;
 
-        if (await accountMarker.CountAsync() > 0)
+        try
         {
-            try
-            {
-                if (await accountMarker.IsVisibleAsync())
-                    return true;
-            }
-            catch (PlaywrightException)
-            {
-                // Continue with URL/form checks.
-            }
+            return await accountMarker.CountAsync() > 0 && await accountMarker.IsVisibleAsync();
         }
-
-        var onLoginRoute =
-            page.Url.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase) ||
-            page.Url.Contains("/login", StringComparison.OrdinalIgnoreCase);
-
-        if (!onLoginRoute)
+        catch (PlaywrightException)
         {
-            var password = page.Locator("input[type='password']").First;
-            if (await password.CountAsync() == 0)
-                return true;
+            return false;
         }
-
-        return false;
     }
 }
