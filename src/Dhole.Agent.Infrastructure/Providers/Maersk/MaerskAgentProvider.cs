@@ -86,6 +86,14 @@ public sealed class MaerskAgentProvider(
 
                 username = fallbackUsername;
                 password = fallbackPassword;
+
+                // Self-heal the selected credential: the orchestrator keeps this entity
+                // tracked and persists it together with the execution state.
+                context.Credential.UpdateEncrypted(
+                    context.Credential.Name,
+                    credentialProtector.Protect(username),
+                    credentialProtector.Protect(password),
+                    additionalSecretsEncrypted: null);
             }
         }
         else
