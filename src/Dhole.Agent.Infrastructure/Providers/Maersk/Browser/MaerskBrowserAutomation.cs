@@ -7,52 +7,144 @@ public sealed class MaerskBrowserAutomation
 {
     public async Task FillSearchAsync(IPage page, MaerskSearchInput input, CancellationToken cancellationToken)
     {
-        await page.GotoAsync("https://www.maersk.com/instant-prices/", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+        await page.GotoAsync(
+            "https://www.maersk.com/instant-prices/",
+            new PageGotoOptions
+            {
+                WaitUntil = WaitUntilState.DOMContentLoaded,
+                Timeout = 60_000
+            });
+
         cancellationToken.ThrowIfCancellationRequested();
 
-        await FillFirstAsync(page, ["input[name*='origin' i]","input[placeholder*='origin' i]","input[aria-label*='origin' i]"], input.Pol);
-        await SelectSuggestionAsync(page);
+        await FillFirstAsync(
+            page,
+            [
+                "input[name*='origin' i]",
+                "input[placeholder*='origin' i]",
+                "input[aria-label*='origin' i]",
+                "input[name*='from' i]",
+                "input[placeholder*='from' i]"
+            ],
+            ["origin", "from"],
+            input.Pol,
+            cancellationToken);
 
-        await FillFirstAsync(page, ["input[name*='destination' i]","input[placeholder*='destination' i]","input[aria-label*='destination' i]"], input.Pod);
-        await SelectSuggestionAsync(page);
+        await SelectSuggestionAsync(page, cancellationToken);
 
-        await FillFirstAsync(page, ["input[name*='weight' i]","input[aria-label*='weight' i]"], input.WeightKg.ToString(System.Globalization.CultureInfo.InvariantCulture), required:false);
-        await FillFirstAsync(page, ["input[name*='commodity' i]","input[aria-label*='commodity' i]"], input.Commodity, required:false);
+        await FillFirstAsync(
+            page,
+            [
+                "input[name*='destination' i]",
+                "input[placeholder*='destination' i]",
+                "input[aria-label*='destination' i]",
+                "input[name*='to' i]",
+                "input[placeholder*='to' i]"
+            ],
+            ["destination", "to"],
+            input.Pod,
+            cancellationToken);
+
+        await SelectSuggestionAsync(page, cancellationToken);
+
+        await FillFirstAsync(
+            page,
+            ["input[name*='weight' i]", "input[aria-label*='weight' i]"],
+            ["weight"],
+            input.WeightKg.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cancellationToken,
+            required: false);
+
+        await FillFirstAsync(
+            page,
+            ["input[name*='commodity' i]", "input[aria-label*='commodity' i]"],
+            ["commodity"],
+            input.Commodity,
+            cancellationToken,
+            required: false);
 
         var date = input.CargoReadyDate.ToString("yyyy-MM-dd");
-        await FillFirstAsync(page, ["input[type='date']","input[name*='date' i]"], date, required:false);
+        await FillFirstAsync(
+            page,
+            ["input[type='date']", "input[name*='date' i]", "input[aria-label*='date' i]"],
+            ["date", "cargo ready"],
+            date,
+            cancellationToken,
+            required: false);
 
-        var equipment = page.Locator("select[name*='equipment' i],select[aria-label*='equipment' i]").First;
-        if (await equipment.CountAsync() > 0)
+        await MaerskShadowDom.SelectOptionByLabelAsync(
+            page,
+            [
+                "select[name*='equipment' i]",
+                "select[aria-label*='equipment' i]",
+                "select[name*='container' i]",
+                "select[aria-label*='container' i]"
+            ],
+            input.ContainerType,
+            cancellationToken,
+            timeoutMs: 4_000);
+
+        await FillFirstAsync(
+            page,
+            ["input[name*='quantity' i]", "input[aria-label*='quantity' i]"],
+            ["quantity"],
+            input.Quantity.ToString(),
+            cancellationToken,
+            required: false);
+
+        var submitted =
+            await MaerskShadowDom.ClickByTextAsync(
+                page,
+                ["Search", "Get prices", "Find prices", "Show prices"],
+                cancellationToken,
+                timeoutMs: 10_000)
+            || await MaerskShadowDom.ClickFirstAsync(
+                page,
+                ["button[type='submit']", "input[type='submit']"],
+                cancellationToken,
+                timeoutMs: 3_000);
+
+        if (!submitted)
         {
-            try { await equipment.SelectOptionAsync(new[] { new SelectOptionValue { Label = input.ContainerType } }); }
-            catch { }
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk price search button was not found. URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
-
-        var quantity = page.Locator("input[name*='quantity' i],input[aria-label*='quantity' i]").First;
-        if (await quantity.CountAsync() > 0)
-            await quantity.FillAsync(input.Quantity.ToString());
-
-        var search = page.Locator("button[type='submit'],button:has-text('Search'),button:has-text('Get prices'),button:has-text('Find prices')").Last;
-        await search.ClickAsync();
     }
 
-    private static async Task FillFirstAsync(IPage page, string[] selectors, string value, bool required=true)
+    private static async Task FillFirstAsync(
+        IPage page,
+        string[] selectors,
+        string[] semanticNames,
+        string value,
+        CancellationToken cancellationToken,
+        bool required = true)
     {
-        foreach (var selector in selectors)
+        var filled =
+            await MaerskShadowDom.FillAsync(page, selectors, value, cancellationToken, timeoutMs: required ? 12_000 : 2_500)
+            || await MaerskShadowDom.FillMdsInputAsync(page, semanticNames, value, cancellationToken);
+
+        if (!filled && required)
         {
-            var locator=page.Locator(selector).First;
-            if (await locator.CountAsync() == 0) continue;
-            await locator.FillAsync(value);
-            return;
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Required Maersk search field was not found for '{string.Join("/", semanticNames)}'. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
-        if (required) throw new InvalidOperationException($"Required Maersk search field was not found for value '{value}'.");
     }
 
-    private static async Task SelectSuggestionAsync(IPage page)
+    private static async Task SelectSuggestionAsync(IPage page, CancellationToken cancellationToken)
     {
-        var suggestion=page.Locator("[role='option'],li[role='option'],[data-test*='suggestion' i]").First;
-        if (await suggestion.CountAsync()>0)
-            await suggestion.ClickAsync();
+        // Suggestions may also be rendered from an MDS component's shadow root.
+        await MaerskShadowDom.ClickFirstAsync(
+            page,
+            [
+                "[role='option']",
+                "li[role='option']",
+                "[data-test*='suggestion' i]",
+                "[data-testid*='suggestion' i]"
+            ],
+            cancellationToken,
+            timeoutMs: 5_000);
     }
 }
