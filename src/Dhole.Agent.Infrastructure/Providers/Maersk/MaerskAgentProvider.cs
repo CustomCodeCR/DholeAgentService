@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Abstractions.Security;
@@ -62,8 +63,30 @@ public sealed class MaerskAgentProvider(
         string password;
         if (context.Credential.HasEncryptedSecrets)
         {
-            username = credentialProtector.Unprotect(context.Credential.UsernameEncrypted!);
-            password = credentialProtector.Unprotect(context.Credential.PasswordEncrypted!);
+            try
+            {
+                username = credentialProtector.Unprotect(context.Credential.UsernameEncrypted!);
+                password = credentialProtector.Unprotect(context.Credential.PasswordEncrypted!);
+            }
+            catch (CryptographicException)
+            {
+                // Credentials created before the Data Protection key ring became shared/persistent
+                // can reference a key that no longer exists after a container redeploy.
+                // Keep scheduled extractions operational through the existing environment-secret
+                // compatibility path, then let the credential be re-saved under the shared key ring.
+                var fallbackUsername = await legacySecrets.GetSecretAsync("MAERSK_USERNAME", cancellationToken);
+                var fallbackPassword = await legacySecrets.GetSecretAsync("MAERSK_PASSWORD", cancellationToken);
+
+                if (string.IsNullOrWhiteSpace(fallbackUsername) || string.IsNullOrWhiteSpace(fallbackPassword))
+                {
+                    return AgentProviderExecutionResult.Failed(
+                        "credential_key_unavailable",
+                        "The stored Maersk credential was encrypted with a Data Protection key that is no longer available. Re-save the credential so it is encrypted with the current shared key ring, or configure MAERSK_USERNAME and MAERSK_PASSWORD as a temporary recovery path.");
+                }
+
+                username = fallbackUsername;
+                password = fallbackPassword;
+            }
         }
         else
         {
