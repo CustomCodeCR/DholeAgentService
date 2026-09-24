@@ -19,7 +19,8 @@ public sealed class MaerskLoginService
         "input[name*='user' i]",
         "input[id*='user' i]",
         "input[type='email']",
-        "input[name*='email' i]"
+        "input[name*='email' i]",
+        "input:not([type='password']):not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit']):not([disabled])"
     ];
 
     private static readonly string[] PasswordSelectors =
@@ -54,6 +55,9 @@ public sealed class MaerskLoginService
 
         if (await IsAuthenticatedAsync(page))
             return;
+
+        if (!await WaitForLoginUiAsync(page, cancellationToken))
+            throw await CreateLoginUiExceptionAsync(page, "rendered login form");
 
         var usernameFilled =
             await MaerskShadowDom.FillAsync(page, UsernameSelectors, username, cancellationToken, timeoutMs: 12_000)
@@ -111,6 +115,54 @@ public sealed class MaerskLoginService
         }
 
         throw await CreateLoginUiExceptionAsync(page, "authenticated account state");
+    }
+
+    private static async Task<bool> WaitForLoginUiAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        // Maersk Global Accounts is a JavaScript application. DOMContentLoaded can
+        // complete before the IAM bundle has mounted the form, especially after the
+        // portaluser -> accounts.maersk.com redirect.
+        for (var renderAttempt = 0; renderAttempt < 2; renderAttempt++)
+        {
+            for (var poll = 0; poll < 40; poll++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (await IsAuthenticatedAsync(page))
+                    return true;
+
+                if (await MaerskShadowDom.HasVisibleAsync(
+                        page,
+                        UsernameSelectors.Concat(PasswordSelectors).ToArray(),
+                        cancellationToken))
+                    return true;
+
+                await Task.Delay(500, cancellationToken);
+            }
+
+            if (renderAttempt == 0 &&
+                page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase) &&
+                page.Url.Contains("/auth/login", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await page.ReloadAsync(
+                        new PageReloadOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 60_000
+                        });
+                }
+                catch (PlaywrightException)
+                {
+                    // Continue polling. A redirect/reload can race the SPA bootstrap.
+                }
+            }
+        }
+
+        return false;
     }
 
     private static async Task<Exception> CreateLoginUiExceptionAsync(IPage page, string missingElement)
