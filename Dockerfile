@@ -47,4 +47,4 @@ WORKDIR /app
 COPY --from=publish-worker /app/publish/worker ./
 ENV Browser__ProfilesPath=/data/browser-profiles
 VOLUME ["/data/browser-profiles"]
-ENTRYPOINT ["dotnet", "Dhole.Agent.Workers.dll"]
+ENTRYPOINT ["xvfb-run", "-a", "dotnet", "Dhole.Agent.Workers.dll"]
