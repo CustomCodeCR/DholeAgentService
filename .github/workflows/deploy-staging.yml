@@ -27,6 +27,33 @@ jobs:
       - name: Checkout Agent
         uses: actions/checkout@v4
 
+      - name: Free runner disk space before Docker builds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Disk usage before cleanup:"
+          df -h /
+          docker system df || true
+
+          # Safe cleanup only: build cache, stopped containers and unused images.
+          # Named volumes are intentionally never pruned because they contain
+          # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
+          docker builder prune -af || true
+          docker container prune -f --filter "until=24h" || true
+          docker image prune -af --filter "until=168h" || true
+
+          echo "Disk usage after cleanup:"
+          df -h /
+          docker system df || true
+
+          AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
+          MIN_REQUIRED_KB=$((8 * 1024 * 1024))
+          if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
+            echo "Insufficient free disk space for Agent Docker build. Need at least 8 GiB free." >&2
+            exit 1
+          fi
+
       - name: Load Dhole staging infrastructure
         shell: bash
         run: |
@@ -229,6 +256,10 @@ jobs:
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" \
             up -d --no-deps --force-recreate --pull never dhole-agent-workers
 
-      - name: Cleanup old images
+      - name: Cleanup Docker build cache
         if: always()
-        run: docker image prune -f
+        shell: bash
+        run: |
+          docker builder prune -af || true
+          docker image prune -f || true
+          df -h / || true
