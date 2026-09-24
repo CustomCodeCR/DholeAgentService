@@ -26,6 +26,7 @@ public static class WorkerServiceCollectionExtensions
         services.AddCustomCodeWorkers(configuration);
         services.AddSingleton<ScheduleCalculator>();
         services.AddCustomCodePeriodicWorker<AgentScheduleDispatcherWorker>();
+        services.AddCustomCodePeriodicWorker<QueuedExecutionRecoveryWorker>();
         return services;
     }
 }
