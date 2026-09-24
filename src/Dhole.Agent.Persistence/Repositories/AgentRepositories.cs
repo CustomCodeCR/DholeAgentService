@@ -97,6 +97,17 @@ public sealed class AgentExecutionRepository(ServiceDbContext dbContext)
         if (status.HasValue) query = query.Where(x => x.Status == status.Value);
         return await query.OrderByDescending(x => x.CreatedAtUtc).Take(Math.Max(1, take)).ToListAsync(cancellationToken);
     }
+
+    public async Task<IReadOnlyCollection<AgentExecution>> GetQueuedOlderThanAsync(
+        DateTime utcCutoff,
+        int take,
+        CancellationToken cancellationToken = default)
+        => await dbContext.AgentExecutions
+            .AsNoTracking()
+            .Where(x => x.Status == AgentExecutionStatus.Queued && x.CreatedAtUtc <= utcCutoff)
+            .OrderBy(x => x.CreatedAtUtc)
+            .Take(Math.Max(1, take))
+            .ToListAsync(cancellationToken);
 }
 
 public sealed class AgentResultRepository(ServiceDbContext dbContext)
