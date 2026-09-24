@@ -111,10 +111,34 @@ internal static class MaerskShadowDom
             const result = {
                 title: document.title || '',
                 bodyText: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 700),
-                mdsInputs: []
+                mdsInputs: [],
+                inputs: [],
+                customElements: []
             };
 
             const visit = root => {
+                for (const input of root.querySelectorAll('input')) {
+                    const style = getComputedStyle(input);
+                    const rect = input.getBoundingClientRect();
+                    result.inputs.push({
+                        type: input.getAttribute('type') || '',
+                        name: input.getAttribute('name') || '',
+                        id: input.getAttribute('id') || '',
+                        autocomplete: input.getAttribute('autocomplete') || '',
+                        placeholder: input.getAttribute('placeholder') || '',
+                        ariaLabel: input.getAttribute('aria-label') || '',
+                        visible: style.display !== 'none'
+                            && style.visibility !== 'hidden'
+                            && rect.width > 0
+                            && rect.height > 0
+                    });
+                }
+
+                for (const host of root.querySelectorAll('*')) {
+                    if (host.tagName.includes('-') && !result.customElements.includes(host.tagName.toLowerCase()))
+                        result.customElements.push(host.tagName.toLowerCase());
+                }
+
                 for (const host of root.querySelectorAll('mc-input')) {
                     const nativeInput = host.shadowRoot?.querySelector('input');
                     result.mdsInputs.push({
@@ -181,6 +205,25 @@ internal static class MaerskShadowDom
                     // actions. A Locator re-resolves on the next candidate/iteration.
                 }
             }
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> HasVisibleAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        CancellationToken cancellationToken)
+    {
+        foreach (var frame in page.Frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (await TryActOnVisibleLocatorAsync(
+                    frame,
+                    selectors,
+                    _ => Task.CompletedTask))
+                return true;
         }
 
         return false;
