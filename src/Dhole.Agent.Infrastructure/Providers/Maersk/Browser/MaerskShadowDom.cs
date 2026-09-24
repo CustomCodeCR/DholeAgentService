@@ -5,39 +5,6 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 
 internal static class MaerskShadowDom
 {
-    private const string FindVisibleElementScript = """
-        selectors => {
-            const isVisible = element => {
-                if (!(element instanceof Element)) return false;
-                const style = getComputedStyle(element);
-                const rect = element.getBoundingClientRect();
-                return style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && style.opacity !== '0'
-                    && rect.width > 0
-                    && rect.height > 0;
-            };
-
-            const find = root => {
-                for (const selector of selectors) {
-                    for (const element of root.querySelectorAll(selector)) {
-                        if (isVisible(element)) return element;
-                    }
-                }
-
-                for (const host of root.querySelectorAll('*')) {
-                    if (!host.shadowRoot) continue;
-                    const nested = find(host.shadowRoot);
-                    if (nested) return nested;
-                }
-
-                return null;
-            };
-
-            return find(document);
-        }
-        """;
-
     private const string FillMdsInputScript = """
         args => {
             const normalize = value => (value || '').toString().trim().toLowerCase();
@@ -174,6 +141,51 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private static async Task<bool> TryActOnVisibleLocatorAsync(
+        IFrame frame,
+        IReadOnlyCollection<string> selectors,
+        Func<ILocator, Task> action)
+    {
+        foreach (var selector in selectors)
+        {
+            ILocator matches;
+            int count;
+
+            try
+            {
+                // Playwright CSS locators pierce open shadow roots and are resilient
+                // to DOM replacement because the element is resolved again per action.
+                matches = frame.Locator(selector);
+                count = await matches.CountAsync();
+            }
+            catch (PlaywrightException)
+            {
+                continue;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var candidate = matches.Nth(index);
+
+                try
+                {
+                    if (!await candidate.IsVisibleAsync())
+                        continue;
+
+                    await action(candidate);
+                    return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // The Maersk SPA can replace controls between visibility checks and
+                    // actions. A Locator re-resolves on the next candidate/iteration.
+                }
+            }
+        }
+
+        return false;
+    }
+
     public static async Task<bool> FillAsync(
         IPage page,
         IReadOnlyCollection<string> selectors,
@@ -189,25 +201,13 @@ internal static class MaerskShadowDom
 
             foreach (var frame in page.Frames)
             {
-                IJSHandle? handle = null;
-                try
-                {
-                    handle = await frame.EvaluateHandleAsync(FindVisibleElementScript, selectors.ToArray());
-                    var element = handle.AsElement();
-                    if (element is null) continue;
-
-                    await element.FillAsync(value, new ElementHandleFillOptions { Timeout = 5_000 });
+                if (await TryActOnVisibleLocatorAsync(
+                        frame,
+                        selectors,
+                        locator => locator.FillAsync(
+                            value,
+                            new LocatorFillOptions { Timeout = 5_000 })))
                     return true;
-                }
-                catch (PlaywrightException)
-                {
-                    // Login/search SPAs can replace the component while redirects finish.
-                }
-                finally
-                {
-                    if (handle is not null)
-                        await handle.DisposeAsync();
-                }
             }
 
             await Task.Delay(250, cancellationToken);
@@ -256,25 +256,12 @@ internal static class MaerskShadowDom
 
             foreach (var frame in page.Frames)
             {
-                IJSHandle? handle = null;
-                try
-                {
-                    handle = await frame.EvaluateHandleAsync(FindVisibleElementScript, selectors.ToArray());
-                    var element = handle.AsElement();
-                    if (element is null) continue;
-
-                    await element.ClickAsync(new ElementHandleClickOptions { Timeout = 5_000 });
+                if (await TryActOnVisibleLocatorAsync(
+                        frame,
+                        selectors,
+                        locator => locator.ClickAsync(
+                            new LocatorClickOptions { Timeout = 5_000 })))
                     return true;
-                }
-                catch (PlaywrightException)
-                {
-                    // Try again while the SPA settles.
-                }
-                finally
-                {
-                    if (handle is not null)
-                        await handle.DisposeAsync();
-                }
             }
 
             await Task.Delay(250, cancellationToken);
@@ -329,27 +316,13 @@ internal static class MaerskShadowDom
 
             foreach (var frame in page.Frames)
             {
-                IJSHandle? handle = null;
-                try
-                {
-                    handle = await frame.EvaluateHandleAsync(FindVisibleElementScript, selectors.ToArray());
-                    var element = handle.AsElement();
-                    if (element is null) continue;
-
-                    await element.SelectOptionAsync(
-                        new[] { new SelectOptionValue { Label = label } },
-                        new ElementHandleSelectOptionOptions { Timeout = 5_000 });
+                if (await TryActOnVisibleLocatorAsync(
+                        frame,
+                        selectors,
+                        locator => locator.SelectOptionAsync(
+                            new[] { new SelectOptionValue { Label = label } },
+                            new LocatorSelectOptionOptions { Timeout = 5_000 })))
                     return true;
-                }
-                catch (PlaywrightException)
-                {
-                    // Try the next candidate/frame.
-                }
-                finally
-                {
-                    if (handle is not null)
-                        await handle.DisposeAsync();
-                }
             }
 
             await Task.Delay(250, cancellationToken);
