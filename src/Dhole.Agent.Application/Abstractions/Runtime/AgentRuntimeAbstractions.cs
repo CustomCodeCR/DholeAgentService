@@ -34,7 +34,7 @@ public interface IAgentProvider
 
 public interface IAgentProviderResolver
 {
-    IAgentProvider Resolve(string providerCode);
+    IAgentProvider Resolve(string providerCode, AgentExecutionStrategy? executionStrategy = null);
 }
 
 public interface IAgentRuntime
