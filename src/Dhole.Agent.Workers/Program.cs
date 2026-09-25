@@ -4,7 +4,6 @@ using Dhole.Agent.Infrastructure.Time;
 using Dhole.Agent.Workers.DependencyInjection;
 using Dhole.Agent.Application.DependencyInjection;
 using Dhole.Agent.Persistence.DependencyInjection;
-using Dhole.Agent.Persistence.Seeding;
 
 var contentRoot = Path.Combine(Directory.GetCurrentDirectory(), "src", "Dhole.Agent.Workers");
 if (!Directory.Exists(contentRoot))
@@ -32,5 +31,5 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddAgentWorker(builder.Configuration);
 
 var host = builder.Build();
-await host.Services.SeedAgentDataAsync();
+Console.WriteLine($"AGENT_WORKER_HOST_STARTING utc={DateTime.UtcNow:O}");
 await host.RunAsync();
