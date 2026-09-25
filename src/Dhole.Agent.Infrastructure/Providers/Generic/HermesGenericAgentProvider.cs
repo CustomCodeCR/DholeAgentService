@@ -17,28 +17,27 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
             ? context.Provider.Code
             : context.Provider.Name;
 
-        var baseUrl = string.IsNullOrWhiteSpace(context.Provider.BaseUrl)
-            ? "not configured"
-            : context.Provider.BaseUrl;
+        var instruction = string.IsNullOrWhiteSpace(context.Execution.PromptSnapshot)
+            ? BuildFallbackInstruction(context, providerName)
+            : context.Execution.PromptSnapshot!;
 
-        var instruction = $"""
-            You are executing a carrier data extraction for {providerName} ({context.Provider.Code}).
-            Provider base URL: {baseUrl}
-            Action: {context.Definition.ActionType}
-            Definition: {context.Definition.Name}
-
-            Use the available browser tools when web interaction is required.
-            Follow the provider website safely and do not submit purchases, bookings, or irreversible actions.
-            Extract the requested freight/routing information from the input context.
-            Return only valid JSON. Preserve prices, currencies, ETD, ETA, transit time, vessel,
-            voyage, route legs and charge breakdown whenever they are available.
-            """;
+        if (!string.IsNullOrWhiteSpace(context.Execution.ConfigurationSnapshotJson))
+        {
+            instruction += string.Concat(
+                Environment.NewLine,
+                Environment.NewLine,
+                "Execution profile configuration snapshot:",
+                Environment.NewLine,
+                context.Execution.ConfigurationSnapshotJson);
+        }
 
         if (!string.IsNullOrWhiteSpace(context.Definition.ConfigurationJson))
         {
             instruction += string.Concat(
                 Environment.NewLine,
-                "Definition configuration: ",
+                Environment.NewLine,
+                "Definition configuration:",
+                Environment.NewLine,
                 context.Definition.ConfigurationJson);
         }
 
@@ -62,6 +61,7 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
                 {
                     provider = context.Provider.Code,
                     providerName,
+                    extractionProfileId = context.Execution.ExtractionProfileId,
                     strategy = "Hermes",
                     action = context.Definition.ActionType.ToString()
                 },
@@ -77,6 +77,26 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
         {
             return AgentProviderExecutionResult.Failed("hermes_provider_error", ex.Message);
         }
+    }
+
+    private static string BuildFallbackInstruction(AgentExecutionContext context, string providerName)
+    {
+        var baseUrl = string.IsNullOrWhiteSpace(context.Provider.BaseUrl)
+            ? "not configured"
+            : context.Provider.BaseUrl;
+
+        return $"""
+            You are executing a carrier data extraction for {providerName} ({context.Provider.Code}).
+            Provider base URL: {baseUrl}
+            Action: {context.Definition.ActionType}
+            Definition: {context.Definition.Name}
+
+            Use the available browser tools when web interaction is required.
+            Follow the provider website safely and do not submit purchases, bookings, or irreversible actions.
+            Extract the requested freight/routing information from the input context.
+            Return only valid JSON. Preserve prices, currencies, ETD, ETA, transit time, vessel,
+            voyage, route legs and charge breakdown whenever they are available.
+            """;
     }
 
     private static string NormalizeJson(string value)
