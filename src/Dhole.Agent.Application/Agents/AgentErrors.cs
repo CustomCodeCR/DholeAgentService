@@ -17,4 +17,5 @@ public static class AgentErrors
     public static readonly Error ExecutionResultNotFound = new("Agent.ExecutionResultNotFound","Agent execution result not found.");
     public static readonly Error ExtractionProfileNotFound = new("Agent.ExtractionProfileNotFound","Agent extraction profile not found.");
     public static readonly Error ExtractionProfileCredentialProviderMismatch = new("Agent.ExtractionProfileCredentialProviderMismatch","The selected credential belongs to a different provider.");
+    public static readonly Error ExtractionProfileProviderMismatch = new("Agent.ExtractionProfileProviderMismatch","The selected extraction profile belongs to a different provider.");
 }
