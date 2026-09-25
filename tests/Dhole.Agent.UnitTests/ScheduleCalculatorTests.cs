@@ -55,6 +55,32 @@ public sealed class ScheduleCalculatorTests
     }
 
     [TestMethod]
+    public void GetNext_CronCostaRica6Pm_ShouldUseConfiguredTimezone()
+    {
+        var now = new DateTime(2026, 9, 25, 22, 0, 0, DateTimeKind.Utc);
+        var schedule = AgentSchedule.Create(
+            "daily-6pm",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            null,
+            null,
+            AgentScheduleType.Cron,
+            "0 18 * * *",
+            null,
+            null,
+            "America/Costa_Rica",
+            "{}",
+            2,
+            600);
+
+        var next = new ScheduleCalculator().GetNext(schedule, now);
+
+        Assert.AreEqual(
+            new DateTime(2026, 9, 26, 0, 0, 0, DateTimeKind.Utc),
+            next);
+    }
+
+    [TestMethod]
     public void GetNext_Once_ShouldReturnNull()
     {
         var now = new DateTime(2026, 9, 20, 12, 0, 0, DateTimeKind.Utc);
