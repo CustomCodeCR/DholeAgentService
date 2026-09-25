@@ -59,7 +59,6 @@ public sealed class AgentScheduleDispatcherWorker(
             var profile = profiles
                 .Where(x => x.IsActive && !x.IsDeleted && x.ProviderId == schedule.ProviderId)
                 .OrderByDescending(x => x.CredentialId == schedule.CredentialId)
-                .ThenByDescending(x => x.UpdatedAt ?? x.CreatedAt)
                 .FirstOrDefault();
 
             if (profile is not null)
