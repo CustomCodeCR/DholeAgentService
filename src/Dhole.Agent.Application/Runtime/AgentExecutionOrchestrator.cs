@@ -13,6 +13,7 @@ public sealed class AgentExecutionOrchestrator(
     IAgentDefinitionRepository definitions,
     IAgentProviderRepository providers,
     IAgentCredentialRepository credentials,
+    IAgentScheduleRepository schedules,
     IAgentExtractionProfileRepository extractionProfiles,
     IAgentExtractionRouteRepository extractionRoutes,
     IAgentExtractionEquipmentRepository extractionEquipment,
@@ -190,6 +191,24 @@ public sealed class AgentExecutionOrchestrator(
             var attached=await extractionProfiles.GetByIdAsync(execution.ExtractionProfileId.Value,cancellationToken);
             if(attached is not null&&!attached.IsDeleted&&attached.IsActive)
                 return attached;
+        }
+
+        if(execution.ScheduleId.HasValue)
+        {
+            var schedule=await schedules.GetByIdAsync(execution.ScheduleId.Value,cancellationToken);
+            if(schedule?.ExtractionProfileId is Guid scheduledProfileId)
+            {
+                var scheduledProfile=await extractionProfiles.GetByIdAsync(scheduledProfileId,cancellationToken);
+                if(scheduledProfile is not null&&!scheduledProfile.IsDeleted&&scheduledProfile.IsActive)
+                    return scheduledProfile;
+
+                logger.LogWarning(
+                    "AGENT_EXECUTION_SCHEDULE_PROFILE_UNAVAILABLE execution={ExecutionId} schedule={ScheduleId} profile={ProfileId}",
+                    execution.Id,
+                    execution.ScheduleId,
+                    scheduledProfileId);
+                return null;
+            }
         }
 
         var candidates=(await extractionProfiles.GetAllAsync(cancellationToken))
