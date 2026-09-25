@@ -13,7 +13,7 @@ public sealed class AddScheduleExtractionProfile : Migration
     protected override void Up(MigrationBuilder migrationBuilder)
     {
         migrationBuilder.AddColumn<Guid>(
-            name: "ExtractionProfileId",
+            name: "extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules",
             type: "uuid",
@@ -21,40 +21,40 @@ public sealed class AddScheduleExtractionProfile : Migration
 
         migrationBuilder.Sql("""
             UPDATE agent."AgentSchedules" AS s
-            SET "ExtractionProfileId" = (
+            SET extraction_profile_id = (
                 SELECT ep.id
                 FROM agent.extraction_profiles AS ep
-                WHERE ep.provider_id = s."ProviderId"
+                WHERE ep.provider_id = s.provider_id
                   AND ep.is_active = TRUE
                   AND ep.is_deleted = FALSE
-                  AND (ep.credential_id = s."CredentialId" OR ep.credential_id IS NULL)
+                  AND (ep.credential_id = s.credential_id OR ep.credential_id IS NULL)
                 ORDER BY
-                    CASE WHEN ep.credential_id = s."CredentialId" THEN 0 ELSE 1 END,
+                    CASE WHEN ep.credential_id = s.credential_id THEN 0 ELSE 1 END,
                     ep.created_at_utc
                 LIMIT 1
             )
-            WHERE s."ExtractionProfileId" IS NULL;
+            WHERE s.extraction_profile_id IS NULL;
             """);
 
-        // Existing Cron/Interval schedules may contain a stale or missing next occurrence.
-        // Let the dispatcher initialize them again from CronExpression + Timezone.
+        // Force current Cron/Interval schedules to calculate a fresh next occurrence
+        // from cron_expression + timezone after this deployment.
         migrationBuilder.Sql("""
             UPDATE agent."AgentSchedules"
-            SET "NextExecutionAt" = NULL
-            WHERE "ScheduleType" IN ('Cron', 'Interval');
+            SET next_execution_at = NULL
+            WHERE schedule_type IN ('Cron', 'Interval');
             """);
 
         migrationBuilder.CreateIndex(
-            name: "IX_AgentSchedules_ExtractionProfileId",
+            name: "IX_AgentSchedules_extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules",
-            column: "ExtractionProfileId");
+            column: "extraction_profile_id");
 
         migrationBuilder.AddForeignKey(
-            name: "FK_AgentSchedules_extraction_profiles_ExtractionProfileId",
+            name: "f_k_agent_schedules_extraction_profiles_extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules",
-            column: "ExtractionProfileId",
+            column: "extraction_profile_id",
             principalSchema: "agent",
             principalTable: "extraction_profiles",
             principalColumn: "id",
@@ -64,17 +64,17 @@ public sealed class AddScheduleExtractionProfile : Migration
     protected override void Down(MigrationBuilder migrationBuilder)
     {
         migrationBuilder.DropForeignKey(
-            name: "FK_AgentSchedules_extraction_profiles_ExtractionProfileId",
+            name: "f_k_agent_schedules_extraction_profiles_extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules");
 
         migrationBuilder.DropIndex(
-            name: "IX_AgentSchedules_ExtractionProfileId",
+            name: "IX_AgentSchedules_extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules");
 
         migrationBuilder.DropColumn(
-            name: "ExtractionProfileId",
+            name: "extraction_profile_id",
             schema: "agent",
             table: "AgentSchedules");
     }
