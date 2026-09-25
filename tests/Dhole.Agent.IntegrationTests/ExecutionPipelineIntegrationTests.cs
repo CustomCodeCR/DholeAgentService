@@ -1,5 +1,6 @@
 using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
@@ -40,6 +41,20 @@ public sealed class ExecutionPipelineIntegrationTests
             null);
 
         db.AgentDefinitions.Add(definition);
+
+        var profile = AgentExtractionProfile.Create(
+            provider.Id,
+            null,
+            "Test profile",
+            null,
+            "https://www.maersk.com",
+            null,
+            "https://www.maersk.com",
+            "Extract rates for {{providerCode}} from {{searchUrl}}.",
+            AgentExecutionStrategy.BrowserNetworkCapture,
+            null);
+
+        db.AgentExtractionProfiles.Add(profile);
         await db.SaveChangesAsync();
 
         var execution = AgentExecution.Create(
@@ -62,6 +77,13 @@ public sealed class ExecutionPipelineIntegrationTests
             new AgentDefinitionRepository(db),
             new AgentProviderRepository(db),
             new AgentCredentialRepository(db),
+            new AgentScheduleRepository(db),
+            new AgentExtractionProfileRepository(db),
+            new AgentExtractionRouteRepository(db),
+            new AgentExtractionEquipmentRepository(db),
+            new AgentExtractionFieldRepository(db),
+            new AgentEndpointCaptureRepository(db),
+            new AgentExecutionSnapshotBuilder(new AgentPromptBuilder()),
             new AgentResultRepository(db),
             new FakeProviderResolver(),
             new TestUnitOfWork(db),
@@ -74,6 +96,7 @@ public sealed class ExecutionPipelineIntegrationTests
         var eventNames = await db.OutboxMessages.Select(x => x.EventName).ToListAsync();
 
         Assert.AreEqual(AgentExecutionStatus.Completed, storedExecution.Status);
+        Assert.AreEqual(profile.Id, storedExecution.ExtractionProfileId);
         Assert.AreEqual(AgentResult.OceanFreightRates, storedResult.ResultType);
         Assert.AreEqual("""{"provider":"MAERSK","offers":[]}""", storedResult.DataJson);
         CollectionAssert.Contains(eventNames, "agent.execution.started");
@@ -100,7 +123,7 @@ public sealed class ExecutionPipelineIntegrationTests
     {
         private readonly IAgentProvider _provider = new FakeMaerskProvider();
 
-        public IAgentProvider Resolve(string providerCode)
+        public IAgentProvider Resolve(string providerCode, AgentExecutionStrategy? executionStrategy = null)
         {
             Assert.AreEqual("MAERSK", providerCode);
             return _provider;
