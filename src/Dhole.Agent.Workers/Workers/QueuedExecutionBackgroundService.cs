@@ -4,18 +4,21 @@ using Dhole.Agent.Application.Abstractions.Runtime;
 namespace Dhole.Agent.Workers.Workers;
 
 /// <summary>
-/// Durable database-backed execution pump. PostgreSQL is the source of truth for
-/// queued executions; Redis is not required for an execution to start.
+/// PostgreSQL-backed execution pump. PostgreSQL is authoritative for queued
+/// executions; Redis is only an integration transport and is not required to start.
 /// </summary>
 public sealed class QueuedExecutionBackgroundService(
     IServiceProvider serviceProvider,
     ILogger<QueuedExecutionBackgroundService> logger) : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+    private DateTime _nextHeartbeatAtUtc = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogWarning("Queued execution database pump started. PostgreSQL queue is authoritative.");
+        logger.LogWarning(
+            "AGENT_QUEUE_PUMP_STARTED utc={UtcNow}",
+            DateTime.UtcNow);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -42,14 +45,17 @@ public sealed class QueuedExecutionBackgroundService(
 
             var queued = await executions.GetQueuedOlderThanAsync(
                 DateTime.UtcNow,
-                25,
+                100,
                 cancellationToken);
 
-            if (queued.Count > 0)
+            var now = DateTime.UtcNow;
+            if (now >= _nextHeartbeatAtUtc)
             {
                 logger.LogWarning(
-                    "Database pump found {QueuedCount} queued execution(s).",
+                    "AGENT_QUEUE_PUMP_HEARTBEAT utc={UtcNow} queued={QueuedCount}",
+                    now,
                     queued.Count);
+                _nextHeartbeatAtUtc = now.AddSeconds(10);
             }
 
             foreach (var execution in queued)
@@ -57,8 +63,10 @@ public sealed class QueuedExecutionBackgroundService(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 logger.LogWarning(
-                    "Starting queued execution {ExecutionId} directly from PostgreSQL. CreatedAtUtc={CreatedAtUtc}.",
+                    "AGENT_QUEUE_DISPATCH execution={ExecutionId} status={Status} attempt={Attempt} created={CreatedAtUtc}",
                     execution.Id,
+                    execution.Status,
+                    execution.Attempt,
                     execution.CreatedAtUtc);
 
                 await orchestrator.ExecuteAsync(execution.Id, cancellationToken);
@@ -69,7 +77,7 @@ public sealed class QueuedExecutionBackgroundService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Queued execution database pump failed.");
+            logger.LogError(ex, "AGENT_QUEUE_PUMP_ERROR");
         }
     }
 }
