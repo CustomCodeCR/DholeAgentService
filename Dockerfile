@@ -45,6 +45,9 @@ FROM mcr.microsoft.com/playwright/dotnet:v1.55.0-noble AS worker-final
 COPY --from=worker-dotnet-runtime /usr/share/dotnet /usr/share/dotnet
 WORKDIR /app
 COPY --from=publish-worker /app/publish/worker ./
+COPY docker/start-worker.sh /app/start-worker.sh
+RUN chmod +x /app/start-worker.sh
 ENV Browser__ProfilesPath=/data/browser-profiles
+ENV DISPLAY=:99
 VOLUME ["/data/browser-profiles"]
-ENTRYPOINT ["xvfb-run", "-a", "dotnet", "Dhole.Agent.Workers.dll"]
+ENTRYPOINT ["/app/start-worker.sh"]
