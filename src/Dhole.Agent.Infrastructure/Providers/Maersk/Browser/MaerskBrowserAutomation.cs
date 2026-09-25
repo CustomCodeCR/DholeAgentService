@@ -5,10 +5,14 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 
 public sealed class MaerskBrowserAutomation
 {
-    public async Task FillSearchAsync(IPage page, MaerskSearchInput input, CancellationToken cancellationToken)
+    public async Task FillSearchAsync(IPage page, MaerskSearchInput input, CancellationToken cancellationToken, string? searchUrl = null)
     {
+        var targetUrl = string.IsNullOrWhiteSpace(searchUrl)
+            ? "https://www.maersk.com/instant-prices/"
+            : searchUrl.Trim();
+
         await page.GotoAsync(
-            "https://www.maersk.com/instant-prices/",
+            targetUrl,
             new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.DOMContentLoaded,
