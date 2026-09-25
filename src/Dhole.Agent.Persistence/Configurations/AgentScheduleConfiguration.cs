@@ -20,6 +20,8 @@ internal sealed class AgentScheduleConfiguration : EntityTypeConfigurationBase<A
         builder.HasOne<AgentDefinition>().WithMany().HasForeignKey(x => x.AgentDefinitionId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<AgentProvider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<AgentCredential>().WithMany().HasForeignKey(x => x.CredentialId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne<AgentExtractionProfile>().WithMany().HasForeignKey(x => x.ExtractionProfileId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasIndex(x => x.ExtractionProfileId);
         builder.HasIndex(x => x.NextExecutionAt);
         builder.HasIndex(x => x.IsActive);
         builder.Property(x => x.IsActive).IsRequired();
