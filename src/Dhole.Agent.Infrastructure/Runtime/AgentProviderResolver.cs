@@ -1,4 +1,5 @@
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Infrastructure.Providers.Generic;
 
 namespace Dhole.Agent.Infrastructure.Runtime;
@@ -25,8 +26,15 @@ public sealed class AgentProviderResolver : IAgentProviderResolver
             .ToDictionary(x => x.ProviderCode, StringComparer.OrdinalIgnoreCase);
     }
 
-    public IAgentProvider Resolve(string providerCode)
+    public IAgentProvider Resolve(string providerCode, AgentExecutionStrategy? executionStrategy = null)
     {
+        if (executionStrategy == AgentExecutionStrategy.Hermes)
+        {
+            return _fallback
+                ?? throw new InvalidOperationException(
+                    "Hermes execution was requested by the extraction profile, but the Hermes provider is not registered.");
+        }
+
         if (_providers.TryGetValue(providerCode, out var provider))
         {
             return provider;
