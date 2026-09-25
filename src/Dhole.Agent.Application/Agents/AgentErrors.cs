@@ -15,4 +15,6 @@ public static class AgentErrors
     public static readonly Error ScheduleNotFound = new("Agent.ScheduleNotFound","Agent schedule not found.");
     public static readonly Error ExecutionNotFound = new("Agent.ExecutionNotFound","Agent execution not found.");
     public static readonly Error ExecutionResultNotFound = new("Agent.ExecutionResultNotFound","Agent execution result not found.");
+    public static readonly Error ExtractionProfileNotFound = new("Agent.ExtractionProfileNotFound","Agent extraction profile not found.");
+    public static readonly Error ExtractionProfileCredentialProviderMismatch = new("Agent.ExtractionProfileCredentialProviderMismatch","The selected credential belongs to a different provider.");
 }
