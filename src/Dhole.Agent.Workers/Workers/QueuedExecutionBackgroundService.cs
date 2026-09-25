@@ -1,32 +1,34 @@
-using CustomCodeFramework.Redis.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 
 namespace Dhole.Agent.Workers.Workers;
 
 /// <summary>
-/// Durable database-backed execution pump. Redis remains the fast path, but queued
-/// executions never depend on a Redis Stream delivery in order to start.
+/// Durable database-backed execution pump. PostgreSQL is the source of truth for
+/// queued executions; Redis is not required for an execution to start.
 /// </summary>
 public sealed class QueuedExecutionBackgroundService(
     IServiceProvider serviceProvider,
     ILogger<QueuedExecutionBackgroundService> logger) : BackgroundService
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan QueueGracePeriod = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan ExecutionLockDuration = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Queued execution database pump started.");
+        logger.LogWarning("Queued execution database pump started. PostgreSQL queue is authoritative.");
 
-        await ProcessQueuedAsync(stoppingToken);
-
-        using var timer = new PeriodicTimer(PollInterval);
-        while (!stoppingToken.IsCancellationRequested &&
-               await timer.WaitForNextTickAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
             await ProcessQueuedAsync(stoppingToken);
+
+            try
+            {
+                await Task.Delay(PollInterval, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
         }
     }
 
@@ -37,25 +39,25 @@ public sealed class QueuedExecutionBackgroundService(
             using var scope = serviceProvider.CreateScope();
             var executions = scope.ServiceProvider.GetRequiredService<IAgentExecutionRepository>();
             var orchestrator = scope.ServiceProvider.GetRequiredService<IAgentExecutionOrchestrator>();
-            var distributedLock = scope.ServiceProvider.GetRequiredService<IDistributedLock>();
 
-            var cutoff = DateTime.UtcNow.Subtract(QueueGracePeriod);
-            var queued = await executions.GetQueuedOlderThanAsync(cutoff, 25, cancellationToken);
+            var queued = await executions.GetQueuedOlderThanAsync(
+                DateTime.UtcNow,
+                25,
+                cancellationToken);
+
+            if (queued.Count > 0)
+            {
+                logger.LogWarning(
+                    "Database pump found {QueuedCount} queued execution(s).",
+                    queued.Count);
+            }
 
             foreach (var execution in queued)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                await using var handle = await distributedLock.AcquireAsync(
-                    $"agent:execution:{execution.Id:N}",
-                    ExecutionLockDuration,
-                    cancellationToken);
-
-                if (handle is null)
-                    continue;
-
                 logger.LogWarning(
-                    "Starting queued execution {ExecutionId} directly from PostgreSQL fallback. CreatedAtUtc={CreatedAtUtc}.",
+                    "Starting queued execution {ExecutionId} directly from PostgreSQL. CreatedAtUtc={CreatedAtUtc}.",
                     execution.Id,
                     execution.CreatedAtUtc);
 
