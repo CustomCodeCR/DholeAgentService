@@ -7,9 +7,15 @@ public sealed class MaerskBrowserAutomation
 {
     public async Task FillSearchAsync(IPage page, MaerskSearchInput input, CancellationToken cancellationToken, string? searchUrl = null)
     {
-        var targetUrl = string.IsNullOrWhiteSpace(searchUrl)
-            ? "https://www.maersk.com/instant-prices/"
-            : searchUrl.Trim();
+        if (string.IsNullOrWhiteSpace(searchUrl))
+            throw new InvalidOperationException(
+                "The selected extraction profile does not define a Maersk search URL.");
+
+        var targetUrl = searchUrl.Trim();
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var targetUri)
+            || (targetUri.Scheme != Uri.UriSchemeHttp && targetUri.Scheme != Uri.UriSchemeHttps))
+            throw new InvalidOperationException(
+                $"The selected extraction profile contains an invalid Maersk search URL: '{targetUrl}'.");
 
         await page.GotoAsync(
             targetUrl,
