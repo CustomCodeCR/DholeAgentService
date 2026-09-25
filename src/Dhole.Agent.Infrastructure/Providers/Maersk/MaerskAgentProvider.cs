@@ -111,7 +111,8 @@ public sealed class MaerskAgentProvider(
         await login.EnsureAuthenticatedAsync(page, username, password, cancellationToken);
 
         var captureTask = interceptor.WaitForOfferAsync(page, TimeSpan.FromSeconds(90), cancellationToken);
-        await automation.FillSearchAsync(page, input, cancellationToken);
+        var searchUrl = ResolveSearchUrl(context.Execution.ConfigurationSnapshotJson);
+        await automation.FillSearchAsync(page, input, cancellationToken, searchUrl);
         var captured = await captureTask;
 
         if (captured.Status is < 200 or >= 300)
@@ -127,5 +128,25 @@ public sealed class MaerskAgentProvider(
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         return AgentProviderExecutionResult.Completed(output, "OceanFreightRates", "1.0", dataJson);
+    }
+    private static string? ResolveSearchUrl(string? configurationSnapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(configurationSnapshotJson)) return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(configurationSnapshotJson);
+            if (document.RootElement.TryGetProperty("searchUrl", out var searchUrl) &&
+                searchUrl.ValueKind == JsonValueKind.String)
+            {
+                return searchUrl.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // Keep backward compatibility with executions created before profile snapshots.
+        }
+
+        return null;
     }
 }
