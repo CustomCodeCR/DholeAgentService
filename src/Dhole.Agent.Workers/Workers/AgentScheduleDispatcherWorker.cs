@@ -1,8 +1,10 @@
+using System.Text.Json;
 using CustomCodeFramework.Persistence.Abstractions;
 using CustomCodeFramework.Redis.Abstractions;
 using CustomCodeFramework.Workers.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Domain.Agents;
+using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Workers.Scheduling;
 
 namespace Dhole.Agent.Workers.Workers;
@@ -10,6 +12,13 @@ namespace Dhole.Agent.Workers.Workers;
 public sealed class AgentScheduleDispatcherWorker(
     IAgentScheduleRepository schedules,
     IAgentExecutionRepository executions,
+    IAgentProviderRepository providers,
+    IAgentExtractionProfileRepository extractionProfiles,
+    IAgentExtractionRouteRepository extractionRoutes,
+    IAgentExtractionEquipmentRepository extractionEquipment,
+    IAgentExtractionFieldRepository extractionFields,
+    IAgentEndpointCaptureRepository endpointCaptures,
+    AgentExecutionSnapshotBuilder snapshotBuilder,
     IUnitOfWork unitOfWork,
     IDistributedLock distributedLock,
     ScheduleCalculator calculator,
@@ -46,6 +55,31 @@ public sealed class AgentScheduleDispatcherWorker(
                 schedule.InputJson,
                 schedule.MaxRetries+1,
                 Guid.NewGuid().ToString("N"));
+            var profiles = await extractionProfiles.GetAllAsync(cancellationToken);
+            var profile = profiles
+                .Where(x => x.IsActive && !x.IsDeleted && x.ProviderId == schedule.ProviderId)
+                .OrderByDescending(x => x.CredentialId == schedule.CredentialId)
+                .ThenByDescending(x => x.UpdatedAt ?? x.CreatedAt)
+                .FirstOrDefault();
+
+            if (profile is not null)
+            {
+                var routes = await extractionRoutes.GetByProfileAsync(profile.Id, cancellationToken);
+                var equipment = await extractionEquipment.GetByProfileAsync(profile.Id, cancellationToken);
+                var fields = await extractionFields.GetByProfileAsync(profile.Id, cancellationToken);
+                var captures = await endpointCaptures.GetByProfileAsync(profile.Id, cancellationToken);
+                var snapshot = snapshotBuilder.Build(
+                    profile,
+                    await GetProviderAsync(schedule.ProviderId, cancellationToken),
+                    routes,
+                    equipment,
+                    fields,
+                    captures,
+                    TryGetCargoReadyDate(schedule.InputJson),
+                    execution.Id);
+                execution.AttachProfileSnapshot(profile.Id, snapshot.Prompt, snapshot.ConfigurationJson);
+            }
+
             execution.Queue();
 
             await executions.AddAsync(execution,cancellationToken);
@@ -53,6 +87,24 @@ public sealed class AgentScheduleDispatcherWorker(
             schedule.MarkDispatched(now,next);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             logger.LogInformation("Dispatched schedule {ScheduleId} as execution {ExecutionId}.",schedule.Id,execution.Id);
+        }
+    }
+    private async Task<AgentProvider> GetProviderAsync(Guid providerId, CancellationToken cancellationToken)
+        => await providers.GetByIdAsync(providerId, cancellationToken)
+            ?? throw new InvalidOperationException($"Agent provider {providerId} not found while dispatching schedule.");
+
+    private static DateOnly? TryGetCargoReadyDate(string inputJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(inputJson);
+            if (!document.RootElement.TryGetProperty("cargoReadyDate", out var value) || value.ValueKind != JsonValueKind.String)
+                return null;
+            return DateOnly.TryParse(value.GetString(), out var date) ? date : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }
