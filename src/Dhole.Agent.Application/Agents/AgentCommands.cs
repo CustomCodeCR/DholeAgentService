@@ -157,15 +157,94 @@ public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepo
     public async Task<Result> HandleAsync(AuthenticateBrowserProfileCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);e.SetStatus(BrowserProfileStatus.Authenticating,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
 }
 
-public sealed record CreateAgentScheduleCommand(string Name,Guid AgentDefinitionId,Guid ProviderId,Guid? CredentialId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,Guid? ActorId):ICommand<Result<Guid>>;
-public sealed class CreateAgentScheduleCommandHandler(IAgentScheduleRepository repo,IAgentDefinitionRepository defs,IAgentProviderRepository providers,IUnitOfWork uow):ICommandHandler<CreateAgentScheduleCommand,Result<Guid>>
+public sealed record CreateAgentScheduleCommand(string Name,Guid AgentDefinitionId,Guid ProviderId,Guid? CredentialId,Guid? ExtractionProfileId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,Guid? ActorId):ICommand<Result<Guid>>;
+public sealed class CreateAgentScheduleCommandHandler(
+    IAgentScheduleRepository repo,
+    IAgentDefinitionRepository defs,
+    IAgentProviderRepository providers,
+    IAgentExtractionProfileRepository extractionProfiles,
+    IUnitOfWork uow):ICommandHandler<CreateAgentScheduleCommand,Result<Guid>>
 {
-    public async Task<Result<Guid>> HandleAsync(CreateAgentScheduleCommand c,CancellationToken ct=default){var d=await defs.GetByIdAsync(c.AgentDefinitionId,ct);if(d is null||d.IsDeleted)return Result.Failure<Guid>(AgentErrors.DefinitionNotFound);var p=await providers.GetByIdAsync(c.ProviderId,ct);if(p is null||p.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);var e=AgentSchedule.Create(c.Name,c.AgentDefinitionId,c.ProviderId,c.CredentialId,c.ScheduleType,c.CronExpression,c.IntervalMinutes,c.ExecuteAt,c.Timezone,c.InputJson,c.MaxRetries,c.TimeoutSeconds,c.ActorId);if(c.ScheduleType==AgentScheduleType.Once)e.SetNextExecution(c.ExecuteAt,c.ActorId);await repo.AddAsync(e,ct);await uow.SaveChangesAsync(ct);return Result.Success(e.Id);}
+    public async Task<Result<Guid>> HandleAsync(CreateAgentScheduleCommand c,CancellationToken ct=default)
+    {
+        var definition=await defs.GetByIdAsync(c.AgentDefinitionId,ct);
+        if(definition is null||definition.IsDeleted)return Result.Failure<Guid>(AgentErrors.DefinitionNotFound);
+
+        var provider=await providers.GetByIdAsync(c.ProviderId,ct);
+        if(provider is null||provider.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);
+
+        AgentExtractionProfile? profile=null;
+        if(c.ExtractionProfileId.HasValue)
+        {
+            profile=await extractionProfiles.GetByIdAsync(c.ExtractionProfileId.Value,ct);
+            if(profile is null||profile.IsDeleted||!profile.IsActive)
+                return Result.Failure<Guid>(AgentErrors.ExtractionProfileNotFound);
+            if(profile.ProviderId!=c.ProviderId)
+                return Result.Failure<Guid>(AgentErrors.ExtractionProfileProviderMismatch);
+        }
+
+        var credentialId=profile?.CredentialId??c.CredentialId;
+        var entity=AgentSchedule.Create(
+            c.Name,
+            c.AgentDefinitionId,
+            c.ProviderId,
+            credentialId,
+            profile?.Id,
+            c.ScheduleType,
+            c.CronExpression,
+            c.IntervalMinutes,
+            c.ExecuteAt,
+            c.Timezone,
+            c.InputJson,
+            c.MaxRetries,
+            c.TimeoutSeconds,
+            c.ActorId);
+
+        await repo.AddAsync(entity,ct);
+        await uow.SaveChangesAsync(ct);
+        return Result.Success(entity.Id);
+    }
 }
-public sealed record UpdateAgentScheduleCommand(Guid Id,string Name,Guid? CredentialId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,DateTime? NextExecutionAt,Guid? ActorId):ICommand<Result>;
-public sealed class UpdateAgentScheduleCommandHandler(IAgentScheduleRepository repo,IUnitOfWork uow):ICommandHandler<UpdateAgentScheduleCommand,Result>
+public sealed record UpdateAgentScheduleCommand(Guid Id,string Name,Guid? CredentialId,Guid? ExtractionProfileId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,DateTime? NextExecutionAt,Guid? ActorId):ICommand<Result>;
+public sealed class UpdateAgentScheduleCommandHandler(
+    IAgentScheduleRepository repo,
+    IAgentExtractionProfileRepository extractionProfiles,
+    IUnitOfWork uow):ICommandHandler<UpdateAgentScheduleCommand,Result>
 {
-    public async Task<Result> HandleAsync(UpdateAgentScheduleCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.ScheduleNotFound);e.Update(c.Name,c.CredentialId,c.ScheduleType,c.CronExpression,c.IntervalMinutes,c.ExecuteAt,c.Timezone,c.InputJson,c.MaxRetries,c.TimeoutSeconds,c.NextExecutionAt,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
+    public async Task<Result> HandleAsync(UpdateAgentScheduleCommand c,CancellationToken ct=default)
+    {
+        var entity=await repo.GetByIdAsync(c.Id,ct);
+        if(entity is null||entity.IsDeleted)return Result.Failure(AgentErrors.ScheduleNotFound);
+
+        AgentExtractionProfile? profile=null;
+        if(c.ExtractionProfileId.HasValue)
+        {
+            profile=await extractionProfiles.GetByIdAsync(c.ExtractionProfileId.Value,ct);
+            if(profile is null||profile.IsDeleted||!profile.IsActive)
+                return Result.Failure(AgentErrors.ExtractionProfileNotFound);
+            if(profile.ProviderId!=entity.ProviderId)
+                return Result.Failure(AgentErrors.ExtractionProfileProviderMismatch);
+        }
+
+        var credentialId=profile?.CredentialId??c.CredentialId;
+        entity.Update(
+            c.Name,
+            credentialId,
+            profile?.Id,
+            c.ScheduleType,
+            c.CronExpression,
+            c.IntervalMinutes,
+            c.ExecuteAt,
+            c.Timezone,
+            c.InputJson,
+            c.MaxRetries,
+            c.TimeoutSeconds,
+            c.NextExecutionAt,
+            c.ActorId);
+
+        await uow.SaveChangesAsync(ct);
+        return Result.Success();
+    }
 }
 public sealed record SetAgentScheduleActiveCommand(Guid Id,bool IsActive,Guid? ActorId):ICommand<Result>;
 public sealed class SetAgentScheduleActiveCommandHandler(IAgentScheduleRepository repo,IUnitOfWork uow):ICommandHandler<SetAgentScheduleActiveCommand,Result>
