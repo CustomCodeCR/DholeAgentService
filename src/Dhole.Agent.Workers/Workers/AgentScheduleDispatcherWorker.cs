@@ -31,15 +31,15 @@ public sealed class AgentScheduleDispatcherWorker(
     {
         var now=DateTime.UtcNow;
         var all=await schedules.GetAllAsync(cancellationToken);
-        foreach(var snapshot in all.Where(x=>x.IsActive))
+        foreach(var scheduleSnapshot in all.Where(x=>x.IsActive))
         {
-            var dueAt=snapshot.NextExecutionAt??calculator.GetInitial(snapshot,now);
+            var dueAt=scheduleSnapshot.NextExecutionAt??calculator.GetInitial(scheduleSnapshot,now);
             if(!dueAt.HasValue||dueAt.Value>now)continue;
 
-            await using var handle=await distributedLock.AcquireAsync($"agent:schedule:{snapshot.Id}",TimeSpan.FromSeconds(120),cancellationToken);
+            await using var handle=await distributedLock.AcquireAsync($"agent:schedule:{scheduleSnapshot.Id}",TimeSpan.FromSeconds(120),cancellationToken);
             if(handle is null)continue;
 
-            var schedule=await schedules.GetByIdAsync(snapshot.Id,cancellationToken);
+            var schedule=await schedules.GetByIdAsync(scheduleSnapshot.Id,cancellationToken);
             if(schedule is null||schedule.IsDeleted||!schedule.IsActive)continue;
 
             var effectiveDue=schedule.NextExecutionAt??calculator.GetInitial(schedule,now);
@@ -67,7 +67,7 @@ public sealed class AgentScheduleDispatcherWorker(
                 var equipment = await extractionEquipment.GetByProfileAsync(profile.Id, cancellationToken);
                 var fields = await extractionFields.GetByProfileAsync(profile.Id, cancellationToken);
                 var captures = await endpointCaptures.GetByProfileAsync(profile.Id, cancellationToken);
-                var snapshot = snapshotBuilder.Build(
+                var profileSnapshot = snapshotBuilder.Build(
                     profile,
                     await GetProviderAsync(schedule.ProviderId, cancellationToken),
                     routes,
@@ -76,7 +76,7 @@ public sealed class AgentScheduleDispatcherWorker(
                     captures,
                     TryGetCargoReadyDate(schedule.InputJson),
                     execution.Id);
-                execution.AttachProfileSnapshot(profile.Id, snapshot.Prompt, snapshot.ConfigurationJson);
+                execution.AttachProfileSnapshot(profile.Id, profileSnapshot.Prompt, profileSnapshot.ConfigurationJson);
             }
 
             execution.Queue();
