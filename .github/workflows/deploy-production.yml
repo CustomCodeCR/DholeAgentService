@@ -255,6 +255,33 @@ jobs:
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" \
             up -d --no-deps --force-recreate --pull never dhole-agent-workers
 
+      - name: Verify Agent worker queue pump
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" ps -q dhole-agent-workers)"
+          test -n "$CONTAINER_ID"
+
+          for attempt in $(seq 1 30); do
+            STATUS="$(docker inspect --format='{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || true)"
+            if [ "$STATUS" = "exited" ] || [ "$STATUS" = "dead" ]; then
+              docker logs --tail 300 "$CONTAINER_ID" || true
+              exit 1
+            fi
+
+            if docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -q 'AGENT_QUEUE_PUMP_STARTED'; then
+              echo "Agent queue pump is running."
+              docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -E 'AGENT_QUEUE_PUMP_(STARTED|HEARTBEAT)' | tail -n 20 || true
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Agent worker is running but queue pump did not start." >&2
+          docker logs --tail 300 "$CONTAINER_ID" || true
+          exit 1
+
       - name: Cleanup Docker build cache
         if: always()
         shell: bash
