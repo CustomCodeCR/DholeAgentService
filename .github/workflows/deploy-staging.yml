@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: dhole-agent-staging
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   COMPOSE_FILE: .dhole-system/deploy/docker-compose.services.yml
