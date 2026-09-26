@@ -23,7 +23,7 @@ public sealed class HermesClient : IDisposable
         _http = new HttpClient
         {
             BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/", UriKind.Absolute),
-            Timeout = TimeSpan.FromSeconds(Math.Max(5, _options.TimeoutSeconds))
+            Timeout = Timeout.InfiniteTimeSpan
         };
 
         _http.DefaultRequestHeaders.Authorization =
@@ -33,37 +33,52 @@ public sealed class HermesClient : IDisposable
     public async Task<string> ExecuteAsync(
         string instruction,
         string? contextJson,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? timeoutSeconds = null)
     {
         if (string.IsNullOrWhiteSpace(instruction))
             throw new ArgumentException("Hermes instruction is required.", nameof(instruction));
 
         var prompt = BuildPrompt(instruction, contextJson);
+        var effectiveTimeoutSeconds = Math.Max(5, timeoutSeconds ?? _options.TimeoutSeconds);
 
-        using var response = await _http.PostAsJsonAsync(
-            _options.ExecutePath.TrimStart('/'),
-            new
-            {
-                model = string.IsNullOrWhiteSpace(_options.Model) ? "hermes-agent" : _options.Model,
-                messages = new[]
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+
+        try
+        {
+            using var response = await _http.PostAsJsonAsync(
+                _options.ExecutePath.TrimStart('/'),
+                new
                 {
-                    new
+                    model = string.IsNullOrWhiteSpace(_options.Model) ? "hermes-agent" : _options.Model,
+                    messages = new[]
                     {
-                        role = "user",
-                        content = prompt
-                    }
+                        new
+                        {
+                            role = "user",
+                            content = prompt
+                        }
+                    },
+                    stream = false
                 },
-                stream = false
-            },
-            cancellationToken);
+                timeoutCts.Token);
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
 
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"Hermes returned HTTP {(int)response.StatusCode}: {body}");
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException(
+                    $"Hermes returned HTTP {(int)response.StatusCode}: {body}");
 
-        return ExtractAssistantContent(body) ?? body;
+            return ExtractAssistantContent(body) ?? body;
+        }
+        catch (OperationCanceledException ex)
+            when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Hermes request exceeded the configured execution timeout of {effectiveTimeoutSeconds} seconds.",
+                ex);
+        }
     }
 
     private static string BuildPrompt(string instruction, string? contextJson)
