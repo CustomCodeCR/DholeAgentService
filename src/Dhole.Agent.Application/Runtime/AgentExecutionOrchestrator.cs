@@ -137,9 +137,15 @@ public sealed class AgentExecutionOrchestrator(
                 profile.Id,
                 profile.ExecutionStrategy);
 
+            var executionTimeoutSeconds = await ResolveExecutionTimeoutSecondsAsync(execution, cancellationToken);
             var runner=providerResolver.Resolve(provider.Code,profile.ExecutionStrategy);
             var result=await runner.ExecuteAsync(
-                new AgentExecutionContext(execution,definition,provider,credential),
+                new AgentExecutionContext(
+                    execution,
+                    definition,
+                    provider,
+                    credential,
+                    executionTimeoutSeconds),
                 cancellationToken);
 
             if(!result.Success)
@@ -252,6 +258,16 @@ public sealed class AgentExecutionOrchestrator(
             .OrderBy(x=>x.Name,StringComparer.OrdinalIgnoreCase)
             .ThenBy(x=>x.Id)
             .First();
+    }
+
+    private async Task<int?> ResolveExecutionTimeoutSecondsAsync(
+        AgentExecution execution,
+        CancellationToken cancellationToken)
+    {
+        if(!execution.ScheduleId.HasValue)return null;
+
+        var schedule=await schedules.GetByIdAsync(execution.ScheduleId.Value,cancellationToken);
+        return schedule?.TimeoutSeconds;
     }
 
     private static DateOnly? TryGetCargoReadyDate(string inputJson)
