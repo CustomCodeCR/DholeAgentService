@@ -46,7 +46,8 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
             var rawOutput = await runtime.ExecuteAsync(
                 instruction,
                 context.Execution.InputJson,
-                cancellationToken);
+                cancellationToken,
+                context.TimeoutSeconds);
 
             if (string.IsNullOrWhiteSpace(rawOutput))
             {
@@ -72,6 +73,10 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
                 "CarrierExtraction",
                 "1.0",
                 dataJson);
+        }
+        catch (TimeoutException ex)
+        {
+            return AgentProviderExecutionResult.Failed("hermes_timeout", ex.Message);
         }
         catch (Exception ex)
         {
