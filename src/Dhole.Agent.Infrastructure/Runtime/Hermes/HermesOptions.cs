@@ -8,5 +8,5 @@ public sealed class HermesOptions
     public string ExecutePath { get; set; } = "/v1/chat/completions";
     public string Model { get; set; } = "hermes-agent";
     public string ApiKey { get; set; } = string.Empty;
-    public int TimeoutSeconds { get; set; } = 300;
+    public int TimeoutSeconds { get; set; } = 600;
 }
