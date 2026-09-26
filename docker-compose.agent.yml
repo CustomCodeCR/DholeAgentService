@@ -16,6 +16,7 @@ services:
       Hermes__ApiKey: ${HERMES_API_SERVER_KEY}
       Hermes__Model: ${HERMES_API_SERVER_MODEL_NAME:-hermes-agent}
       Hermes__ExecutePath: /v1/chat/completions
+      Hermes__TimeoutSeconds: ${HERMES_AGENT_HTTP_TIMEOUT_SECONDS:-600}
       Browser__ProfilesPath: /data/browser-profiles
       CredentialProtection__KeyRingPath: /data/agent-keys
     volumes:
@@ -43,6 +44,7 @@ services:
       Hermes__ApiKey: ${HERMES_API_SERVER_KEY}
       Hermes__Model: ${HERMES_API_SERVER_MODEL_NAME:-hermes-agent}
       Hermes__ExecutePath: /v1/chat/completions
+      Hermes__TimeoutSeconds: ${HERMES_AGENT_HTTP_TIMEOUT_SECONDS:-600}
       Browser__ProfilesPath: /data/browser-profiles
       Browser__Headless: "true"
       CredentialProtection__KeyRingPath: /data/agent-keys
