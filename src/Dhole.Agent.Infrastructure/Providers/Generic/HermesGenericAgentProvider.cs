@@ -173,7 +173,7 @@ MANDATORY EXECUTION RULES:
 }
 
 The "fields" object must use the configured extraction field keys exactly.
-"""
+""";
     }
 
     private static string BuildExecutionContextJson(
