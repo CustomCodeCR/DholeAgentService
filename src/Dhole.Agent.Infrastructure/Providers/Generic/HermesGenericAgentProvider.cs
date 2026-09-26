@@ -129,51 +129,51 @@ public sealed class HermesGenericAgentProvider(IAgentRuntime runtime) : IAgentPr
             ? "all configured fields"
             : string.Join(", ", fieldKeys);
 
-        return $"""
-{profilePrompt}
+        return $$"""
+{{profilePrompt}}
 
 MANDATORY EXECUTION RULES:
 1. The extraction profile configuration is the SOURCE OF TRUTH for routes, equipment, URLs, capture rules and requested fields.
 2. Do NOT replace profile routes or profile equipment with POL, POD, containerType, quantity or weight values from runtime/schedule input.
-3. Execute EVERY active Route × Equipment combination from the profile. Planned searches: {plannedSearchCount}.
+3. Execute EVERY active Route × Equipment combination from the profile. Planned searches: {{plannedSearchCount}}.
 4. For each equipment use its profile quantity and defaultWeightKg.
-5. Extract the configured fields for every search. Requested field keys: {fieldList}.
+5. Extract the configured fields for every search. Requested field keys: {{fieldList}}.
 6. Runtime overrides are supplementary only. cargoReadyDate, commodity and instruction may be used when present; they never change profile routes/equipment.
 7. Use the configured baseUrl/loginUrl/searchUrl and configured capture rules. Do not invent URLs, routes, equipment, prices or schedules.
 8. If a route/equipment combination has no available offer, include that combination with status "Unavailable" and null fields. If a search fails, include it with status "Error" and an error message.
 9. Do not report the job as complete by returning a summary only. Return one result entry for every planned Route × Equipment search.
 10. Return ONLY valid JSON with this exact top-level structure:
-{{
+{
   "results": [
-    {{
+    {
       "routeId": "guid",
       "equipmentId": "guid",
-      "route": {{
+      "route": {
         "polCode": "string|null",
         "polName": "string",
         "poeCode": "string|null",
         "poeName": "string|null",
         "podCode": "string|null",
         "podName": "string|null"
-      }},
-      "equipment": {{
+      },
+      "equipment": {
         "code": "string",
         "name": "string",
         "quantity": 1,
         "weightKg": 15000
-      }},
+      },
       "status": "Available|Unavailable|Error",
-      "fields": {{
+      "fields": {
         "configuredFieldKey": "value|null"
-      }},
+      },
       "error": "string|null"
-    }}
+    }
   ],
   "errors": []
-}}
+}
 
 The "fields" object must use the configured extraction field keys exactly.
-""";
+"""
     }
 
     private static string BuildExecutionContextJson(
