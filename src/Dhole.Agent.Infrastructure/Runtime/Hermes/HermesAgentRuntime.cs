@@ -7,6 +7,7 @@ public sealed class HermesAgentRuntime(HermesClient client) : IAgentRuntime
     public Task<string> ExecuteAsync(
         string instruction,
         string? contextJson,
-        CancellationToken cancellationToken = default)
-        => client.ExecuteAsync(instruction, contextJson, cancellationToken);
+        CancellationToken cancellationToken = default,
+        int? timeoutSeconds = null)
+        => client.ExecuteAsync(instruction, contextJson, cancellationToken, timeoutSeconds);
 }
