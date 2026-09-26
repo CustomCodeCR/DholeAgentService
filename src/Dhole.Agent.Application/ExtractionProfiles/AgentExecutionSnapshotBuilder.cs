@@ -29,6 +29,7 @@ public sealed class AgentExecutionSnapshotBuilder(AgentPromptBuilder promptBuild
             profile.BaseUrl,
             profile.LoginUrl,
             profile.SearchUrl,
+            profile.PromptTemplate,
             executionStrategy = profile.ExecutionStrategy.ToString(),
             profile.ParserKey,
             routes = routes.Where(x => x.IsActive && !x.IsDeleted).OrderBy(x => x.SortOrder).Select(x => new
