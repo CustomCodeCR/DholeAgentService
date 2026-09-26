@@ -6,7 +6,8 @@ public sealed record AgentExecutionContext(
     AgentExecution Execution,
     AgentDefinition Definition,
     AgentProvider Provider,
-    AgentCredential? Credential);
+    AgentCredential? Credential,
+    int? TimeoutSeconds = null);
 
 public sealed record AgentProviderExecutionResult(
     bool Success,
@@ -39,7 +40,11 @@ public interface IAgentProviderResolver
 
 public interface IAgentRuntime
 {
-    Task<string> ExecuteAsync(string instruction,string? contextJson,CancellationToken cancellationToken=default);
+    Task<string> ExecuteAsync(
+        string instruction,
+        string? contextJson,
+        CancellationToken cancellationToken = default,
+        int? timeoutSeconds = null);
 }
 
 public interface ISecretProvider
