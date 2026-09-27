@@ -145,12 +145,12 @@ public sealed class MaerskLoginService
                 if (await IsAuthenticatedAsync(page))
                     return;
 
-                if (network.HasBlockingHttpStatus)
-                {
-                    throw network.CreateException(
-                        "Maersk rejected the authentication request.");
-                }
-
+                // Do not abort on the first 401/403 emitted by the Global Accounts SPA.
+                // Maersk can issue transient authentication/resource failures while the
+                // browser is still completing its client-side login/callback flow.
+                // A visible authentication error remains terminal below; otherwise let
+                // the browser finish the full authentication window before classifying
+                // the captured network failures.
                 var authMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
                     page,
                     cancellationToken);
@@ -181,6 +181,12 @@ public sealed class MaerskLoginService
             {
                 throw network.CreateException(
                     $"Maersk login did not complete. Authentication page message: {finalMessage}");
+            }
+
+            if (network.HasBlockingHttpStatus)
+            {
+                throw network.CreateException(
+                    "Maersk did not complete authentication after the browser login window.");
             }
 
             throw await CreateLoginUiExceptionAsync(
