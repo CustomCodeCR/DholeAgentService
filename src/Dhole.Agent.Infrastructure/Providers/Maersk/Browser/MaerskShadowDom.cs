@@ -285,6 +285,36 @@ internal static class MaerskShadowDom
         return false;
     }
 
+    public static async Task<bool> PressFirstAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        string key,
+        CancellationToken cancellationToken,
+        int timeoutMs = 10_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                if (await TryActOnVisibleLocatorAsync(
+                        frame,
+                        selectors,
+                        locator => locator.PressAsync(
+                            key,
+                            new LocatorPressOptions { Timeout = 5_000 })))
+                    return true;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
     public static async Task<bool> ClickFirstAsync(
         IPage page,
         IReadOnlyCollection<string> selectors,
@@ -372,6 +402,53 @@ internal static class MaerskShadowDom
         }
 
         return false;
+    }
+
+    public static async Task<string?> ReadVisibleAuthenticationMessageAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        var selectors = new[]
+        {
+            "mc-error",
+            "[role='alert']",
+            "[aria-live='assertive']",
+            "[aria-live='polite']",
+            ".error",
+            ".error-message",
+            "[class*='error' i]"
+        };
+
+        foreach (var frame in page.Frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var selector in selectors)
+            {
+                try
+                {
+                    var matches = frame.Locator(selector);
+                    var count = await matches.CountAsync();
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        var candidate = matches.Nth(index);
+                        if (!await candidate.IsVisibleAsync())
+                            continue;
+
+                        var text = (await candidate.InnerTextAsync()).Trim();
+                        if (!string.IsNullOrWhiteSpace(text))
+                            return text.Length <= 1000 ? text : text[..1000];
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                    // Continue inspecting other selectors/frames.
+                }
+            }
+        }
+
+        return null;
     }
 
     public static async Task<string> DescribeAsync(IPage page)
