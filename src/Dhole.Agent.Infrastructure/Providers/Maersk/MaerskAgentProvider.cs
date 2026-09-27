@@ -53,18 +53,25 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
+        string storagePath;
         if (browserProfile?.Status is BrowserProfileStatus.Blocked or BrowserProfileStatus.LoginRequired)
         {
-            return AgentProviderExecutionResult.Failed(
-                browserProfile.Status == BrowserProfileStatus.Blocked
-                    ? "maersk_authentication_blocked"
-                    : "maersk_authentication_login_required",
-                browserProfile.Status == BrowserProfileStatus.Blocked
-                    ? "Maersk authentication is blocked for this browser profile. Re-authenticate the browser profile before running scheduled extraction again."
-                    : "Maersk login is required for this browser profile. Update/re-authenticate the credential before running scheduled extraction again.");
-        }
+            // A rejected Maersk session can leave stale cookies/storage in the
+            // persistent Chromium profile. Move that profile out of the active path
+            // and create a completely fresh browser session before the next login.
+            storagePath = profiles.ResetStoragePath(
+                ProviderCode,
+                context.Credential.Id);
 
-        var storagePath = profiles.GetStoragePath(ProviderCode, context.Credential.Id);
+            browserProfile.SetStatus(BrowserProfileStatus.Ready);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        else
+        {
+            storagePath = profiles.GetStoragePath(
+                ProviderCode,
+                context.Credential.Id);
+        }
         var descriptor = new BrowserProfileDescriptor(
             ProviderCode,
             context.Credential.Id,
