@@ -154,7 +154,17 @@ public sealed class CreateBrowserProfileCommandHandler(IBrowserProfileRepository
 public sealed record AuthenticateBrowserProfileCommand(Guid Id,Guid? ActorId):ICommand<Result>;
 public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepository repo,IUnitOfWork uow):ICommandHandler<AuthenticateBrowserProfileCommand,Result>
 {
-    public async Task<Result> HandleAsync(AuthenticateBrowserProfileCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);e.SetStatus(BrowserProfileStatus.Authenticating,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
+    public async Task<Result> HandleAsync(AuthenticateBrowserProfileCommand c,CancellationToken ct=default)
+    {
+        var e=await repo.GetByIdAsync(c.Id,ct);
+        if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);
+
+        // Request a completely fresh persistent browser session. The worker owns
+        // the browser-profile volume and performs the actual reset on the next run.
+        e.SetStatus(BrowserProfileStatus.LoginRequired,c.ActorId);
+        await uow.SaveChangesAsync(ct);
+        return Result.Success();
+    }
 }
 
 public sealed record CreateAgentScheduleCommand(string Name,Guid AgentDefinitionId,Guid ProviderId,Guid? CredentialId,Guid? ExtractionProfileId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,Guid? ActorId):ICommand<Result<Guid>>;
