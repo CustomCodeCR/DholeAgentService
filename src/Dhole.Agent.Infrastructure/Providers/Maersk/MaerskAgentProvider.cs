@@ -165,7 +165,7 @@ public sealed class MaerskAgentProvider(
                     errors.Take(5).Select(x => JsonSerializer.Serialize(x, JsonOptions))));
         }
 
-        var outputJson = JsonSerializer.Serialize(
+        var outputJson = SanitizeJsonForPostgres(JsonSerializer.Serialize(
             new
             {
                 provider = ProviderCode,
@@ -183,7 +183,7 @@ public sealed class MaerskAgentProvider(
                     errors
                 }
             },
-            JsonOptions);
+            JsonOptions));
 
         return failed > 0
             ? AgentProviderExecutionResult.Partial(
@@ -559,6 +559,19 @@ public sealed class MaerskAgentProvider(
             out number)
             ? number
             : null;
+    }
+
+    private static string SanitizeJsonForPostgres(string json)
+    {
+        if (string.IsNullOrEmpty(json))
+            return json;
+
+        // PostgreSQL jsonb rejects U+0000 even when it is represented as \u0000.
+        // Carrier responses can occasionally contain control characters in free-text
+        // labels, so strip only the NUL codepoint before persistence.
+        return json
+            .Replace("\\u0000", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("\0", string.Empty, StringComparison.Ordinal);
     }
 
     private static bool TryGetPropertyIgnoreCase(
