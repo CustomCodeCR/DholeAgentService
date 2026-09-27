@@ -305,9 +305,9 @@ public sealed class AgentExecutionOrchestrator(
     }
 
     private static bool IsAuthenticationRequiredFailure(string errorCode)
-        => errorCode.StartsWith("maersk_authentication_",StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("missing_credential",StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("credential_key_unavailable",StringComparison.OrdinalIgnoreCase);
+        => errorCode.Equals(
+            "maersk_authentication_verification_required",
+            StringComparison.OrdinalIgnoreCase);
 
     private static string? NormalizePersistedJson(string? json)
     {
