@@ -158,7 +158,10 @@ public sealed class AgentExecutionOrchestrator(
                 return;
             }
 
-            if(!string.IsNullOrWhiteSpace(result.ResultType)&&!string.IsNullOrWhiteSpace(result.DataJson))
+            var persistedDataJson = NormalizePersistedJson(result.DataJson);
+            var persistedOutputJson = NormalizePersistedJson(result.OutputJson);
+
+            if(!string.IsNullOrWhiteSpace(result.ResultType)&&!string.IsNullOrWhiteSpace(persistedDataJson))
             {
                 var existing=await results.GetByExecutionIdAsync(execution.Id,cancellationToken);
                 if(existing is null)
@@ -168,11 +171,19 @@ public sealed class AgentExecutionOrchestrator(
                             provider.Id,
                             result.ResultType,
                             result.SchemaVersion??"1.0",
-                            result.DataJson),
+                            persistedDataJson),
                         cancellationToken);
             }
 
-            execution.Complete(result.OutputJson,DateTime.UtcNow,result.PartiallyCompleted);
+            execution.Complete(persistedOutputJson,DateTime.UtcNow,result.PartiallyCompleted);
+
+            logger.LogInformation(
+                "AGENT_EXECUTION_PERSISTING_RESULT execution={ExecutionId} outputBytes={OutputBytes} dataBytes={DataBytes} partial={Partial}",
+                execution.Id,
+                persistedOutputJson is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(persistedOutputJson),
+                persistedDataJson is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(persistedDataJson),
+                result.PartiallyCompleted);
+
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
         catch(Exception ex) when(execution.Status is not AgentExecutionStatus.Completed and not AgentExecutionStatus.Cancelled)
@@ -183,7 +194,18 @@ public sealed class AgentExecutionOrchestrator(
                 execution.Id,
                 execution.Status);
 
-            execution.Fail("agent_runtime_error",ex.Message,DateTime.UtcNow);
+            var detailedError = DescribeException(ex);
+            var errorCode = ex.GetType().Name.Contains("DbUpdate", StringComparison.OrdinalIgnoreCase)
+                ? "database_update_failed"
+                : "agent_runtime_error";
+
+            logger.LogError(
+                "AGENT_EXECUTION_FAILURE_DETAIL execution={ExecutionId} code={ErrorCode} detail={Detail}",
+                execution.Id,
+                errorCode,
+                detailedError);
+
+            execution.Fail(errorCode,detailedError,DateTime.UtcNow);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
     }
@@ -268,6 +290,51 @@ public sealed class AgentExecutionOrchestrator(
 
         var schedule=await schedules.GetByIdAsync(execution.ScheduleId.Value,cancellationToken);
         return schedule?.TimeoutSeconds;
+    }
+
+    private static string? NormalizePersistedJson(string? json)
+    {
+        if(string.IsNullOrWhiteSpace(json))return json;
+
+        return json
+            .Replace("\\u0000",string.Empty,StringComparison.OrdinalIgnoreCase)
+            .Replace("\0",string.Empty,StringComparison.Ordinal);
+    }
+
+    private static string DescribeException(Exception exception)
+    {
+        var parts=new List<string>();
+        Exception? current=exception;
+
+        while(current is not null&&parts.Count<6)
+        {
+            var type=current.GetType();
+            var details=new List<string>
+            {
+                $"{type.Name}: {current.Message}"
+            };
+
+            foreach(var propertyName in new[]{"SqlState","ConstraintName","TableName","ColumnName"})
+            {
+                try
+                {
+                    var property=type.GetProperty(propertyName);
+                    var value=property?.GetValue(current)?.ToString();
+                    if(!string.IsNullOrWhiteSpace(value))
+                        details.Add($"{propertyName}={value}");
+                }
+                catch
+                {
+                    // Diagnostic reflection must never hide the original failure.
+                }
+            }
+
+            parts.Add(string.Join(", ",details));
+            current=current.InnerException;
+        }
+
+        var value=string.Join(" -> ",parts);
+        return value.Length<=3900?value:value[..3900];
     }
 
     private static DateOnly? TryGetCargoReadyDate(string inputJson)
