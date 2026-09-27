@@ -355,7 +355,7 @@ public sealed class MaerskLoginService
             {
                 lock (_sync)
                 {
-                    return _failures.Any(x => x.Status is 401 or 403 or 429);
+                    return _failures.Any(IsBlockingAuthenticationFailure);
                 }
             }
         }
@@ -385,15 +385,24 @@ public sealed class MaerskLoginService
             lock (_sync)
                 failures = _failures.ToArray();
 
+            var sessionFailure = failures
+                .LastOrDefault(x =>
+                    x.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+                    && x.Url.Contains("/sessions/", StringComparison.OrdinalIgnoreCase));
+
             var code = failures.Any(x => x.Status == 429)
                 ? "maersk_authentication_rate_limited"
-                : failures.Any(x => x.Status == 403)
-                    ? "maersk_authentication_forbidden"
-                    : failures.Any(x => x.Status == 401)
-                        ? "maersk_authentication_unauthorized"
-                        : failures.Any(x => x.Status >= 500)
-                            ? "maersk_authentication_service_error"
-                            : "maersk_authentication_failed";
+                : sessionFailure?.Status == 401
+                    ? "maersk_authentication_unauthorized"
+                    : sessionFailure?.Status == 403
+                        ? "maersk_authentication_forbidden"
+                        : failures.Any(x => x.Status == 401 && IsAuthenticationEndpoint(x))
+                            ? "maersk_authentication_unauthorized"
+                            : failures.Any(x => x.Status == 403 && IsAuthenticationEndpoint(x))
+                                ? "maersk_authentication_forbidden"
+                                : failures.Any(x => x.Status >= 500 && IsAuthenticationEndpoint(x))
+                                    ? "maersk_authentication_service_error"
+                                    : "maersk_authentication_failed";
 
             var summary = failures.Length == 0
                 ? "No HTTP 401/403/429 response was captured from Maersk authentication endpoints."
@@ -407,6 +416,18 @@ public sealed class MaerskLoginService
                 code,
                 $"{message} {summary}");
         }
+
+        private static bool IsBlockingAuthenticationFailure(HttpFailure failure)
+            => failure.Status == 429
+               || ((failure.Status is 401 or 403) && IsAuthenticationEndpoint(failure));
+
+        private static bool IsAuthenticationEndpoint(HttpFailure failure)
+            => failure.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+               || failure.Url.Contains("/sessions/", StringComparison.OrdinalIgnoreCase)
+               || failure.Url.Contains("/auth/", StringComparison.OrdinalIgnoreCase)
+               || failure.Url.Contains("/login", StringComparison.OrdinalIgnoreCase)
+               || failure.Url.Contains("/oauth", StringComparison.OrdinalIgnoreCase)
+               || failure.Url.Contains("/token", StringComparison.OrdinalIgnoreCase);
 
         private void OnResponse(object? sender, IResponse response)
         {
