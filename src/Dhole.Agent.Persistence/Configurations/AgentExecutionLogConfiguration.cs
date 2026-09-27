@@ -14,7 +14,7 @@ internal sealed class AgentExecutionLogConfiguration : EntityTypeConfigurationBa
         builder.Property(x => x.Id).ValueGeneratedNever();
         builder.Property(x => x.Level).HasMaxLength(30).IsRequired();
         builder.Property(x => x.Category).HasMaxLength(120).IsRequired();
-        builder.Property(x => x.Message).HasMaxLength(4000).IsRequired();
+        builder.Property(x => x.Message).HasColumnType("text").IsRequired();
         builder.Property(x => x.PayloadJson).HasColumnType("jsonb");
         builder.HasOne<AgentExecution>().WithMany().HasForeignKey(x => x.ExecutionId).OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(x => new { x.ExecutionId, x.OccurredAt });
