@@ -53,17 +53,27 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
+        var recreatedSession = false;
+
+        if (browserProfile?.Status == BrowserProfileStatus.Error)
+        {
+            return AgentProviderExecutionResult.Failed(
+                "maersk_authentication_manual_reset_required",
+                "The fresh Maersk browser session also failed authentication. Use the browser-profile Authenticate action to allow one new authentication attempt; scheduled runs will not keep retrying automatically.");
+        }
+
         string storagePath;
         if (browserProfile?.Status is BrowserProfileStatus.Blocked or BrowserProfileStatus.LoginRequired)
         {
             // A rejected Maersk session can leave stale cookies/storage in the
-            // persistent Chromium profile. Move that profile out of the active path
-            // and create a completely fresh browser session before the next login.
+            // persistent Chromium profile. Remove it from the active path and start
+            // with a completely fresh browser profile exactly once.
             storagePath = profiles.ResetStoragePath(
                 ProviderCode,
                 context.Credential.Id);
 
-            browserProfile.SetStatus(BrowserProfileStatus.Ready);
+            recreatedSession = true;
+            browserProfile.SetStatus(BrowserProfileStatus.Authenticating);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
         else
@@ -111,13 +121,18 @@ public sealed class MaerskAgentProvider(
         {
             if (browserProfile is not null)
             {
-                browserProfile.SetStatus(MapBrowserProfileStatus(ex.ErrorCode));
+                browserProfile.SetStatus(
+                    recreatedSession
+                        ? BrowserProfileStatus.Error
+                        : MapBrowserProfileStatus(ex.ErrorCode));
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
             return AgentProviderExecutionResult.Failed(
                 ex.ErrorCode,
-                ex.Message);
+                recreatedSession
+                    ? $"{ex.Message} A fresh browser profile was already created for this attempt, so automatic login retries have been stopped."
+                    : ex.Message);
         }
         catch (Exception ex)
         {
