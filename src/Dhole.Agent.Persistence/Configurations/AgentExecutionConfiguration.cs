@@ -19,7 +19,7 @@ internal sealed class AgentExecutionConfiguration : EntityTypeConfigurationBase<
         builder.Property(x => x.PromptSnapshot).HasColumnType("text");
         builder.Property(x => x.ConfigurationSnapshotJson).HasColumnType("jsonb");
         builder.Property(x => x.ErrorCode).HasMaxLength(120);
-        builder.Property(x => x.ErrorMessage).HasMaxLength(4000);
+        builder.Property(x => x.ErrorMessage).HasColumnType("text");
         builder.Property(x => x.CorrelationId).HasMaxLength(100).IsRequired();
         builder.Property(x => x.TraceId).HasMaxLength(150);
         builder.HasOne<AgentDefinition>().WithMany().HasForeignKey(x => x.AgentDefinitionId).OnDelete(DeleteBehavior.Restrict);
