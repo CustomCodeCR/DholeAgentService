@@ -73,6 +73,12 @@ public sealed class MaerskAgentProvider(
                 credentialResult.Password!,
                 cancellationToken);
         }
+        catch (MaerskAuthenticationException ex)
+        {
+            return AgentProviderExecutionResult.Failed(
+                ex.ErrorCode,
+                ex.Message);
+        }
         catch (Exception ex)
         {
             return AgentProviderExecutionResult.Failed(
