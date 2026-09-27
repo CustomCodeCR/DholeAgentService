@@ -64,6 +64,7 @@ public interface IBrowserManager
 public interface IBrowserProfileManager
 {
     string GetStoragePath(string providerCode,Guid credentialId);
+    string ResetStoragePath(string providerCode,Guid credentialId);
 }
 
 public interface IAgentExecutionOrchestrator
