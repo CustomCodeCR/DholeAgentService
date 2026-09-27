@@ -150,9 +150,21 @@ public sealed class AgentExecutionOrchestrator(
 
             if(!result.Success)
             {
+                var failureCode=result.ErrorCode??"provider_failed";
+                var failureMessage=result.ErrorMessage??"Provider execution failed.";
+
+                if(IsAuthenticationRequiredFailure(failureCode))
+                {
+                    execution.WaitForAuthentication(
+                        failureCode,
+                        failureMessage);
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    return;
+                }
+
                 execution.Fail(
-                    result.ErrorCode??"provider_failed",
-                    result.ErrorMessage??"Provider execution failed.",
+                    failureCode,
+                    failureMessage,
                     DateTime.UtcNow);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 return;
@@ -291,6 +303,11 @@ public sealed class AgentExecutionOrchestrator(
         var schedule=await schedules.GetByIdAsync(execution.ScheduleId.Value,cancellationToken);
         return schedule?.TimeoutSeconds;
     }
+
+    private static bool IsAuthenticationRequiredFailure(string errorCode)
+        => errorCode.StartsWith("maersk_authentication_",StringComparison.OrdinalIgnoreCase)
+           || errorCode.Equals("missing_credential",StringComparison.OrdinalIgnoreCase)
+           || errorCode.Equals("credential_key_unavailable",StringComparison.OrdinalIgnoreCase);
 
     private static string? NormalizePersistedJson(string? json)
     {
