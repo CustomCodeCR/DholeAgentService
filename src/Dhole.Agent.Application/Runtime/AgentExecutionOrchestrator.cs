@@ -319,9 +319,9 @@ public sealed class AgentExecutionOrchestrator(
                 try
                 {
                     var property=type.GetProperty(propertyName);
-                    var value=property?.GetValue(current)?.ToString();
-                    if(!string.IsNullOrWhiteSpace(value))
-                        details.Add($"{propertyName}={value}");
+                    var propertyValue=property?.GetValue(current)?.ToString();
+                    if(!string.IsNullOrWhiteSpace(propertyValue))
+                        details.Add($"{propertyName}={propertyValue}");
                 }
                 catch
                 {
@@ -333,8 +333,8 @@ public sealed class AgentExecutionOrchestrator(
             current=current.InnerException;
         }
 
-        var value=string.Join(" -> ",parts);
-        return value.Length<=3900?value:value[..3900];
+        var description=string.Join(" -> ",parts);
+        return description.Length<=3900?description:description[..3900];
     }
 
     private static DateOnly? TryGetCargoReadyDate(string inputJson)
