@@ -93,10 +93,17 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
         AddDomainEvent(new AgentExecutionStartedDomainEvent(Id, ProviderId, startedAt, Attempt));
     }
 
-    public void WaitForAuthentication(Guid? updatedBy = null)
+    public void WaitForAuthentication(
+        string? errorCode = null,
+        string? errorMessage = null,
+        Guid? updatedBy = null)
     {
-        if (Status != AgentExecutionStatus.Running) throw new InvalidOperationException("Execution is not running.");
+        if (Status != AgentExecutionStatus.Running)
+            throw new InvalidOperationException("Execution is not running.");
+
         Status = AgentExecutionStatus.WaitingForAuthentication;
+        ErrorCode = Optional(errorCode);
+        ErrorMessage = Optional(errorMessage);
         MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
     }
 
