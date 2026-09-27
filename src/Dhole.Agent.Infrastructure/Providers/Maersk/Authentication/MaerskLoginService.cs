@@ -42,138 +42,162 @@ public sealed class MaerskLoginService
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("Maersk password is required.", nameof(password));
 
-        await page.GotoAsync(
-            LoginUrl,
-            new PageGotoOptions
-            {
-                WaitUntil = WaitUntilState.DOMContentLoaded,
-                Timeout = 60_000
-            });
+        var network = new AuthenticationNetworkObserver(page);
+        network.Attach();
 
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (await IsAuthenticatedAsync(page))
-            return;
-
-        if (!await WaitForLoginUiAsync(page, cancellationToken))
-            throw await CreateLoginUiExceptionAsync(page, "rendered login form");
-
-        await DismissCookieBannerAsync(page, cancellationToken);
-
-        var usernameFilled =
-            await MaerskShadowDom.FillAsync(
-                page,
-                UsernameSelectors,
-                username,
-                cancellationToken,
-                timeoutMs: 12_000)
-            || await MaerskShadowDom.FillMdsInputAsync(
-                page,
-                ["username", "user"],
-                username,
-                cancellationToken);
-
-        if (!usernameFilled)
-            throw await CreateLoginUiExceptionAsync(page, "username");
-
-        var passwordFilled =
-            await MaerskShadowDom.FillAsync(
-                page,
-                PasswordSelectors,
-                password,
-                cancellationToken,
-                timeoutMs: 12_000)
-            || await MaerskShadowDom.FillMdsInputAsync(
-                page,
-                ["password"],
-                password,
-                cancellationToken);
-
-        if (!passwordFilled)
-            throw await CreateLoginUiExceptionAsync(page, "password");
-
-        // Prefer a real keyboard submit from the native password input. Maersk's
-        // mc-button/login form has changed implementations and clicking the inner
-        // shadow button can visually click without invoking the form submit handler.
-        var submitted = await MaerskShadowDom.PressFirstAsync(
-            page,
-            PasswordSelectors,
-            "Enter",
-            cancellationToken,
-            timeoutMs: 4_000);
-
-        if (!submitted)
+        try
         {
-            submitted =
-                await MaerskShadowDom.ClickByTextAsync(
-                    page,
-                    ["Log in", "Login", "Sign in"],
-                    cancellationToken,
-                    timeoutMs: 8_000)
-                || await MaerskShadowDom.ClickFirstAsync(
-                    page,
-                    [
-                        "mc-button",
-                        "button[type='submit']",
-                        "input[type='submit']"
-                    ],
-                    cancellationToken,
-                    timeoutMs: 4_000);
-        }
+            await page.GotoAsync(
+                LoginUrl,
+                new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 60_000
+                });
 
-        if (!submitted)
-            throw await CreateLoginUiExceptionAsync(page, "login submit control");
-
-        // Maersk Global Accounts can spend several seconds on the OIDC callback,
-        // especially on cold browser profiles. Wait up to 60 seconds and surface
-        // authentication validation/MFA messages instead of a generic UI failure.
-        for (var attempt = 0; attempt < 120; attempt++)
-        {
             cancellationToken.ThrowIfCancellationRequested();
 
             if (await IsAuthenticatedAsync(page))
                 return;
 
-            var authMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
+            if (!await WaitForLoginUiAsync(page, cancellationToken))
+                throw await CreateLoginUiExceptionAsync(
+                    page,
+                    "rendered login form",
+                    network);
+
+            await DismissCookieBannerAsync(page, cancellationToken);
+
+            var usernameFilled =
+                await MaerskShadowDom.FillAsync(
+                    page,
+                    UsernameSelectors,
+                    username,
+                    cancellationToken,
+                    timeoutMs: 12_000)
+                || await MaerskShadowDom.FillMdsInputAsync(
+                    page,
+                    ["username", "user"],
+                    username,
+                    cancellationToken);
+
+            if (!usernameFilled)
+                throw await CreateLoginUiExceptionAsync(
+                    page,
+                    "username",
+                    network);
+
+            var passwordFilled =
+                await MaerskShadowDom.FillAsync(
+                    page,
+                    PasswordSelectors,
+                    password,
+                    cancellationToken,
+                    timeoutMs: 12_000)
+                || await MaerskShadowDom.FillMdsInputAsync(
+                    page,
+                    ["password"],
+                    password,
+                    cancellationToken);
+
+            if (!passwordFilled)
+                throw await CreateLoginUiExceptionAsync(
+                    page,
+                    "password",
+                    network);
+
+            var submitted = await MaerskShadowDom.PressFirstAsync(
+                page,
+                PasswordSelectors,
+                "Enter",
+                cancellationToken,
+                timeoutMs: 4_000);
+
+            if (!submitted)
+            {
+                submitted =
+                    await MaerskShadowDom.ClickByTextAsync(
+                        page,
+                        ["Log in", "Login", "Sign in"],
+                        cancellationToken,
+                        timeoutMs: 8_000)
+                    || await MaerskShadowDom.ClickFirstAsync(
+                        page,
+                        [
+                            "mc-button",
+                            "button[type='submit']",
+                            "input[type='submit']"
+                        ],
+                        cancellationToken,
+                        timeoutMs: 4_000);
+            }
+
+            if (!submitted)
+                throw await CreateLoginUiExceptionAsync(
+                    page,
+                    "login submit control",
+                    network);
+
+            for (var attempt = 0; attempt < 120; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (await IsAuthenticatedAsync(page))
+                    return;
+
+                if (network.HasBlockingHttpStatus)
+                {
+                    throw network.CreateException(
+                        "Maersk rejected the authentication request.");
+                }
+
+                var authMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
+                    page,
+                    cancellationToken);
+
+                if (!string.IsNullOrWhiteSpace(authMessage)
+                    && LooksLikeAuthenticationFailure(authMessage))
+                {
+                    throw network.CreateException(
+                        $"Maersk rejected the login attempt: {authMessage}");
+                }
+
+                if (await RequiresInteractiveVerificationAsync(page))
+                {
+                    throw new MaerskAuthenticationException(
+                        "maersk_authentication_verification_required",
+                        "Maersk requires an interactive verification step (MFA/verification code/approval) for this browser profile. " +
+                        "Authenticate the persistent browser profile once, then scheduled executions can reuse the session.");
+                }
+
+                await Task.Delay(500, cancellationToken);
+            }
+
+            var finalMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
                 page,
                 cancellationToken);
 
-            if (!string.IsNullOrWhiteSpace(authMessage)
-                && LooksLikeAuthenticationFailure(authMessage))
+            if (!string.IsNullOrWhiteSpace(finalMessage))
             {
-                throw new InvalidOperationException(
-                    $"Maersk rejected the login attempt: {authMessage}");
+                throw network.CreateException(
+                    $"Maersk login did not complete. Authentication page message: {finalMessage}");
             }
 
-            if (await RequiresInteractiveVerificationAsync(page))
-            {
-                throw new InvalidOperationException(
-                    "Maersk requires an interactive verification step (MFA/verification code/approval) for this browser profile. " +
-                    "Authenticate the persistent browser profile once, then scheduled executions can reuse the session.");
-            }
-
-            await Task.Delay(500, cancellationToken);
+            throw await CreateLoginUiExceptionAsync(
+                page,
+                "authenticated account state",
+                network);
         }
-
-        var finalMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
-            page,
-            cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(finalMessage))
+        finally
         {
-            throw new InvalidOperationException(
-                $"Maersk login did not complete. Authentication page message: {finalMessage}");
+            network.Detach();
         }
-
-        throw await CreateLoginUiExceptionAsync(page, "authenticated account state");
     }
 
     private static async Task DismissCookieBannerAsync(
         IPage page,
         CancellationToken cancellationToken)
     {
-        // The cookie banner can overlay the login card. Prefer Essential only so the
-        // automation does not opt into optional tracking/marketing categories.
         await MaerskShadowDom.ClickByTextAsync(
             page,
             ["Essential only"],
@@ -193,7 +217,8 @@ public sealed class MaerskLoginService
             || value.Contains("account locked")
             || value.Contains("try again")
             || value.Contains("does not match")
-            || value.Contains("not recognized");
+            || value.Contains("not recognized")
+            || value.Contains("something went wrong");
     }
 
     private static async Task<bool> RequiresInteractiveVerificationAsync(IPage page)
@@ -266,12 +291,13 @@ public sealed class MaerskLoginService
 
     private static async Task<Exception> CreateLoginUiExceptionAsync(
         IPage page,
-        string missingElement)
+        string missingElement,
+        AuthenticationNetworkObserver network)
     {
         var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-        return new InvalidOperationException(
+        return network.CreateException(
             $"Maersk login could not find or complete the {missingElement}. " +
-            $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+            $"URL='{SanitizeUrl(page.Url)}'. ShadowDOM diagnostics={diagnostics}");
     }
 
     private static async Task<bool> IsAuthenticatedAsync(IPage page)
@@ -308,4 +334,119 @@ public sealed class MaerskLoginService
             return false;
         }
     }
+
+    private static string SanitizeUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            return value.Split('?', 2)[0];
+
+        return uri.GetLeftPart(UriPartial.Path);
+    }
+
+    private sealed class AuthenticationNetworkObserver(IPage page)
+    {
+        private readonly object _sync = new();
+        private readonly List<HttpFailure> _failures = [];
+        private bool _attached;
+
+        public bool HasBlockingHttpStatus
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _failures.Any(x => x.Status is 401 or 403 or 429);
+                }
+            }
+        }
+
+        public void Attach()
+        {
+            if (_attached)
+                return;
+
+            page.Response += OnResponse;
+            _attached = true;
+        }
+
+        public void Detach()
+        {
+            if (!_attached)
+                return;
+
+            page.Response -= OnResponse;
+            _attached = false;
+        }
+
+        public MaerskAuthenticationException CreateException(string message)
+        {
+            HttpFailure[] failures;
+
+            lock (_sync)
+                failures = _failures.ToArray();
+
+            var code = failures.Any(x => x.Status == 429)
+                ? "maersk_authentication_rate_limited"
+                : failures.Any(x => x.Status == 403)
+                    ? "maersk_authentication_forbidden"
+                    : failures.Any(x => x.Status == 401)
+                        ? "maersk_authentication_unauthorized"
+                        : failures.Any(x => x.Status >= 500)
+                            ? "maersk_authentication_service_error"
+                            : "maersk_authentication_failed";
+
+            var summary = failures.Length == 0
+                ? "No HTTP 401/403/429 response was captured from Maersk authentication endpoints."
+                : "HTTP failures: " + string.Join(
+                    " | ",
+                    failures
+                        .TakeLast(8)
+                        .Select(x => $"{x.Method} {x.Status} {x.Url}"));
+
+            return new MaerskAuthenticationException(
+                code,
+                $"{message} {summary}");
+        }
+
+        private void OnResponse(object? sender, IResponse response)
+        {
+            if (response.Status < 400)
+                return;
+
+            if (!Uri.TryCreate(response.Url, UriKind.Absolute, out var uri)
+                || !uri.Host.EndsWith("maersk.com", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var failure = new HttpFailure(
+                response.Request.Method,
+                response.Status,
+                uri.GetLeftPart(UriPartial.Path));
+
+            lock (_sync)
+            {
+                if (_failures.Any(x =>
+                        x.Method == failure.Method
+                        && x.Status == failure.Status
+                        && x.Url == failure.Url))
+                    return;
+
+                _failures.Add(failure);
+
+                if (_failures.Count > 20)
+                    _failures.RemoveAt(0);
+            }
+        }
+
+        private sealed record HttpFailure(
+            string Method,
+            int Status,
+            string Url);
+    }
+}
+
+public sealed class MaerskAuthenticationException(
+    string errorCode,
+    string message) : InvalidOperationException(message)
+{
+    public string ErrorCode { get; } = errorCode;
 }
