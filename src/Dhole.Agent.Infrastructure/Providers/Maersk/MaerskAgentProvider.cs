@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using CustomCodeFramework.Persistence.Abstractions;
+using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Infrastructure.Browser;
@@ -23,7 +25,9 @@ public sealed class MaerskAgentProvider(
     MaerskEquipmentResolver equipment,
     MaerskCommodityResolver commodities,
     ICredentialProtector credentialProtector,
-    ISecretProvider legacySecrets) : IAgentProvider
+    ISecretProvider legacySecrets,
+    IBrowserProfileRepository browserProfiles,
+    IUnitOfWork unitOfWork) : IAgentProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string CurrentMaerskBookingUrl = "https://www.maersk.com/book/";
@@ -42,6 +46,22 @@ public sealed class MaerskAgentProvider(
         var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
+
+        var browserProfile = await browserProfiles.GetByProviderCredentialAsync(
+            context.Provider.Id,
+            context.Credential.Id,
+            cancellationToken);
+
+        if (browserProfile?.Status is BrowserProfileStatus.Blocked or BrowserProfileStatus.LoginRequired)
+        {
+            return AgentProviderExecutionResult.Failed(
+                browserProfile.Status == BrowserProfileStatus.Blocked
+                    ? "maersk_authentication_blocked"
+                    : "maersk_authentication_login_required",
+                browserProfile.Status == BrowserProfileStatus.Blocked
+                    ? "Maersk authentication is blocked for this browser profile. Re-authenticate the browser profile before running scheduled extraction again."
+                    : "Maersk login is required for this browser profile. Update/re-authenticate the credential before running scheduled extraction again.");
+        }
 
         var storagePath = profiles.GetStoragePath(ProviderCode, context.Credential.Id);
         var descriptor = new BrowserProfileDescriptor(
@@ -72,15 +92,33 @@ public sealed class MaerskAgentProvider(
                 credentialResult.Username!,
                 credentialResult.Password!,
                 cancellationToken);
+
+            if (browserProfile is not null)
+            {
+                browserProfile.Authenticate(DateTime.UtcNow);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
         }
         catch (MaerskAuthenticationException ex)
         {
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(MapBrowserProfileStatus(ex.ErrorCode));
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
             return AgentProviderExecutionResult.Failed(
                 ex.ErrorCode,
                 ex.Message);
         }
         catch (Exception ex)
         {
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(BrowserProfileStatus.Error);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
             return AgentProviderExecutionResult.Failed(
                 "maersk_authentication_failed",
                 ex.Message);
@@ -478,6 +516,17 @@ public sealed class MaerskAgentProvider(
 
         return CurrentMaerskBookingUrl;
     }
+
+    private static BrowserProfileStatus MapBrowserProfileStatus(string errorCode)
+        => errorCode switch
+        {
+            "maersk_authentication_forbidden" => BrowserProfileStatus.Blocked,
+            "maersk_authentication_rate_limited" => BrowserProfileStatus.Blocked,
+            "maersk_authentication_unauthorized" => BrowserProfileStatus.LoginRequired,
+            "maersk_authentication_verification_required" => BrowserProfileStatus.LoginRequired,
+            "maersk_authentication_service_error" => BrowserProfileStatus.Error,
+            _ => BrowserProfileStatus.Error
+        };
 
     private static RuntimeInput ParseRuntime(string? inputJson)
     {
