@@ -28,16 +28,20 @@ public sealed class AgentProviderResolver : IAgentProviderResolver
 
     public IAgentProvider Resolve(string providerCode, AgentExecutionStrategy? executionStrategy = null)
     {
+        // Native carrier adapters own authentication/session handling and structured
+        // extraction. Prefer them for providers that have one registered. This is
+        // especially important for Maersk: the generic Hermes runtime intentionally
+        // does not receive decrypted carrier credentials.
+        if (_providers.TryGetValue(providerCode, out var nativeProvider))
+        {
+            return nativeProvider;
+        }
+
         if (executionStrategy == AgentExecutionStrategy.Hermes)
         {
             return _fallback
                 ?? throw new InvalidOperationException(
                     "Hermes execution was requested by the extraction profile, but the Hermes provider is not registered.");
-        }
-
-        if (_providers.TryGetValue(providerCode, out var provider))
-        {
-            return provider;
         }
 
         return _fallback
