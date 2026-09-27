@@ -57,6 +57,8 @@ public sealed class MaerskLoginService
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            await CompleteAuthenticatedContinueAsync(page, cancellationToken);
+
             if (await IsAuthenticatedAsync(page))
                 return;
 
@@ -142,6 +144,8 @@ public sealed class MaerskLoginService
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                await CompleteAuthenticatedContinueAsync(page, cancellationToken);
+
                 if (await IsAuthenticatedAsync(page))
                     return;
 
@@ -197,6 +201,46 @@ public sealed class MaerskLoginService
         finally
         {
             network.Detach();
+        }
+    }
+
+    private static async Task CompleteAuthenticatedContinueAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        if (!page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        string bodyText;
+        try
+        {
+            bodyText = await page.Locator("body").InnerTextAsync();
+        }
+        catch (PlaywrightException)
+        {
+            return;
+        }
+
+        if (!bodyText.Contains("You are authenticated", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var clicked = await MaerskShadowDom.ClickByTextAsync(
+            page,
+            ["Continue"],
+            cancellationToken,
+            timeoutMs: 5_000);
+
+        if (!clicked)
+            return;
+
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await Task.Delay(250, cancellationToken);
         }
     }
 
