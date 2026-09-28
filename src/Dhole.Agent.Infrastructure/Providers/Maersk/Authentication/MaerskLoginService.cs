@@ -244,9 +244,14 @@ public sealed class MaerskLoginService
         }
 
         var clicked = await MaerskShadowDom.ClickByTextAsync(
-            page, ["Continue"], cancellationToken, timeoutMs: 2_000);
+            page,
+            ["Continue"],
+            cancellationToken,
+            timeoutMs: 2_000);
+
         attemptedClick |= clicked;
-        if (clicked && await WaitForHandoffAsync()) return;
+        if (clicked && await WaitForHandoffAsync())
+            return;
 
         clicked = await MaerskShadowDom.ClickFirstAsync(
             page,
@@ -257,40 +262,15 @@ public sealed class MaerskLoginService
             ],
             cancellationToken,
             timeoutMs: 4_000);
-        attemptedClick |= clicked;
-        if (clicked && await WaitForHandoffAsync()) return;
 
-        try
-        {
-            clicked = await page.EvaluateAsync<bool>("""() => {
-                const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                const visit = root => {
-                    for (const element of root.querySelectorAll('mc-button,button,[role="button"]')) {
-                        const label = normalize(element.innerText || element.textContent || element.getAttribute('aria-label'));
-                        if (label === 'continue' || label.includes('continue')) {
-                            const target = element.shadowRoot?.querySelector('button,[role="button"]') || element;
-                            target.click();
-                            return true;
-                        }
-                    }
-                    for (const element of root.querySelectorAll('*')) {
-                        if (element.shadowRoot && visit(element.shadowRoot)) return true;
-                    }
-                    return false;
-                };
-                return visit(document);
-            }""");
-            attemptedClick |= clicked;
-            if (clicked && await WaitForHandoffAsync()) return;
-        }
-        catch (PlaywrightException)
-        {
-            if (!page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
-                return;
-        }
+        attemptedClick |= clicked;
+        if (clicked && await WaitForHandoffAsync())
+            return;
 
         throw new MaerskAuthenticationException(
-            attemptedClick ? "maersk_authentication_callback_timeout" : "maersk_authentication_continue_not_clickable",
+            attemptedClick
+                ? "maersk_authentication_callback_timeout"
+                : "maersk_authentication_continue_not_clickable",
             attemptedClick
                 ? "Maersk confirmed the browser session is authenticated, but Continue did not complete the OIDC callback navigation."
                 : "Maersk confirmed the browser session is authenticated, but the Continue control could not be activated.");
