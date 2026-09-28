@@ -206,7 +206,7 @@ public sealed class MaerskLoginService
         }
     }
 
-    private static async Task CompleteAuthenticatedContinueAsync(
+    internal static async Task CompleteAuthenticatedContinueAsync(
         IPage page,
         CancellationToken cancellationToken)
     {
@@ -230,7 +230,7 @@ public sealed class MaerskLoginService
 
         async Task<bool> WaitForHandoffAsync()
         {
-            for (var attempt = 0; attempt < 40; attempt++)
+            for (var attempt = 0; attempt < 80; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -257,8 +257,12 @@ public sealed class MaerskLoginService
             page,
             [
                 "mc-button:has-text('Continue')",
+                "mc-button[label='Continue']",
+                "mc-button[aria-label='Continue']",
                 "button:has-text('Continue')",
-                "[role='button']:has-text('Continue')"
+                "a:has-text('Continue')",
+                "[role='button']:has-text('Continue')",
+                "[role='link']:has-text('Continue')"
             ],
             cancellationToken,
             timeoutMs: 4_000);
@@ -389,8 +393,10 @@ public sealed class MaerskLoginService
     {
         var currentUrl = page.Url;
 
+        // The OIDC callback is an intermediate state. Returning authenticated here
+        // can interrupt the callback before Maersk persists the browser session.
         if (MatchesConfiguredUrl(currentUrl, authenticationSuccessUrl))
-            return true;
+            return false;
 
         var onAccountsLogin =
             currentUrl.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase)

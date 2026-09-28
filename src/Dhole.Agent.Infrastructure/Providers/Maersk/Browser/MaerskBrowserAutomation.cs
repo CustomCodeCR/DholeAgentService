@@ -5,7 +5,12 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 
 public sealed class MaerskBrowserAutomation
 {
-    public async Task FillSearchAsync(IPage page, MaerskSearchInput input, CancellationToken cancellationToken, string? searchUrl = null)
+    public async Task FillSearchAsync(
+        IPage page,
+        MaerskSearchInput input,
+        CancellationToken cancellationToken,
+        string? searchUrl = null,
+        bool navigateToSearchUrl = true)
     {
         if (string.IsNullOrWhiteSpace(searchUrl))
             throw new InvalidOperationException(
@@ -17,15 +22,18 @@ public sealed class MaerskBrowserAutomation
             throw new InvalidOperationException(
                 $"The selected extraction profile contains an invalid Maersk search URL: '{targetUrl}'.");
 
-        await page.GotoAsync(
-            targetUrl,
-            new PageGotoOptions
-            {
-                WaitUntil = WaitUntilState.DOMContentLoaded,
-                Timeout = 60_000
-            });
+        if (navigateToSearchUrl)
+        {
+            await page.GotoAsync(
+                targetUrl,
+                new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 60_000
+                });
 
-        cancellationToken.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
 
         await FillFirstAsync(
             page,

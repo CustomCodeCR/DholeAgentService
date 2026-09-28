@@ -3,6 +3,7 @@ using System.Text.Json;
 using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Agents;
 using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Infrastructure.Browser;
@@ -113,7 +114,11 @@ public sealed class MaerskAgentProvider(
                 plan.LoginUrl,
                 plan.AuthenticationSuccessUrl);
 
-            await NavigateToSearchStartAsync(page, plan.SearchUrl, cancellationToken);
+            await NavigateToSearchStartAsync(
+                page,
+                plan.SearchUrl,
+                plan.AuthenticationSuccessUrl,
+                cancellationToken);
 
             if (browserProfile is not null)
             {
@@ -167,6 +172,7 @@ public sealed class MaerskAgentProvider(
                     page,
                     search.Input,
                     plan.SearchUrl,
+                    plan.AuthenticationSuccessUrl,
                     cancellationToken);
 
                 if (captured.Status is < 200 or >= 300)
@@ -241,6 +247,7 @@ public sealed class MaerskAgentProvider(
             {
                 provider = ProviderCode,
                 providerName = "Maersk",
+                cargoReadyDate = plan.Searches![0].Input.CargoReadyDate,
                 extractionProfileId = context.Execution.ExtractionProfileId,
                 strategy = "NativeBrowserNetworkCapture",
                 action = context.Definition.ActionType.ToString(),
@@ -273,9 +280,17 @@ public sealed class MaerskAgentProvider(
         Microsoft.Playwright.IPage page,
         MaerskSearchInput input,
         string? configuredSearchUrl,
+        string? authenticationSuccessUrl,
         CancellationToken cancellationToken)
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
+
+        await NavigateToSearchStartAsync(
+            page,
+            searchUrl,
+            authenticationSuccessUrl,
+            cancellationToken);
+
         var captureTask = interceptor.WaitForOfferAsync(
             page,
             TimeSpan.FromSeconds(90),
@@ -285,7 +300,8 @@ public sealed class MaerskAgentProvider(
             page,
             input,
             cancellationToken,
-            searchUrl);
+            searchUrl,
+            navigateToSearchUrl: false);
 
         return await captureTask;
     }
@@ -381,13 +397,7 @@ public sealed class MaerskAgentProvider(
             }
 
             var runtime = ParseRuntime(runtimeInputJson);
-            if (!runtime.CargoReadyDate.HasValue)
-            {
-                return PlanResolution.Fail(
-                    "missing_cargo_ready_date",
-                    "cargoReadyDate is required for Maersk searches.");
-            }
-
+            var cargoReadyDate = MaerskExecutionDefaults.GetCargoReadyDate();
             var commodity = commodities.Normalize(runtime.Commodity ?? "General Cargo");
             var searches = new List<PlannedSearch>();
             var index = 1;
@@ -427,7 +437,7 @@ public sealed class MaerskAgentProvider(
                         Math.Max(1, quantity),
                         weightKg.Value,
                         commodity,
-                        runtime.CargoReadyDate.Value);
+                        cargoReadyDate);
 
                     searches.Add(new PlannedSearch(
                         index++,
@@ -468,7 +478,8 @@ public sealed class MaerskAgentProvider(
                 Pol = locations.Normalize(input.Pol),
                 Pod = locations.Normalize(input.Pod),
                 ContainerType = equipment.Normalize(input.ContainerType),
-                Commodity = commodities.Normalize(input.Commodity)
+                Commodity = commodities.Normalize(input.Commodity),
+                CargoReadyDate = MaerskExecutionDefaults.GetCargoReadyDate()
             };
 
             var route = JsonSerializer.SerializeToElement(
@@ -534,30 +545,98 @@ public sealed class MaerskAgentProvider(
         return values;
     }
 
-    private static async Task NavigateToSearchStartAsync(
+    private async Task NavigateToSearchStartAsync(
         Microsoft.Playwright.IPage page,
         string? configuredSearchUrl,
+        string? authenticationSuccessUrl,
         CancellationToken cancellationToken)
     {
         var targetUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
 
-        await page.GotoAsync(
-            targetUrl,
-            new Microsoft.Playwright.PageGotoOptions
-            {
-                WaitUntil = Microsoft.Playwright.WaitUntilState.DOMContentLoaded,
-                Timeout = 60_000
-            });
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase)
-            || page.Url.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase))
+        for (var navigationAttempt = 0; navigationAttempt < 3; navigationAttempt++)
         {
-            throw new MaerskAuthenticationException(
-                "maersk_post_auth_navigation_failed",
-                $"Maersk authentication did not persist when navigating to the configured extraction URL. URL='{SanitizeBrowserUrl(page.Url)}'.");
+            await page.GotoAsync(
+                targetUrl,
+                new Microsoft.Playwright.PageGotoOptions
+                {
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.DOMContentLoaded,
+                    Timeout = 60_000
+                });
+
+            var stableTargetPolls = 0;
+
+            for (var poll = 0; poll < 160; poll++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var currentUrl = page.Url;
+
+                // The callback must be allowed to finish. Navigating away from it
+                // too early interrupts Maersk before it persists the authenticated
+                // browser session.
+                if (MatchesBrowserUrl(currentUrl, authenticationSuccessUrl))
+                {
+                    stableTargetPolls = 0;
+                    await Task.Delay(250, cancellationToken);
+                    continue;
+                }
+
+                if (IsAuthenticationPage(currentUrl))
+                {
+                    stableTargetPolls = 0;
+                    await MaerskLoginService.CompleteAuthenticatedContinueAsync(
+                        page,
+                        cancellationToken);
+                    await Task.Delay(250, cancellationToken);
+                    continue;
+                }
+
+                if (MatchesBrowserUrl(currentUrl, targetUrl))
+                {
+                    stableTargetPolls++;
+
+                    // Require five continuous seconds on /book/. This prevents the
+                    // race where DOMContentLoaded fires on /book/ immediately before
+                    // Maersk redirects the browser back to Global Accounts.
+                    if (stableTargetPolls >= 20)
+                        return;
+                }
+                else
+                {
+                    stableTargetPolls = 0;
+                }
+
+                await Task.Delay(250, cancellationToken);
+            }
         }
+
+        var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+        throw new MaerskAuthenticationException(
+            "maersk_post_auth_navigation_failed",
+            $"Maersk did not complete the configured authentication handoff to '{targetUrl}'. " +
+            $"Final URL='{SanitizeBrowserUrl(page.Url)}'. ShadowDOM diagnostics={diagnostics}");
+    }
+
+    private static bool IsAuthenticationPage(string value)
+        => value.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase)
+           || value.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesBrowserUrl(string currentUrl, string? configuredUrl)
+    {
+        if (string.IsNullOrWhiteSpace(configuredUrl)
+            || !Uri.TryCreate(configuredUrl, UriKind.Absolute, out var expected)
+            || !Uri.TryCreate(currentUrl, UriKind.Absolute, out var current))
+            return false;
+
+        if (!current.Host.Equals(expected.Host, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var expectedPath = expected.AbsolutePath.TrimEnd('/');
+        var currentPath = current.AbsolutePath.TrimEnd('/');
+
+        return currentPath.Equals(expectedPath, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(expectedPath)
+                && currentPath.StartsWith(expectedPath + "/", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string SanitizeBrowserUrl(string value)
@@ -597,25 +676,17 @@ public sealed class MaerskAgentProvider(
     private static RuntimeInput ParseRuntime(string? inputJson)
     {
         if (string.IsNullOrWhiteSpace(inputJson))
-            return new RuntimeInput(null, null);
+            return new RuntimeInput(null);
 
         try
         {
             using var document = JsonDocument.Parse(inputJson);
-            var root = document.RootElement;
-            DateOnly? cargoReadyDate = null;
-
-            var rawDate = TryGetString(root, "cargoReadyDate");
-            if (DateOnly.TryParse(rawDate, out var parsedDate))
-                cargoReadyDate = parsedDate;
-
             return new RuntimeInput(
-                cargoReadyDate,
-                TryGetString(root, "commodity"));
+                TryGetString(document.RootElement, "commodity"));
         }
         catch (JsonException)
         {
-            return new RuntimeInput(null, null);
+            return new RuntimeInput(null);
         }
     }
 
@@ -722,7 +793,6 @@ public sealed class MaerskAgentProvider(
     }
 
     private sealed record RuntimeInput(
-        DateOnly? CargoReadyDate,
         string? Commodity);
 
     private sealed record PlannedSearch(
