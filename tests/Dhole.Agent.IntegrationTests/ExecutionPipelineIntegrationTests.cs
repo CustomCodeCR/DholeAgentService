@@ -49,6 +49,7 @@ public sealed class ExecutionPipelineIntegrationTests
             null,
             "https://www.maersk.com",
             null,
+            null,
             "https://www.maersk.com",
             "Extract rates for {{providerCode}} from {{searchUrl}}.",
             AgentExecutionStrategy.BrowserNetworkCapture,
