@@ -3,6 +3,7 @@ using CustomCodeFramework.Persistence.Abstractions;
 using CustomCodeFramework.Redis.Abstractions;
 using CustomCodeFramework.Workers.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
+using Dhole.Agent.Application.Agents;
 using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Workers.Scheduling;
@@ -72,6 +73,11 @@ public sealed class AgentScheduleDispatcherWorker(
 
             if(effectiveDue.Value>now)continue;
 
+            var provider=await GetProviderAsync(schedule.ProviderId,cancellationToken);
+            var executionInputJson=provider.Code.Equals("MAERSK",StringComparison.OrdinalIgnoreCase)
+                ? MaerskExecutionDefaults.NormalizeInputJson(schedule.InputJson)
+                : schedule.InputJson;
+
             var execution=AgentExecution.Create(
                 schedule.AgentDefinitionId,
                 schedule.ProviderId,
@@ -79,7 +85,7 @@ public sealed class AgentScheduleDispatcherWorker(
                 schedule.CredentialId,
                 AgentExecutionType.Scheduled,
                 0,
-                schedule.InputJson,
+                executionInputJson,
                 schedule.MaxRetries+1,
                 Guid.NewGuid().ToString("N"));
 
@@ -92,12 +98,14 @@ public sealed class AgentScheduleDispatcherWorker(
                 var captures=await endpointCaptures.GetByProfileAsync(profile.Id,cancellationToken);
                 var profileSnapshot=snapshotBuilder.Build(
                     profile,
-                    await GetProviderAsync(schedule.ProviderId,cancellationToken),
+                    provider,
                     routes,
                     equipment,
                     fields,
                     captures,
-                    TryGetCargoReadyDate(schedule.InputJson),
+                    provider.Code.Equals("MAERSK",StringComparison.OrdinalIgnoreCase)
+                        ? MaerskExecutionDefaults.GetCargoReadyDate()
+                        : TryGetCargoReadyDate(executionInputJson),
                     execution.Id);
 
                 execution.AttachProfileSnapshot(

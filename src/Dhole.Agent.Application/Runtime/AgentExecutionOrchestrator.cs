@@ -2,6 +2,7 @@ using System.Text.Json;
 using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Agents;
 using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
 using Microsoft.Extensions.Logging;
@@ -85,7 +86,9 @@ public sealed class AgentExecutionOrchestrator(
                     equipment,
                     fields,
                     captures,
-                    TryGetCargoReadyDate(execution.InputJson),
+                    provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
+                        ? MaerskExecutionDefaults.GetCargoReadyDate()
+                        : TryGetCargoReadyDate(execution.InputJson),
                     execution.Id);
 
                 execution.AttachProfileSnapshot(

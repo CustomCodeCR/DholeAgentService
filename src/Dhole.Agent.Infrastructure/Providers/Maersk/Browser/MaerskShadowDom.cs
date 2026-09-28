@@ -90,7 +90,7 @@ internal static class MaerskShadowDom
                     if (nested) return nested;
                 }
 
-                for (const element of root.querySelectorAll("button,input[type='submit'],mc-button")) {
+                for (const element of root.querySelectorAll("button,a,input[type='submit'],mc-button,[role='button'],[role='link']")) {
                     if (!isVisible(element)) continue;
                     const label = labelOf(element);
                     if (wanted.some(value => label === value || label.includes(value))) return element;
