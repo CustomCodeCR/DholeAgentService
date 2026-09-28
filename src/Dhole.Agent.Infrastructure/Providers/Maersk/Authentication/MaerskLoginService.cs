@@ -228,10 +228,59 @@ public sealed class MaerskLoginService
             page,
             ["Continue"],
             cancellationToken,
-            timeoutMs: 5_000);
+            timeoutMs: 2_000);
 
         if (!clicked)
-            return;
+        {
+            // Global Accounts renders Continue as an MDS web component. In some
+            // versions its visible label is projected through a slot, so the generic
+            // text walker cannot reliably resolve the clickable control.
+            clicked = await MaerskShadowDom.ClickFirstAsync(
+                page,
+                [
+                    "mc-button:has-text('Continue')",
+                    "button:has-text('Continue')",
+                    "[role='button']:has-text('Continue')"
+                ],
+                cancellationToken,
+                timeoutMs: 5_000);
+        }
+
+        if (!clicked)
+        {
+            // Last-resort DOM action for the authenticated hand-off only. This does
+            // not bypass authentication; the page has already confirmed the session.
+            try
+            {
+                clicked = await page.EvaluateAsync<bool>("""() => {
+                    const normalize = value => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                    const visit = root => {
+                        for (const element of root.querySelectorAll('mc-button,button,[role="button"]')) {
+                            const label = normalize(element.innerText || element.textContent || element.getAttribute('aria-label'));
+                            if (label === 'continue' || label.includes('continue')) {
+                                const target = element.shadowRoot?.querySelector('button,[role="button"]') || element;
+                                target.click();
+                                return true;
+                            }
+                        }
+                        for (const element of root.querySelectorAll('*')) {
+                            if (element.shadowRoot && visit(element.shadowRoot)) return true;
+                        }
+                        return false;
+                    };
+                    return visit(document);
+                }""");
+            }
+            catch (PlaywrightException)
+            {
+                clicked = false;
+            }
+        }
+
+        if (!clicked)
+            throw new MaerskAuthenticationException(
+                "maersk_authentication_continue_not_clickable",
+                "Maersk confirmed the browser session is authenticated, but the Continue control could not be activated.");
 
         for (var attempt = 0; attempt < 40; attempt++)
         {
