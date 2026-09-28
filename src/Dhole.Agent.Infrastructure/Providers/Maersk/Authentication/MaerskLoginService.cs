@@ -35,7 +35,9 @@ public sealed class MaerskLoginService
         IPage page,
         string username,
         string password,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? configuredLoginUrl = null,
+        string? authenticationSuccessUrl = null)
     {
         if (string.IsNullOrWhiteSpace(username))
             throw new ArgumentException("Maersk username is required.", nameof(username));
@@ -48,7 +50,7 @@ public sealed class MaerskLoginService
         try
         {
             await page.GotoAsync(
-                LoginUrl,
+                ResolveLoginUrl(configuredLoginUrl),
                 new PageGotoOptions
                 {
                     WaitUntil = WaitUntilState.DOMContentLoaded,
@@ -59,10 +61,10 @@ public sealed class MaerskLoginService
 
             await CompleteAuthenticatedContinueAsync(page, cancellationToken);
 
-            if (await IsAuthenticatedAsync(page))
+            if (await IsAuthenticatedAsync(page, authenticationSuccessUrl))
                 return;
 
-            if (!await WaitForLoginUiAsync(page, cancellationToken))
+            if (!await WaitForLoginUiAsync(page, authenticationSuccessUrl, cancellationToken))
                 throw await CreateLoginUiExceptionAsync(
                     page,
                     "rendered login form",
@@ -146,7 +148,7 @@ public sealed class MaerskLoginService
 
                 await CompleteAuthenticatedContinueAsync(page, cancellationToken);
 
-                if (await IsAuthenticatedAsync(page))
+                if (await IsAuthenticatedAsync(page, authenticationSuccessUrl))
                     return;
 
                 // Do not abort on the first 401/403 emitted by the Global Accounts SPA.
@@ -224,73 +226,74 @@ public sealed class MaerskLoginService
         if (!bodyText.Contains("You are authenticated", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var attemptedClick = false;
+
+        async Task<bool> WaitForHandoffAsync()
+        {
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                await Task.Delay(250, cancellationToken);
+            }
+
+            return false;
+        }
+
         var clicked = await MaerskShadowDom.ClickByTextAsync(
+            page, ["Continue"], cancellationToken, timeoutMs: 2_000);
+        attemptedClick |= clicked;
+        if (clicked && await WaitForHandoffAsync()) return;
+
+        clicked = await MaerskShadowDom.ClickFirstAsync(
             page,
-            ["Continue"],
+            [
+                "mc-button:has-text('Continue')",
+                "button:has-text('Continue')",
+                "[role='button']:has-text('Continue')"
+            ],
             cancellationToken,
-            timeoutMs: 2_000);
+            timeoutMs: 4_000);
+        attemptedClick |= clicked;
+        if (clicked && await WaitForHandoffAsync()) return;
 
-        if (!clicked)
+        try
         {
-            // Global Accounts renders Continue as an MDS web component. In some
-            // versions its visible label is projected through a slot, so the generic
-            // text walker cannot reliably resolve the clickable control.
-            clicked = await MaerskShadowDom.ClickFirstAsync(
-                page,
-                [
-                    "mc-button:has-text('Continue')",
-                    "button:has-text('Continue')",
-                    "[role='button']:has-text('Continue')"
-                ],
-                cancellationToken,
-                timeoutMs: 5_000);
-        }
-
-        if (!clicked)
-        {
-            // Last-resort DOM action for the authenticated hand-off only. This does
-            // not bypass authentication; the page has already confirmed the session.
-            try
-            {
-                clicked = await page.EvaluateAsync<bool>("""() => {
-                    const normalize = value => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                    const visit = root => {
-                        for (const element of root.querySelectorAll('mc-button,button,[role="button"]')) {
-                            const label = normalize(element.innerText || element.textContent || element.getAttribute('aria-label'));
-                            if (label === 'continue' || label.includes('continue')) {
-                                const target = element.shadowRoot?.querySelector('button,[role="button"]') || element;
-                                target.click();
-                                return true;
-                            }
+            clicked = await page.EvaluateAsync<bool>("""() => {
+                const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const visit = root => {
+                    for (const element of root.querySelectorAll('mc-button,button,[role="button"]')) {
+                        const label = normalize(element.innerText || element.textContent || element.getAttribute('aria-label'));
+                        if (label === 'continue' || label.includes('continue')) {
+                            const target = element.shadowRoot?.querySelector('button,[role="button"]') || element;
+                            target.click();
+                            return true;
                         }
-                        for (const element of root.querySelectorAll('*')) {
-                            if (element.shadowRoot && visit(element.shadowRoot)) return true;
-                        }
-                        return false;
-                    };
-                    return visit(document);
-                }""");
-            }
-            catch (PlaywrightException)
-            {
-                clicked = false;
-            }
+                    }
+                    for (const element of root.querySelectorAll('*')) {
+                        if (element.shadowRoot && visit(element.shadowRoot)) return true;
+                    }
+                    return false;
+                };
+                return visit(document);
+            }""");
+            attemptedClick |= clicked;
+            if (clicked && await WaitForHandoffAsync()) return;
         }
-
-        if (!clicked)
-            throw new MaerskAuthenticationException(
-                "maersk_authentication_continue_not_clickable",
-                "Maersk confirmed the browser session is authenticated, but the Continue control could not be activated.");
-
-        for (var attempt = 0; attempt < 40; attempt++)
+        catch (PlaywrightException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             if (!page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
                 return;
-
-            await Task.Delay(250, cancellationToken);
         }
+
+        throw new MaerskAuthenticationException(
+            attemptedClick ? "maersk_authentication_callback_timeout" : "maersk_authentication_continue_not_clickable",
+            attemptedClick
+                ? "Maersk confirmed the browser session is authenticated, but Continue did not complete the OIDC callback navigation."
+                : "Maersk confirmed the browser session is authenticated, but the Continue control could not be activated.");
     }
 
     private static async Task DismissCookieBannerAsync(
@@ -345,6 +348,7 @@ public sealed class MaerskLoginService
 
     private static async Task<bool> WaitForLoginUiAsync(
         IPage page,
+        string? authenticationSuccessUrl,
         CancellationToken cancellationToken)
     {
         for (var renderAttempt = 0; renderAttempt < 2; renderAttempt++)
@@ -353,7 +357,7 @@ public sealed class MaerskLoginService
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (await IsAuthenticatedAsync(page))
+                if (await IsAuthenticatedAsync(page, authenticationSuccessUrl))
                     return true;
 
                 if (await MaerskShadowDom.HasVisibleAsync(
@@ -399,9 +403,14 @@ public sealed class MaerskLoginService
             $"URL='{SanitizeUrl(page.Url)}'. ShadowDOM diagnostics={diagnostics}");
     }
 
-    private static async Task<bool> IsAuthenticatedAsync(IPage page)
+    private static async Task<bool> IsAuthenticatedAsync(
+        IPage page,
+        string? authenticationSuccessUrl)
     {
         var currentUrl = page.Url;
+
+        if (MatchesConfiguredUrl(currentUrl, authenticationSuccessUrl))
+            return true;
 
         var onAccountsLogin =
             currentUrl.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase)
@@ -432,6 +441,28 @@ public sealed class MaerskLoginService
         {
             return false;
         }
+    }
+
+    private static string ResolveLoginUrl(string? configuredLoginUrl)
+    {
+        if (Uri.TryCreate(configuredLoginUrl, UriKind.Absolute, out var configured)
+            && (configured.Scheme == Uri.UriSchemeHttp || configured.Scheme == Uri.UriSchemeHttps)
+            && configured.Host.EndsWith("maersk.com", StringComparison.OrdinalIgnoreCase))
+            return configured.ToString();
+
+        return LoginUrl;
+    }
+
+    private static bool MatchesConfiguredUrl(string currentUrl, string? configuredUrl)
+    {
+        if (string.IsNullOrWhiteSpace(configuredUrl)
+            || !Uri.TryCreate(configuredUrl, UriKind.Absolute, out var expected)
+            || !Uri.TryCreate(currentUrl, UriKind.Absolute, out var current))
+            return false;
+
+        return current.Scheme.Equals(expected.Scheme, StringComparison.OrdinalIgnoreCase)
+            && current.Host.Equals(expected.Host, StringComparison.OrdinalIgnoreCase)
+            && current.AbsolutePath.TrimEnd('/').Equals(expected.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SanitizeUrl(string value)

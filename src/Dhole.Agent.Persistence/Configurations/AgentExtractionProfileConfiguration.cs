@@ -16,6 +16,7 @@ internal sealed class AgentExtractionProfileConfiguration : EntityTypeConfigurat
         builder.Property(x => x.Description).HasMaxLength(2000);
         builder.Property(x => x.BaseUrl).HasMaxLength(1000);
         builder.Property(x => x.LoginUrl).HasMaxLength(1000);
+        builder.Property(x => x.AuthenticationSuccessUrl).HasMaxLength(1000);
         builder.Property(x => x.SearchUrl).HasMaxLength(1000);
         builder.Property(x => x.PromptTemplate).HasColumnType("text").IsRequired();
         builder.Property(x => x.ExecutionStrategy).HasConversion<string>().HasMaxLength(80).IsRequired();
