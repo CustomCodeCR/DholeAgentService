@@ -59,6 +59,7 @@ public sealed class GetAgentExtractionProfileByIdQueryHandler(IAgentExtractionPr
             profile.Description,
             profile.BaseUrl,
             profile.LoginUrl,
+            profile.AuthenticationSuccessUrl,
             profile.SearchUrl,
             profile.PromptTemplate,
             profile.ExecutionStrategy.ToString(),
