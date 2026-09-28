@@ -28,6 +28,7 @@ public sealed class AgentExecutionSnapshotBuilder(AgentPromptBuilder promptBuild
             profile.Name,
             profile.BaseUrl,
             profile.LoginUrl,
+            profile.AuthenticationSuccessUrl,
             profile.SearchUrl,
             profile.PromptTemplate,
             executionStrategy = profile.ExecutionStrategy.ToString(),

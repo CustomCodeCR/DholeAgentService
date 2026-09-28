@@ -109,7 +109,11 @@ public sealed class MaerskAgentProvider(
                 page,
                 credentialResult.Username!,
                 credentialResult.Password!,
-                cancellationToken);
+                cancellationToken,
+                plan.LoginUrl,
+                plan.AuthenticationSuccessUrl);
+
+            await NavigateToSearchStartAsync(page, plan.SearchUrl, cancellationToken);
 
             if (browserProfile is not null)
             {
@@ -438,7 +442,9 @@ public sealed class MaerskAgentProvider(
             return PlanResolution.Ok(
                 searches,
                 fieldKeys,
-                TryGetString(root, "searchUrl"));
+                TryGetString(root, "searchUrl"),
+                TryGetString(root, "loginUrl"),
+                TryGetString(root, "authenticationSuccessUrl"));
         }
         catch (JsonException ex)
         {
@@ -488,7 +494,9 @@ public sealed class MaerskAgentProvider(
                         input)
                 ],
                 [],
-                CurrentMaerskBookingUrl);
+                CurrentMaerskBookingUrl,
+                null,
+                null);
         }
         catch (Exception ex)
         {
@@ -526,6 +534,40 @@ public sealed class MaerskAgentProvider(
         return values;
     }
 
+    private static async Task NavigateToSearchStartAsync(
+        Microsoft.Playwright.IPage page,
+        string? configuredSearchUrl,
+        CancellationToken cancellationToken)
+    {
+        var targetUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
+
+        await page.GotoAsync(
+            targetUrl,
+            new Microsoft.Playwright.PageGotoOptions
+            {
+                WaitUntil = Microsoft.Playwright.WaitUntilState.DOMContentLoaded,
+                Timeout = 60_000
+            });
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (page.Url.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase)
+            || page.Url.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MaerskAuthenticationException(
+                "maersk_post_auth_navigation_failed",
+                $"Maersk authentication did not persist when navigating to the configured extraction URL. URL='{SanitizeBrowserUrl(page.Url)}'.");
+        }
+    }
+
+    private static string SanitizeBrowserUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            return value.Split('?', 2)[0];
+
+        return uri.GetLeftPart(UriPartial.Path);
+    }
+
     private static string ResolveBrowserSearchUrl(string? configuredSearchUrl)
     {
         if (!Uri.TryCreate(configuredSearchUrl, UriKind.Absolute, out var uri))
@@ -547,6 +589,7 @@ public sealed class MaerskAgentProvider(
             "maersk_authentication_rate_limited" => BrowserProfileStatus.Blocked,
             "maersk_authentication_unauthorized" => BrowserProfileStatus.LoginRequired,
             "maersk_authentication_verification_required" => BrowserProfileStatus.LoginRequired,
+            "maersk_post_auth_navigation_failed" => BrowserProfileStatus.LoginRequired,
             "maersk_authentication_service_error" => BrowserProfileStatus.Error,
             _ => BrowserProfileStatus.Error
         };
@@ -695,17 +738,21 @@ public sealed class MaerskAgentProvider(
         IReadOnlyList<PlannedSearch>? Searches,
         IReadOnlyCollection<string>? FieldKeys,
         string? SearchUrl,
+        string? LoginUrl,
+        string? AuthenticationSuccessUrl,
         string? ErrorCode,
         string? ErrorMessage)
     {
         public static PlanResolution Ok(
             IReadOnlyList<PlannedSearch> searches,
             IReadOnlyCollection<string> fieldKeys,
-            string? searchUrl)
-            => new(true, searches, fieldKeys, searchUrl, null, null);
+            string? searchUrl,
+            string? loginUrl,
+            string? authenticationSuccessUrl)
+            => new(true, searches, fieldKeys, searchUrl, loginUrl, authenticationSuccessUrl, null, null);
 
         public static PlanResolution Fail(string code, string message)
-            => new(false, null, null, null, code, message);
+            => new(false, null, null, null, null, null, code, message);
     }
 
     private sealed record CredentialResolution(

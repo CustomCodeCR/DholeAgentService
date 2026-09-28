@@ -15,6 +15,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
         string? description,
         string? baseUrl,
         string? loginUrl,
+        string? authenticationSuccessUrl,
         string? searchUrl,
         string promptTemplate,
         AgentExecutionStrategy executionStrategy,
@@ -27,6 +28,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
         Description = Optional(description);
         BaseUrl = Optional(baseUrl);
         LoginUrl = Optional(loginUrl);
+        AuthenticationSuccessUrl = Optional(authenticationSuccessUrl);
         SearchUrl = Optional(searchUrl);
         PromptTemplate = Required(promptTemplate);
         ExecutionStrategy = executionStrategy;
@@ -41,6 +43,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
     public string? Description { get; private set; }
     public string? BaseUrl { get; private set; }
     public string? LoginUrl { get; private set; }
+    public string? AuthenticationSuccessUrl { get; private set; }
     public string? SearchUrl { get; private set; }
     public string PromptTemplate { get; private set; } = string.Empty;
     public AgentExecutionStrategy ExecutionStrategy { get; private set; }
@@ -54,6 +57,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
         string? description,
         string? baseUrl,
         string? loginUrl,
+        string? authenticationSuccessUrl,
         string? searchUrl,
         string promptTemplate,
         AgentExecutionStrategy executionStrategy,
@@ -68,6 +72,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
             description,
             baseUrl,
             loginUrl,
+            authenticationSuccessUrl,
             searchUrl,
             promptTemplate,
             executionStrategy,
@@ -84,6 +89,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
         string? description,
         string? baseUrl,
         string? loginUrl,
+        string? authenticationSuccessUrl,
         string? searchUrl,
         string promptTemplate,
         AgentExecutionStrategy executionStrategy,
@@ -95,6 +101,7 @@ public sealed class AgentExtractionProfile : SoftDeletableAggregateRoot<Guid>
         Description = Optional(description);
         BaseUrl = Optional(baseUrl);
         LoginUrl = Optional(loginUrl);
+        AuthenticationSuccessUrl = Optional(authenticationSuccessUrl);
         SearchUrl = Optional(searchUrl);
         PromptTemplate = Required(promptTemplate);
         ExecutionStrategy = executionStrategy;
