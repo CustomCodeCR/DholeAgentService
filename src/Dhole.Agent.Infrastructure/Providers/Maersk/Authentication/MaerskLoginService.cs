@@ -678,7 +678,9 @@ public sealed class MaerskLoginService
                     " | ",
                     failures
                         .TakeLast(8)
-                        .Select(x => $"{x.Method} {x.Status} {x.Url}"));
+                        .Select(x => string.IsNullOrWhiteSpace(x.Detail)
+                            ? $"{x.Method} {x.Status} {x.Url}"
+                            : $"{x.Method} {x.Status} {x.Url} response='{x.Detail}'"));
 
             return new MaerskAuthenticationException(
                 code,
@@ -697,7 +699,7 @@ public sealed class MaerskLoginService
                || failure.Url.Contains("/oauth", StringComparison.OrdinalIgnoreCase)
                || failure.Url.Contains("/token", StringComparison.OrdinalIgnoreCase);
 
-        private void OnResponse(object? sender, IResponse response)
+        private async void OnResponse(object? sender, IResponse response)
         {
             if (response.Status < 400)
                 return;
@@ -706,18 +708,43 @@ public sealed class MaerskLoginService
                 || !uri.Host.EndsWith("maersk.com", StringComparison.OrdinalIgnoreCase))
                 return;
 
+            var method = response.Request.Method;
+            var url = uri.GetLeftPart(UriPartial.Path);
+            string? detail = null;
+
+            if (IsAuthenticationEndpoint(new HttpFailure(method, response.Status, url, null)))
+            {
+                try
+                {
+                    detail = SanitizeAuthenticationFailureBody(await response.TextAsync());
+                }
+                catch (PlaywrightException)
+                {
+                    // Response body may no longer be available after navigation.
+                }
+            }
+
             var failure = new HttpFailure(
-                response.Request.Method,
+                method,
                 response.Status,
-                uri.GetLeftPart(UriPartial.Path));
+                url,
+                detail);
 
             lock (_sync)
             {
-                if (_failures.Any(x =>
-                        x.Method == failure.Method
-                        && x.Status == failure.Status
-                        && x.Url == failure.Url))
+                var existingIndex = _failures.FindIndex(x =>
+                    x.Method == failure.Method
+                    && x.Status == failure.Status
+                    && x.Url == failure.Url);
+
+                if (existingIndex >= 0)
+                {
+                    if (string.IsNullOrWhiteSpace(_failures[existingIndex].Detail)
+                        && !string.IsNullOrWhiteSpace(failure.Detail))
+                        _failures[existingIndex] = failure;
+
                     return;
+                }
 
                 _failures.Add(failure);
 
@@ -726,10 +753,60 @@ public sealed class MaerskLoginService
             }
         }
 
+        private static string? SanitizeAuthenticationFailureBody(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+                return null;
+
+            var text = body
+                .Replace("\r", " ", StringComparison.Ordinal)
+                .Replace("\n", " ", StringComparison.Ordinal);
+
+            try
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(body);
+                var root = document.RootElement;
+                var safe = new List<string>();
+
+                foreach (var key in new[] { "error", "error_description", "message", "reason" })
+                {
+                    if (!root.TryGetProperty(key, out var value))
+                        continue;
+
+                    var item = value.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? value.GetString()
+                        : value.ToString();
+
+                    if (!string.IsNullOrWhiteSpace(item))
+                        safe.Add($"{key}={item}");
+                }
+
+                if (safe.Count > 0)
+                    text = string.Join("; ", safe);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // Keep a short plain-text description below.
+            }
+
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"(?i)(access_token|refresh_token|id_token|authorization|password|code)s*[:=]s*[""']?[^,""'s}]+",
+                "$1=[redacted]");
+
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"s+",
+                " ").Trim();
+
+            return text.Length <= 500 ? text : text[..500];
+        }
+
         private sealed record HttpFailure(
             string Method,
             int Status,
-            string Url);
+            string Url,
+            string? Detail);
     }
 }
 
