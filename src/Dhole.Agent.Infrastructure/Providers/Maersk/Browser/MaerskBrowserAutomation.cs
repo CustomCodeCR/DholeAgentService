@@ -51,7 +51,11 @@ public sealed class MaerskBrowserAutomation
             input.Pol,
             cancellationToken);
 
-        await SelectSuggestionAsync(page, cancellationToken);
+        await SelectSuggestionAsync(
+            page,
+            cancellationToken,
+            [input.Pol],
+            exactOnly: false);
 
         await FillFirstAsync(
             page,
@@ -69,7 +73,11 @@ public sealed class MaerskBrowserAutomation
             input.Pod,
             cancellationToken);
 
-        await SelectSuggestionAsync(page, cancellationToken);
+        await SelectSuggestionAsync(
+            page,
+            cancellationToken,
+            [input.Pod],
+            exactOnly: false);
 
         await FillFirstAsync(
             page,
@@ -84,7 +92,11 @@ public sealed class MaerskBrowserAutomation
             cancellationToken,
             required: false);
 
-        await SelectSuggestionAsync(page, cancellationToken);
+        await SelectSuggestionAsync(
+            page,
+            cancellationToken,
+            [input.Commodity],
+            exactOnly: false);
 
         var date = input.CargoReadyDate.ToString("dd MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
         await FillFirstAsync(
@@ -115,38 +127,72 @@ public sealed class MaerskBrowserAutomation
             cancellationToken,
             timeoutMs: 2_000);
 
+        var equipmentInputSelectors = new[]
+        {
+            "input[name='containerSelect']",
+            "input[placeholder*='container type and size' i]",
+            "mc-c-container-select input[name='containerSelect']",
+            "mc-c-container-selection-input input[name='containerSelect']"
+        };
+
         if (!equipmentSelected)
         {
+            var equipmentQuery = GetEquipmentSearchTerm(input.ContainerType);
             var equipmentFilled = await MaerskShadowDom.FillAsync(
                 page,
-                [
-                    "input[name='containerSelect']",
-                    "input[placeholder*='container type and size' i]",
-                    "mc-c-container-select input[name='containerSelect']",
-                    "mc-c-container-selection-input input[name='containerSelect']"
-                ],
-                input.ContainerType,
+                equipmentInputSelectors,
+                equipmentQuery,
                 cancellationToken,
                 timeoutMs: 5_000);
 
-            if (equipmentFilled)
-                await SelectSuggestionAsync(page, cancellationToken);
+            var equipmentChosen = equipmentFilled
+                && await SelectSuggestionAsync(
+                    page,
+                    cancellationToken,
+                    GetEquipmentAliases(input.ContainerType),
+                    exactOnly: false,
+                    allowFirstFallback: false);
+
+            if (!equipmentChosen)
+            {
+                var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                throw new InvalidOperationException(
+                    $"Maersk container type '{input.ContainerType}' could not be selected from the booking options. " +
+                    $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+            }
         }
 
+        var quantitySelectors = new[]
+        {
+            "input[name='containers']",
+            "input[placeholder*='number of containers' i]",
+            "mc-c-container-select input[name='containers']",
+            "mc-c-container-selection-input input[name='containers']"
+        };
+
+        var quantityText = input.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var quantityFilled = await MaerskShadowDom.FillAsync(
             page,
-            [
-                "input[name='containers']",
-                "input[placeholder*='number of containers' i]",
-                "mc-c-container-select input[name='containers']",
-                "mc-c-container-selection-input input[name='containers']"
-            ],
-            input.Quantity.ToString(),
+            quantitySelectors,
+            quantityText,
             cancellationToken,
             timeoutMs: 3_000);
 
-        if (quantityFilled)
-            await SelectSuggestionAsync(page, cancellationToken);
+        var quantityChosen = quantityFilled
+            && await SelectSuggestionAsync(
+                page,
+                cancellationToken,
+                [quantityText],
+                exactOnly: true,
+                allowFirstFallback: false);
+
+        if (!quantityChosen)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk container quantity '{quantityText}' could not be selected from the booking options. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
 
         // In the current Maersk booking UI the cargo-weight input remains disabled
         // until container type/size and quantity have been selected.
@@ -216,7 +262,12 @@ public sealed class MaerskBrowserAutomation
         }
     }
 
-    private static async Task SelectSuggestionAsync(IPage page, CancellationToken cancellationToken)
+    private static async Task<bool> SelectSuggestionAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? expectedValues = null,
+        bool exactOnly = false,
+        bool allowFirstFallback = true)
     {
         // Maersk displays an informational coachmark over the location suggestions
         // on fresh/updated booking sessions. It is not part of the search flow and
@@ -235,22 +286,82 @@ public sealed class MaerskBrowserAutomation
             "[data-testid*='suggestion' i]"
         };
 
-        // Prefer a normal user-like click. If Maersk's informational overlay is
-        // still transitioning, force-click only the already-visible suggestion.
+        if (expectedValues is { Count: > 0 })
+        {
+            var matched = await MaerskShadowDom.ClickVisibleOptionMatchingAsync(
+                page,
+                selectors,
+                expectedValues,
+                cancellationToken,
+                timeoutMs: 2_500,
+                exactOnly: exactOnly);
+
+            if (matched)
+                return true;
+        }
+
+        if (!allowFirstFallback)
+            return false;
+
+        // Generic typeaheads such as ports/commodity can still fall back to the
+        // first visible result if Maersk renders a descriptive label that differs
+        // from the typed search value.
         var selected = await MaerskShadowDom.ClickFirstAsync(
             page,
             selectors,
             cancellationToken,
             timeoutMs: 1_500);
 
-        if (!selected)
-        {
-            await MaerskShadowDom.ClickFirstAsync(
-                page,
-                selectors,
-                cancellationToken,
-                timeoutMs: 2_000,
-                force: true);
-        }
+        if (selected)
+            return true;
+
+        return await MaerskShadowDom.ClickFirstAsync(
+            page,
+            selectors,
+            cancellationToken,
+            timeoutMs: 2_000,
+            force: true);
     }
+
+    private static string GetEquipmentSearchTerm(string containerType)
+        => containerType.Trim().ToUpperInvariant() switch
+        {
+            "40HC" => "40",
+            "40STD" => "40",
+            "20STD" => "20",
+            _ => containerType
+        };
+
+    private static string[] GetEquipmentAliases(string containerType)
+        => containerType.Trim().ToUpperInvariant() switch
+        {
+            "40HC" =>
+            [
+                "40HC",
+                "40 HIGH CUBE",
+                "40' HIGH CUBE",
+                "40FT HIGH CUBE",
+                "40 FOOT HIGH CUBE",
+                "40 HIGH CUBE DRY"
+            ],
+            "40STD" =>
+            [
+                "40STD",
+                "40 STANDARD",
+                "40' STANDARD",
+                "40 DRY",
+                "40' DRY",
+                "40FT DRY"
+            ],
+            "20STD" =>
+            [
+                "20STD",
+                "20 STANDARD",
+                "20' STANDARD",
+                "20 DRY",
+                "20' DRY",
+                "20FT DRY"
+            ],
+            _ => [containerType]
+        };
 }
