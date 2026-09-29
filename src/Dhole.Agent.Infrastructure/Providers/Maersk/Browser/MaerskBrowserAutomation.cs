@@ -38,6 +38,9 @@ public sealed class MaerskBrowserAutomation
         await FillFirstAsync(
             page,
             [
+                "#mc-input-origin",
+                "input#mc-input-origin",
+                "mc-c-origin-destination #mc-input-origin",
                 "input[name*='origin' i]",
                 "input[placeholder*='origin' i]",
                 "input[aria-label*='origin' i]",
@@ -53,6 +56,9 @@ public sealed class MaerskBrowserAutomation
         await FillFirstAsync(
             page,
             [
+                "#mc-input-destination",
+                "input#mc-input-destination",
+                "mc-c-origin-destination #mc-input-destination",
                 "input[name*='destination' i]",
                 "input[placeholder*='destination' i]",
                 "input[aria-label*='destination' i]",
@@ -67,7 +73,14 @@ public sealed class MaerskBrowserAutomation
 
         await FillFirstAsync(
             page,
-            ["input[name*='weight' i]", "input[aria-label*='weight' i]"],
+            [
+                "#mc-input-weight",
+                "input#mc-input-weight",
+                "input[name='weight']",
+                "input[name*='weight' i]",
+                "input[placeholder*='cargo weight' i]",
+                "input[aria-label*='weight' i]"
+            ],
             ["weight"],
             input.WeightKg.ToString(System.Globalization.CultureInfo.InvariantCulture),
             cancellationToken,
@@ -75,22 +88,37 @@ public sealed class MaerskBrowserAutomation
 
         await FillFirstAsync(
             page,
-            ["input[name*='commodity' i]", "input[aria-label*='commodity' i]"],
+            [
+                "mc-c-commodity input[placeholder*='minimum 2 characters' i]",
+                "mc-c-commodity input[type='text']",
+                "input[name*='commodity' i]",
+                "input[aria-label*='commodity' i]"
+            ],
             ["commodity"],
             input.Commodity,
             cancellationToken,
             required: false);
 
-        var date = input.CargoReadyDate.ToString("yyyy-MM-dd");
+        await SelectSuggestionAsync(page, cancellationToken);
+
+        var date = input.CargoReadyDate.ToString("dd MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
         await FillFirstAsync(
             page,
-            ["input[type='date']", "input[name*='date' i]", "input[aria-label*='date' i]"],
+            [
+                "#mc-input-earliestDepartureDatePicker",
+                "input#mc-input-earliestDepartureDatePicker",
+                "input[name='earliestDepartureDatePicker']",
+                "input[type='date']",
+                "input[name*='date' i]",
+                "input[placeholder*='DD MMM YYYY' i]",
+                "input[aria-label*='date' i]"
+            ],
             ["date", "cargo ready"],
             date,
             cancellationToken,
             required: false);
 
-        await MaerskShadowDom.SelectOptionByLabelAsync(
+        var equipmentSelected = await MaerskShadowDom.SelectOptionByLabelAsync(
             page,
             [
                 "select[name*='equipment' i]",
@@ -100,15 +128,40 @@ public sealed class MaerskBrowserAutomation
             ],
             input.ContainerType,
             cancellationToken,
-            timeoutMs: 4_000);
+            timeoutMs: 2_000);
 
-        await FillFirstAsync(
+        if (!equipmentSelected)
+        {
+            var equipmentFilled = await MaerskShadowDom.FillAsync(
+                page,
+                [
+                    "input[name='containerSelect']",
+                    "input[placeholder*='container type and size' i]",
+                    "mc-c-container-select input[name='containerSelect']",
+                    "mc-c-container-selection-input input[name='containerSelect']"
+                ],
+                input.ContainerType,
+                cancellationToken,
+                timeoutMs: 5_000);
+
+            if (equipmentFilled)
+                await SelectSuggestionAsync(page, cancellationToken);
+        }
+
+        var quantityFilled = await MaerskShadowDom.FillAsync(
             page,
-            ["input[name*='quantity' i]", "input[aria-label*='quantity' i]"],
-            ["quantity"],
+            [
+                "input[name='containers']",
+                "input[placeholder*='number of containers' i]",
+                "mc-c-container-select input[name='containers']",
+                "mc-c-container-selection-input input[name='containers']"
+            ],
             input.Quantity.ToString(),
             cancellationToken,
-            required: false);
+            timeoutMs: 3_000);
+
+        if (quantityFilled)
+            await SelectSuggestionAsync(page, cancellationToken);
 
         var submitted =
             await MaerskShadowDom.ClickByTextAsync(
@@ -157,6 +210,8 @@ public sealed class MaerskBrowserAutomation
         await MaerskShadowDom.ClickFirstAsync(
             page,
             [
+                "mc-option",
+                "mc-list mc-option",
                 "[role='option']",
                 "li[role='option']",
                 "[data-test*='suggestion' i]",
