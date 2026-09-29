@@ -262,15 +262,76 @@ public sealed class SetAgentScheduleActiveCommandHandler(IAgentScheduleRepositor
     public async Task<Result> HandleAsync(SetAgentScheduleActiveCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.ScheduleNotFound);e.SetActive(c.IsActive,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
 }
 public sealed record RunAgentScheduleCommand(Guid Id,Guid? ActorId):ICommand<Result<Guid>>;
-public sealed class RunAgentScheduleCommandHandler(IAgentScheduleRepository schedules,IAgentExecutionRepository executions,IUnitOfWork uow):ICommandHandler<RunAgentScheduleCommand,Result<Guid>>
+public sealed class RunAgentScheduleCommandHandler(
+    IAgentScheduleRepository schedules,
+    IAgentExecutionRepository executions,
+    IAgentProviderRepository providers,
+    IUnitOfWork uow):ICommandHandler<RunAgentScheduleCommand,Result<Guid>>
 {
-    public async Task<Result<Guid>> HandleAsync(RunAgentScheduleCommand c,CancellationToken ct=default){var s=await schedules.GetByIdAsync(c.Id,ct);if(s is null||s.IsDeleted)return Result.Failure<Guid>(AgentErrors.ScheduleNotFound);var e=AgentExecution.Create(s.AgentDefinitionId,s.ProviderId,s.Id,s.CredentialId,AgentExecutionType.Scheduled,0,s.InputJson,s.MaxRetries+1,Guid.NewGuid().ToString("N"),createdBy:c.ActorId);e.Queue(c.ActorId);await executions.AddAsync(e,ct);await uow.SaveChangesAsync(ct);return Result.Success(e.Id);}
+    public async Task<Result<Guid>> HandleAsync(RunAgentScheduleCommand c,CancellationToken ct=default)
+    {
+        var s=await schedules.GetByIdAsync(c.Id,ct);
+        if(s is null||s.IsDeleted)return Result.Failure<Guid>(AgentErrors.ScheduleNotFound);
+
+        var provider=await providers.GetByIdAsync(s.ProviderId,ct);
+        if(provider is null||provider.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);
+
+        var inputJson=provider.Code.Equals("MAERSK",StringComparison.OrdinalIgnoreCase)
+            ? MaerskExecutionDefaults.NormalizeInputJson(s.InputJson)
+            : s.InputJson;
+
+        var e=AgentExecution.Create(
+            s.AgentDefinitionId,
+            s.ProviderId,
+            s.Id,
+            s.CredentialId,
+            AgentExecutionType.Scheduled,
+            0,
+            inputJson,
+            s.MaxRetries+1,
+            Guid.NewGuid().ToString("N"),
+            createdBy:c.ActorId);
+
+        e.Queue(c.ActorId);
+        await executions.AddAsync(e,ct);
+        await uow.SaveChangesAsync(ct);
+        return Result.Success(e.Id);
+    }
 }
 
 public sealed record CreateAgentExecutionCommand(Guid AgentDefinitionId,Guid ProviderId,Guid? CredentialId,int Priority,string InputJson,int MaxAttempts,string? CorrelationId,string? TraceId,Guid? ActorId):ICommand<Result<Guid>>;
 public sealed class CreateAgentExecutionCommandHandler(IAgentExecutionRepository repo,IAgentDefinitionRepository defs,IAgentProviderRepository providers,IUnitOfWork uow):ICommandHandler<CreateAgentExecutionCommand,Result<Guid>>
 {
-    public async Task<Result<Guid>> HandleAsync(CreateAgentExecutionCommand c,CancellationToken ct=default){var d=await defs.GetByIdAsync(c.AgentDefinitionId,ct);if(d is null||d.IsDeleted)return Result.Failure<Guid>(AgentErrors.DefinitionNotFound);var p=await providers.GetByIdAsync(c.ProviderId,ct);if(p is null||p.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);var e=AgentExecution.Create(c.AgentDefinitionId,c.ProviderId,null,c.CredentialId,AgentExecutionType.Manual,c.Priority,c.InputJson,c.MaxAttempts,string.IsNullOrWhiteSpace(c.CorrelationId)?Guid.NewGuid().ToString("N"):c.CorrelationId,c.TraceId,c.ActorId);e.Queue(c.ActorId);await repo.AddAsync(e,ct);await uow.SaveChangesAsync(ct);return Result.Success(e.Id);}
+    public async Task<Result<Guid>> HandleAsync(CreateAgentExecutionCommand c,CancellationToken ct=default)
+    {
+        var d=await defs.GetByIdAsync(c.AgentDefinitionId,ct);
+        if(d is null||d.IsDeleted)return Result.Failure<Guid>(AgentErrors.DefinitionNotFound);
+
+        var p=await providers.GetByIdAsync(c.ProviderId,ct);
+        if(p is null||p.IsDeleted)return Result.Failure<Guid>(AgentErrors.ProviderNotFound);
+
+        var inputJson=p.Code.Equals("MAERSK",StringComparison.OrdinalIgnoreCase)
+            ? MaerskExecutionDefaults.NormalizeInputJson(c.InputJson)
+            : c.InputJson;
+
+        var e=AgentExecution.Create(
+            c.AgentDefinitionId,
+            c.ProviderId,
+            null,
+            c.CredentialId,
+            AgentExecutionType.Manual,
+            c.Priority,
+            inputJson,
+            c.MaxAttempts,
+            string.IsNullOrWhiteSpace(c.CorrelationId)?Guid.NewGuid().ToString("N"):c.CorrelationId,
+            c.TraceId,
+            c.ActorId);
+
+        e.Queue(c.ActorId);
+        await repo.AddAsync(e,ct);
+        await uow.SaveChangesAsync(ct);
+        return Result.Success(e.Id);
+    }
 }
 public sealed record CancelAgentExecutionCommand(Guid Id,Guid? ActorId):ICommand<Result>;
 public sealed class CancelAgentExecutionCommandHandler(IAgentExecutionRepository repo,IUnitOfWork uow):ICommandHandler<CancelAgentExecutionCommand,Result>

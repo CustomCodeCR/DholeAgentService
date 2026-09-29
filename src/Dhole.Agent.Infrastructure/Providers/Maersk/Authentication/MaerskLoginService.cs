@@ -37,7 +37,8 @@ public sealed class MaerskLoginService
         string password,
         CancellationToken cancellationToken,
         string? configuredLoginUrl = null,
-        string? authenticationSuccessUrl = null)
+        string? authenticationSuccessUrl = null,
+        string? configuredSearchUrl = null)
     {
         if (string.IsNullOrWhiteSpace(username))
             throw new ArgumentException("Maersk username is required.", nameof(username));
@@ -49,6 +50,17 @@ public sealed class MaerskLoginService
 
         try
         {
+            // Prefer the persistent browser session before submitting credentials.
+            // Going directly to /portaluser/login on every scheduled run can force
+            // Global Accounts to create a new session and invalidate a perfectly
+            // usable OIDC/browser session.
+            if (await TryResumeExistingSessionAsync(
+                    page,
+                    configuredSearchUrl,
+                    authenticationSuccessUrl,
+                    cancellationToken))
+                return;
+
             await page.GotoAsync(
                 ResolveLoginUrl(configuredLoginUrl),
                 new PageGotoOptions
@@ -179,6 +191,17 @@ public sealed class MaerskLoginService
                 await Task.Delay(500, cancellationToken);
             }
 
+            // A login submission can leave Global Accounts displaying a generic
+            // SPA error even though cookies/session state were partially established.
+            // Re-enter the configured booking URL once and let the normal
+            // Continue -> callback -> /book/ handoff prove whether the session works.
+            if (await TryResumeExistingSessionAsync(
+                    page,
+                    configuredSearchUrl,
+                    authenticationSuccessUrl,
+                    cancellationToken))
+                return;
+
             var finalMessage = await MaerskShadowDom.ReadVisibleAuthenticationMessageAsync(
                 page,
                 cancellationToken);
@@ -205,6 +228,104 @@ public sealed class MaerskLoginService
             network.Detach();
         }
     }
+
+    private static async Task<bool> TryResumeExistingSessionAsync(
+        IPage page,
+        string? configuredSearchUrl,
+        string? authenticationSuccessUrl,
+        CancellationToken cancellationToken)
+    {
+        var searchUrl = ResolveSearchUrl(configuredSearchUrl);
+
+        try
+        {
+            await page.GotoAsync(
+                searchUrl,
+                new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 60_000
+                });
+        }
+        catch (PlaywrightException)
+        {
+            // Redirects during the OIDC handoff can replace the document while
+            // Playwright is waiting. Inspect the resulting URL/state below.
+        }
+
+        var stableSearchPolls = 0;
+
+        for (var poll = 0; poll < 120; poll++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var currentUrl = page.Url;
+
+            if (MatchesConfiguredUrl(currentUrl, authenticationSuccessUrl))
+            {
+                stableSearchPolls = 0;
+                await Task.Delay(250, cancellationToken);
+                continue;
+            }
+
+            if (currentUrl.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase))
+            {
+                stableSearchPolls = 0;
+
+                try
+                {
+                    await CompleteAuthenticatedContinueAsync(page, cancellationToken);
+                }
+                catch (MaerskAuthenticationException ex)
+                    when (ex.ErrorCode is "maersk_authentication_continue_not_clickable"
+                        or "maersk_authentication_callback_timeout")
+                {
+                    // If the actual login fields are present, this is not an
+                    // authenticated Continue page; fall through to credential login.
+                }
+
+                if (await HasLoginFieldsAsync(page, cancellationToken))
+                    return false;
+
+                await Task.Delay(250, cancellationToken);
+                continue;
+            }
+
+            if (currentUrl.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase))
+            {
+                stableSearchPolls = 0;
+
+                if (await HasLoginFieldsAsync(page, cancellationToken))
+                    return false;
+
+                await Task.Delay(250, cancellationToken);
+                continue;
+            }
+
+            if (MatchesConfiguredUrlOrChild(currentUrl, searchUrl))
+            {
+                stableSearchPolls++;
+                if (stableSearchPolls >= 12)
+                    return true;
+            }
+            else
+            {
+                stableSearchPolls = 0;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static Task<bool> HasLoginFieldsAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+        => MaerskShadowDom.HasVisibleAsync(
+            page,
+            UsernameSelectors.Concat(PasswordSelectors).ToArray(),
+            cancellationToken);
 
     internal static async Task CompleteAuthenticatedContinueAsync(
         IPage page,
@@ -432,6 +553,32 @@ public sealed class MaerskLoginService
         {
             return false;
         }
+    }
+
+    private static string ResolveSearchUrl(string? configuredSearchUrl)
+    {
+        if (Uri.TryCreate(configuredSearchUrl, UriKind.Absolute, out var configured)
+            && (configured.Scheme == Uri.UriSchemeHttp || configured.Scheme == Uri.UriSchemeHttps)
+            && configured.Host.EndsWith("maersk.com", StringComparison.OrdinalIgnoreCase)
+            && !configured.Host.Equals("api.maersk.com", StringComparison.OrdinalIgnoreCase))
+            return configured.ToString();
+
+        return "https://www.maersk.com/book/";
+    }
+
+    private static bool MatchesConfiguredUrlOrChild(string currentUrl, string configuredUrl)
+    {
+        if (!Uri.TryCreate(configuredUrl, UriKind.Absolute, out var expected)
+            || !Uri.TryCreate(currentUrl, UriKind.Absolute, out var current)
+            || !current.Host.Equals(expected.Host, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var expectedPath = expected.AbsolutePath.TrimEnd('/');
+        var currentPath = current.AbsolutePath.TrimEnd('/');
+
+        return currentPath.Equals(expectedPath, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(expectedPath)
+                && currentPath.StartsWith(expectedPath + "/", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string ResolveLoginUrl(string? configuredLoginUrl)

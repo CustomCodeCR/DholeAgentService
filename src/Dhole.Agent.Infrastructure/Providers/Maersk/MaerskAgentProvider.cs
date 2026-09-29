@@ -101,7 +101,8 @@ public sealed class MaerskAgentProvider(
                 credentialResult.Password!,
                 cancellationToken,
                 plan.LoginUrl,
-                plan.AuthenticationSuccessUrl);
+                plan.AuthenticationSuccessUrl,
+                plan.SearchUrl);
 
             await NavigateToSearchStartAsync(
                 page,
