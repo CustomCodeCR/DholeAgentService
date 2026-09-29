@@ -106,6 +106,33 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string DismissCoachmarksScript = """
+        () => {
+            let dismissed = false;
+
+            const visit = root => {
+                for (const popover of root.querySelectorAll('mc-popover.location-coachmark-popover[open], .location-coachmark-popover[open]')) {
+                    try {
+                        popover.removeAttribute('open');
+                        popover.setAttribute('aria-hidden', 'true');
+                        popover.style.pointerEvents = 'none';
+                        popover.style.display = 'none';
+                        dismissed = true;
+                    } catch {
+                        // Keep inspecting other roots.
+                    }
+                }
+
+                for (const host of root.querySelectorAll('*')) {
+                    if (host.shadowRoot) visit(host.shadowRoot);
+                }
+            };
+
+            visit(document);
+            return dismissed;
+        }
+        """;
+
     private const string DescribeScript = """
         () => {
             const result = {
@@ -319,7 +346,8 @@ internal static class MaerskShadowDom
         IPage page,
         IReadOnlyCollection<string> selectors,
         CancellationToken cancellationToken,
-        int timeoutMs = 10_000)
+        int timeoutMs = 10_000,
+        bool force = false)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
@@ -333,7 +361,11 @@ internal static class MaerskShadowDom
                         frame,
                         selectors,
                         locator => locator.ClickAsync(
-                            new LocatorClickOptions { Timeout = 5_000 })))
+                            new LocatorClickOptions
+                            {
+                                Timeout = Math.Min(timeoutMs, 5_000),
+                                Force = force
+                            })))
                     return true;
             }
 
@@ -341,6 +373,30 @@ internal static class MaerskShadowDom
         }
 
         return false;
+    }
+
+    public static async Task<bool> DismissBlockingCoachmarksAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        var dismissed = false;
+
+        foreach (var frame in page.Frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                dismissed |= await frame.EvaluateAsync<bool>(DismissCoachmarksScript);
+            }
+            catch (PlaywrightException)
+            {
+                // Continue with remaining frames. The booking SPA can replace
+                // a frame while the coachmark is being dismissed.
+            }
+        }
+
+        return dismissed;
     }
 
     public static async Task<bool> ClickByTextAsync(
