@@ -74,21 +74,6 @@ public sealed class MaerskBrowserAutomation
         await FillFirstAsync(
             page,
             [
-                "#mc-input-weight",
-                "input#mc-input-weight",
-                "input[name='weight']",
-                "input[name*='weight' i]",
-                "input[placeholder*='cargo weight' i]",
-                "input[aria-label*='weight' i]"
-            ],
-            ["weight"],
-            input.WeightKg.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            cancellationToken,
-            required: false);
-
-        await FillFirstAsync(
-            page,
-            [
                 "mc-c-commodity input[placeholder*='minimum 2 characters' i]",
                 "mc-c-commodity input[type='text']",
                 "input[name*='commodity' i]",
@@ -162,6 +147,33 @@ public sealed class MaerskBrowserAutomation
 
         if (quantityFilled)
             await SelectSuggestionAsync(page, cancellationToken);
+
+        // In the current Maersk booking UI the cargo-weight input remains disabled
+        // until container type/size and quantity have been selected.
+        var weightSelectors = new[]
+        {
+            "#mc-input-weight",
+            "input#mc-input-weight",
+            "input[name='weight']",
+            "input[name*='weight' i]",
+            "input[placeholder*='cargo weight' i]",
+            "input[aria-label*='weight' i]"
+        };
+
+        var weightFilled = await MaerskShadowDom.FillAsync(
+            page,
+            weightSelectors,
+            input.WeightKg.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cancellationToken,
+            timeoutMs: 10_000);
+
+        if (!weightFilled)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk cargo weight field did not become enabled/editable after selecting container and quantity. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
 
         var submitted =
             await MaerskShadowDom.ClickByTextAsync(
