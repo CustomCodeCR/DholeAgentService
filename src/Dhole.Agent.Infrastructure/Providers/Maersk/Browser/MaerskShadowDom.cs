@@ -140,7 +140,8 @@ internal static class MaerskShadowDom
                 bodyText: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 700),
                 mdsInputs: [],
                 inputs: [],
-                customElements: []
+                customElements: [],
+                visibleOptions: []
             };
 
             const visit = root => {
@@ -154,11 +155,28 @@ internal static class MaerskShadowDom
                         autocomplete: input.getAttribute('autocomplete') || '',
                         placeholder: input.getAttribute('placeholder') || '',
                         ariaLabel: input.getAttribute('aria-label') || '',
+                        value: input.value || '',
+                        disabled: !!input.disabled,
+                        readOnly: !!input.readOnly,
                         visible: style.display !== 'none'
                             && style.visibility !== 'hidden'
                             && rect.width > 0
                             && rect.height > 0
                     });
+                }
+
+                for (const option of root.querySelectorAll("mc-option,[role='option'],li[role='option']")) {
+                    const style = getComputedStyle(option);
+                    const rect = option.getBoundingClientRect();
+                    if (style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && rect.width > 0
+                        && rect.height > 0) {
+                        result.visibleOptions.push({
+                            text: (option.innerText || option.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 250),
+                            value: option.getAttribute('value') || ''
+                        });
+                    }
                 }
 
                 for (const host of root.querySelectorAll('*')) {
@@ -391,6 +409,110 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> ClickVisibleOptionMatchingAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        IReadOnlyCollection<string> expectedValues,
+        CancellationToken cancellationToken,
+        int timeoutMs = 5_000,
+        bool exactOnly = false)
+    {
+        static string Normalize(string? value)
+            => new((value ?? string.Empty)
+                .Where(char.IsLetterOrDigit)
+                .Select(char.ToUpperInvariant)
+                .ToArray());
+
+        var expected = expectedValues
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(Normalize)
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (expected.Length == 0)
+            return false;
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                foreach (var selector in selectors)
+                {
+                    ILocator matches;
+                    int count;
+
+                    try
+                    {
+                        matches = frame.Locator(selector);
+                        count = await matches.CountAsync();
+                    }
+                    catch (PlaywrightException)
+                    {
+                        continue;
+                    }
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        var candidate = matches.Nth(index);
+
+                        try
+                        {
+                            if (!await candidate.IsVisibleAsync()
+                                || !await candidate.IsEnabledAsync())
+                                continue;
+
+                            var text = (await candidate.InnerTextAsync()).Trim();
+                            var value = await candidate.GetAttributeAsync("value");
+                            var normalizedText = Normalize(text);
+                            var normalizedValue = Normalize(value);
+
+                            var isMatch = exactOnly
+                                ? expected.Any(x =>
+                                    string.Equals(normalizedText, x, StringComparison.Ordinal)
+                                    || string.Equals(normalizedValue, x, StringComparison.Ordinal))
+                                : expected.Any(x =>
+                                    normalizedText.Contains(x, StringComparison.Ordinal)
+                                    || normalizedValue.Contains(x, StringComparison.Ordinal));
+
+                            if (!isMatch)
+                                continue;
+
+                            try
+                            {
+                                await candidate.ClickAsync(
+                                    new LocatorClickOptions { Timeout = 1_500 });
+                            }
+                            catch (PlaywrightException)
+                            {
+                                await candidate.ClickAsync(
+                                    new LocatorClickOptions
+                                    {
+                                        Timeout = 1_500,
+                                        Force = true
+                                    });
+                            }
+
+                            return true;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Continue with the next option while the SPA settles.
+                        }
+                    }
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
         }
 
         return false;
