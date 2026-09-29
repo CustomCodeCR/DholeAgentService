@@ -54,34 +54,23 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
-        var recreatedSession = false;
+        // Maersk authentication relies on a persistent Chromium profile.
+        // Never destroy that profile automatically for LoginRequired/Blocked:
+        // cookies, local storage and the OIDC session are precisely what allow
+        // scheduled executions to continue after an interactive or successful
+        // authentication. Resetting it here caused every retry to start from a
+        // blank browser and repeatedly lose the authenticated state.
+        var storagePath = profiles.GetStoragePath(
+            ProviderCode,
+            context.Credential.Id);
 
-        if (browserProfile?.Status == BrowserProfileStatus.Error)
+        if (browserProfile is not null
+            && browserProfile.Status is BrowserProfileStatus.LoginRequired
+                or BrowserProfileStatus.Blocked
+                or BrowserProfileStatus.Error)
         {
-            return AgentProviderExecutionResult.Failed(
-                "maersk_authentication_manual_reset_required",
-                "The fresh Maersk browser session also failed authentication. Use the browser-profile Authenticate action to allow one new authentication attempt; scheduled runs will not keep retrying automatically.");
-        }
-
-        string storagePath;
-        if (browserProfile?.Status is BrowserProfileStatus.Blocked or BrowserProfileStatus.LoginRequired)
-        {
-            // A rejected Maersk session can leave stale cookies/storage in the
-            // persistent Chromium profile. Remove it from the active path and start
-            // with a completely fresh browser profile exactly once.
-            storagePath = profiles.ResetStoragePath(
-                ProviderCode,
-                context.Credential.Id);
-
-            recreatedSession = true;
             browserProfile.SetStatus(BrowserProfileStatus.Authenticating);
             await unitOfWork.SaveChangesAsync(cancellationToken);
-        }
-        else
-        {
-            storagePath = profiles.GetStoragePath(
-                ProviderCode,
-                context.Credential.Id);
         }
         var descriptor = new BrowserProfileDescriptor(
             ProviderCode,
@@ -130,18 +119,13 @@ public sealed class MaerskAgentProvider(
         {
             if (browserProfile is not null)
             {
-                browserProfile.SetStatus(
-                    recreatedSession
-                        ? BrowserProfileStatus.Error
-                        : MapBrowserProfileStatus(ex.ErrorCode));
+                browserProfile.SetStatus(MapBrowserProfileStatus(ex.ErrorCode));
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
             return AgentProviderExecutionResult.Failed(
                 ex.ErrorCode,
-                recreatedSession
-                    ? $"{ex.Message} A fresh browser profile was already created for this attempt, so automatic login retries have been stopped."
-                    : ex.Message);
+                ex.Message);
         }
         catch (Exception ex)
         {

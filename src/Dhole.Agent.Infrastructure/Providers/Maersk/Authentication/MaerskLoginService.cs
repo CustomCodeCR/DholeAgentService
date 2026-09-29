@@ -295,16 +295,21 @@ public sealed class MaerskLoginService
     {
         var value = message.ToLowerInvariant();
 
-        return value.Contains("incorrect")
-            || value.Contains("invalid")
+        // Only credential/account-specific messages are terminal here.
+        // Global Accounts can transiently render generic messages such as
+        // "Something went wrong [object Object]" while its SPA/session/token
+        // requests are still progressing. Those are classified only after the
+        // full browser authentication window if the flow never completes.
+        return value.Contains("incorrect password")
+            || value.Contains("invalid password")
             || value.Contains("wrong password")
-            || value.Contains("unable to log")
-            || value.Contains("unable to login")
+            || value.Contains("invalid username")
+            || value.Contains("invalid email")
             || value.Contains("account locked")
-            || value.Contains("try again")
             || value.Contains("does not match")
             || value.Contains("not recognized")
-            || value.Contains("something went wrong");
+            || value.Contains("unknown user")
+            || value.Contains("user does not exist");
     }
 
     private static async Task<bool> RequiresInteractiveVerificationAsync(IPage page)
