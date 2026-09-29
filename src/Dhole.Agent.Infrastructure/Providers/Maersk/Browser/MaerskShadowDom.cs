@@ -237,6 +237,57 @@ internal static class MaerskShadowDom
         return false;
     }
 
+    private static async Task<bool> TryFillOnVisibleEditableLocatorAsync(
+        IFrame frame,
+        IReadOnlyCollection<string> selectors,
+        string value,
+        int actionTimeoutMs)
+    {
+        foreach (var selector in selectors)
+        {
+            ILocator matches;
+            int count;
+
+            try
+            {
+                matches = frame.Locator(selector);
+                count = await matches.CountAsync();
+            }
+            catch (PlaywrightException)
+            {
+                continue;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var candidate = matches.Nth(index);
+
+                try
+                {
+                    if (!await candidate.IsVisibleAsync()
+                        || !await candidate.IsEnabledAsync()
+                        || !await candidate.IsEditableAsync())
+                        continue;
+
+                    await candidate.FillAsync(
+                        value,
+                        new LocatorFillOptions
+                        {
+                            Timeout = actionTimeoutMs
+                        });
+                    return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // The SPA can change enabled/editable state between checks.
+                    // Re-resolve on the next polling pass.
+                }
+            }
+        }
+
+        return false;
+    }
+
     public static async Task<bool> HasVisibleAsync(
         IPage page,
         IReadOnlyCollection<string> selectors,
@@ -271,12 +322,15 @@ internal static class MaerskShadowDom
 
             foreach (var frame in page.Frames)
             {
-                if (await TryActOnVisibleLocatorAsync(
+                var remainingMs = Math.Max(
+                    250,
+                    (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
+
+                if (await TryFillOnVisibleEditableLocatorAsync(
                         frame,
                         selectors,
-                        locator => locator.FillAsync(
-                            value,
-                            new LocatorFillOptions { Timeout = 5_000 })))
+                        value,
+                        Math.Min(remainingMs, 1_500)))
                     return true;
             }
 
