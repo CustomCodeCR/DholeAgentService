@@ -206,18 +206,39 @@ public sealed class MaerskBrowserAutomation
 
     private static async Task SelectSuggestionAsync(IPage page, CancellationToken cancellationToken)
     {
-        // Suggestions may also be rendered from an MDS component's shadow root.
-        await MaerskShadowDom.ClickFirstAsync(
+        // Maersk displays an informational coachmark over the location suggestions
+        // on fresh/updated booking sessions. It is not part of the search flow and
+        // can intercept pointer events even though the mc-option itself is visible.
+        await MaerskShadowDom.DismissBlockingCoachmarksAsync(
             page,
-            [
-                "mc-option",
-                "mc-list mc-option",
-                "[role='option']",
-                "li[role='option']",
-                "[data-test*='suggestion' i]",
-                "[data-testid*='suggestion' i]"
-            ],
+            cancellationToken);
+
+        var selectors = new[]
+        {
+            "mc-option",
+            "mc-list mc-option",
+            "[role='option']",
+            "li[role='option']",
+            "[data-test*='suggestion' i]",
+            "[data-testid*='suggestion' i]"
+        };
+
+        // Prefer a normal user-like click. If Maersk's informational overlay is
+        // still transitioning, force-click only the already-visible suggestion.
+        var selected = await MaerskShadowDom.ClickFirstAsync(
+            page,
+            selectors,
             cancellationToken,
-            timeoutMs: 5_000);
+            timeoutMs: 1_500);
+
+        if (!selected)
+        {
+            await MaerskShadowDom.ClickFirstAsync(
+                page,
+                selectors,
+                cancellationToken,
+                timeoutMs: 2_000,
+                force: true);
+        }
     }
 }
