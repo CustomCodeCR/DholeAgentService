@@ -98,6 +98,19 @@ public sealed class MaerskBrowserAutomation
             [input.Commodity],
             exactOnly: false);
 
+        var priceOwnerSelected = await MaerskShadowDom.SelectPriceOwnerAsync(
+            page,
+            cancellationToken,
+            timeoutMs: 5_000);
+
+        if (!priceOwnerSelected)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk price owner option 'I am the price owner' could not be selected. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
+
         var date = input.CargoReadyDate.ToString("dd MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
         await FillFirstAsync(
             page,

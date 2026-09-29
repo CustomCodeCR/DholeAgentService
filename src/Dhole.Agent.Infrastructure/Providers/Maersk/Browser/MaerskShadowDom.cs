@@ -106,6 +106,130 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string SelectPriceOwnerScript = """
+        () => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const isVisible = element => {
+                if (!(element instanceof Element)) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+
+            const dispatchChecked = input => {
+                if (!input) return false;
+
+                try {
+                    input.click();
+                } catch {
+                    // Fall through to native property/event assignment.
+                }
+
+                if (!input.checked) {
+                    const descriptor = Object.getOwnPropertyDescriptor(
+                        HTMLInputElement.prototype,
+                        'checked');
+
+                    descriptor?.set?.call(input, true);
+                    input.dispatchEvent(new Event('input', {
+                        bubbles: true,
+                        composed: true
+                    }));
+                    input.dispatchEvent(new Event('change', {
+                        bubbles: true,
+                        composed: true
+                    }));
+                }
+
+                return !!input.checked;
+            };
+
+            const findNativeRadio = root => {
+                const radios = Array.from(
+                    root.querySelectorAll("input[type='radio'][name='priceOwner']")
+                );
+
+                if (radios.length > 0) {
+                    const checked = radios.find(x => x.checked);
+                    if (checked && radios.indexOf(checked) === 0)
+                        return true;
+
+                    return dispatchChecked(radios[0]);
+                }
+
+                for (const host of root.querySelectorAll('*')) {
+                    if (!host.shadowRoot) continue;
+                    const nested = findNativeRadio(host.shadowRoot);
+                    if (nested) return true;
+                }
+
+                return false;
+            };
+
+            const selectByLabel = root => {
+                for (const radio of root.querySelectorAll('mc-radio')) {
+                    const text = normalize(
+                        radio.innerText
+                        || radio.textContent
+                        || radio.getAttribute('label')
+                        || radio.getAttribute('aria-label')
+                        || radio.getAttribute('value'));
+
+                    if (!text.includes('i am the price owner'))
+                        continue;
+
+                    const nativeInput = radio.shadowRoot?.querySelector(
+                        "input[type='radio']");
+
+                    if (nativeInput && dispatchChecked(nativeInput))
+                        return true;
+
+                    try {
+                        radio.click();
+                        return true;
+                    } catch {
+                        // Continue looking for a native input fallback.
+                    }
+                }
+
+                for (const element of root.querySelectorAll('label,[role="radio"]')) {
+                    if (!isVisible(element)) continue;
+                    if (!normalize(element.innerText || element.textContent)
+                        .includes('i am the price owner'))
+                        continue;
+
+                    try {
+                        element.click();
+                        return true;
+                    } catch {
+                        // Continue to fallback.
+                    }
+                }
+
+                for (const host of root.querySelectorAll('*')) {
+                    if (!host.shadowRoot) continue;
+                    if (selectByLabel(host.shadowRoot)) return true;
+                }
+
+                return false;
+            };
+
+            selectByLabel(document);
+
+            // Verify/force the first priceOwner radio. In Maersk's current booking
+            // form the first radio is "I am the price owner".
+            return findNativeRadio(document);
+        }
+        """;
+
     private const string DismissCoachmarksScript = """
         () => {
             let dismissed = false;
@@ -158,6 +282,7 @@ internal static class MaerskShadowDom
                         value: input.value || '',
                         disabled: !!input.disabled,
                         readOnly: !!input.readOnly,
+                        checked: !!input.checked,
                         visible: style.display !== 'none'
                             && style.visibility !== 'hidden'
                             && rect.width > 0
@@ -543,6 +668,36 @@ internal static class MaerskShadowDom
                                 Force = force
                             })))
                     return true;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SelectPriceOwnerAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        int timeoutMs = 5_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(SelectPriceOwnerScript))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while Maersk renders/replaces the price-owner controls.
+                }
             }
 
             await Task.Delay(250, cancellationToken);
