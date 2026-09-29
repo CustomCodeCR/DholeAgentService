@@ -150,7 +150,7 @@ public sealed class MaerskBrowserAutomation
                     page,
                     cancellationToken,
                     GetEquipmentAliases(input.ContainerType),
-                    exactOnly: false,
+                    exactOnly: true,
                     allowFirstFallback: false);
 
             if (!equipmentChosen)
@@ -324,44 +324,21 @@ public sealed class MaerskBrowserAutomation
     }
 
     private static string GetEquipmentSearchTerm(string containerType)
-        => containerType.Trim().ToUpperInvariant() switch
+    {
+        var openParen = containerType.LastIndexOf('(');
+        var closeParen = containerType.LastIndexOf(')');
+
+        if (openParen >= 0 && closeParen > openParen)
         {
-            "40HC" => "40",
-            "40STD" => "40",
-            "20STD" => "20",
-            _ => containerType
-        };
+            var code = containerType[(openParen + 1)..closeParen].Trim();
+
+            if (!string.IsNullOrWhiteSpace(code))
+                return code;
+        }
+
+        return containerType;
+    }
 
     private static string[] GetEquipmentAliases(string containerType)
-        => containerType.Trim().ToUpperInvariant() switch
-        {
-            "40HC" =>
-            [
-                "40HC",
-                "40 HIGH CUBE",
-                "40' HIGH CUBE",
-                "40FT HIGH CUBE",
-                "40 FOOT HIGH CUBE",
-                "40 HIGH CUBE DRY"
-            ],
-            "40STD" =>
-            [
-                "40STD",
-                "40 STANDARD",
-                "40' STANDARD",
-                "40 DRY",
-                "40' DRY",
-                "40FT DRY"
-            ],
-            "20STD" =>
-            [
-                "20STD",
-                "20 STANDARD",
-                "20' STANDARD",
-                "20 DRY",
-                "20' DRY",
-                "20FT DRY"
-            ],
-            _ => [containerType]
-        };
+        => [containerType];
 }
