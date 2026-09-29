@@ -54,19 +54,27 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
+        // A Maersk edge/WAF rejection is not something scheduled retries can fix.
+        // Preserve the persistent profile and stop automated credential submissions
+        // until an operator explicitly requests authentication again.
+        if (browserProfile?.Status == BrowserProfileStatus.Blocked)
+        {
+            return AgentProviderExecutionResult.Failed(
+                "maersk_authentication_edge_denied",
+                "Maersk Global Accounts is currently rejecting authentication at the edge. The persistent browser profile was preserved. Explicitly request browser-profile authentication after the provider allows access again.");
+        }
+
         // Maersk authentication relies on a persistent Chromium profile.
-        // Never destroy that profile automatically for LoginRequired/Blocked:
+        // Never destroy that profile automatically for LoginRequired/Error:
         // cookies, local storage and the OIDC session are precisely what allow
         // scheduled executions to continue after an interactive or successful
-        // authentication. Resetting it here caused every retry to start from a
-        // blank browser and repeatedly lose the authenticated state.
+        // authentication.
         var storagePath = profiles.GetStoragePath(
             ProviderCode,
             context.Credential.Id);
 
         if (browserProfile is not null
             && browserProfile.Status is BrowserProfileStatus.LoginRequired
-                or BrowserProfileStatus.Blocked
                 or BrowserProfileStatus.Error)
         {
             browserProfile.SetStatus(BrowserProfileStatus.Authenticating);
@@ -650,6 +658,7 @@ public sealed class MaerskAgentProvider(
         => errorCode switch
         {
             "maersk_authentication_forbidden" => BrowserProfileStatus.Blocked,
+            "maersk_authentication_edge_denied" => BrowserProfileStatus.Blocked,
             "maersk_authentication_rate_limited" => BrowserProfileStatus.Blocked,
             "maersk_authentication_unauthorized" => BrowserProfileStatus.LoginRequired,
             "maersk_authentication_verification_required" => BrowserProfileStatus.LoginRequired,

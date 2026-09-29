@@ -658,19 +658,23 @@ public sealed class MaerskLoginService
                     x.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
                     && x.Url.Contains("/sessions/", StringComparison.OrdinalIgnoreCase));
 
-            var code = failures.Any(x => x.Status == 429)
-                ? "maersk_authentication_rate_limited"
-                : sessionFailure?.Status == 401
-                    ? "maersk_authentication_unauthorized"
-                    : sessionFailure?.Status == 403
-                        ? "maersk_authentication_forbidden"
-                        : failures.Any(x => x.Status == 401 && IsAuthenticationEndpoint(x))
-                            ? "maersk_authentication_unauthorized"
-                            : failures.Any(x => x.Status == 403 && IsAuthenticationEndpoint(x))
-                                ? "maersk_authentication_forbidden"
-                                : failures.Any(x => x.Status >= 500 && IsAuthenticationEndpoint(x))
-                                    ? "maersk_authentication_service_error"
-                                    : "maersk_authentication_failed";
+            var edgeDenied = failures.Any(IsEdgeAccessDenied);
+
+            var code = edgeDenied
+                ? "maersk_authentication_edge_denied"
+                : failures.Any(x => x.Status == 429)
+                    ? "maersk_authentication_rate_limited"
+                    : sessionFailure?.Status == 401
+                        ? "maersk_authentication_unauthorized"
+                        : sessionFailure?.Status == 403
+                            ? "maersk_authentication_forbidden"
+                            : failures.Any(x => x.Status == 401 && IsAuthenticationEndpoint(x))
+                                ? "maersk_authentication_unauthorized"
+                                : failures.Any(x => x.Status == 403 && IsAuthenticationEndpoint(x))
+                                    ? "maersk_authentication_forbidden"
+                                    : failures.Any(x => x.Status >= 500 && IsAuthenticationEndpoint(x))
+                                        ? "maersk_authentication_service_error"
+                                        : "maersk_authentication_failed";
 
             var summary = failures.Length == 0
                 ? "No HTTP 401/403/429 response was captured from Maersk authentication endpoints."
@@ -689,7 +693,21 @@ public sealed class MaerskLoginService
 
         private static bool IsBlockingAuthenticationFailure(HttpFailure failure)
             => failure.Status == 429
+               || IsEdgeAccessDenied(failure)
                || ((failure.Status is 401 or 403) && IsAuthenticationEndpoint(failure));
+
+        private static bool IsEdgeAccessDenied(HttpFailure failure)
+        {
+            if (string.IsNullOrWhiteSpace(failure.Detail))
+                return false;
+
+            var detail = failure.Detail.ToLowerInvariant();
+
+            return detail.Contains("access denied")
+                || detail.Contains("edgesuite.net")
+                || detail.Contains("you don't have permission to access")
+                || detail.Contains("reason=unauthorized");
+        }
 
         private static bool IsAuthenticationEndpoint(HttpFailure failure)
             => failure.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
