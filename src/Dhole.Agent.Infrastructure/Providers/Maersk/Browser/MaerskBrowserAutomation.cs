@@ -122,48 +122,6 @@ public sealed class MaerskBrowserAutomation
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
-        var priceOwnerSelected = await MaerskShadowDom.SelectPriceOwnerAsync(
-            page,
-            cancellationToken,
-            timeoutMs: 5_000);
-
-        if (!priceOwnerSelected)
-        {
-            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-            throw new InvalidOperationException(
-                $"Maersk price owner option 'I am the price owner' could not be selected. " +
-                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
-        }
-
-        var date = input.CargoReadyDate.ToString("dd MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
-        await FillFirstAsync(
-            page,
-            [
-                "#mc-input-earliestDepartureDatePicker",
-                "input#mc-input-earliestDepartureDatePicker",
-                "input[name='earliestDepartureDatePicker']",
-                "input[type='date']",
-                "input[name*='date' i]",
-                "input[placeholder*='DD MMM YYYY' i]",
-                "input[aria-label*='date' i]"
-            ],
-            ["date", "cargo ready"],
-            date,
-            cancellationToken,
-            required: false);
-
-        var equipmentSelected = await MaerskShadowDom.SelectOptionByLabelAsync(
-            page,
-            [
-                "select[name*='equipment' i]",
-                "select[aria-label*='equipment' i]",
-                "select[name*='container' i]",
-                "select[aria-label*='container' i]"
-            ],
-            input.ContainerType,
-            cancellationToken,
-            timeoutMs: 2_000);
-
         var equipmentInputSelectors = new[]
         {
             "input[name='containerSelect']",
@@ -172,31 +130,32 @@ public sealed class MaerskBrowserAutomation
             "mc-c-container-selection-input input[name='containerSelect']"
         };
 
-        if (!equipmentSelected)
+        var equipmentDisplayLabel = GetEquipmentDisplayLabel(input.ContainerType);
+        var equipmentCode = GetEquipmentSearchTerm(input.ContainerType);
+
+        // The current Maersk UI renders this as a custom dropdown. The visible
+        // labels are "20 Dry Standard", "40 Dry Standard", "40 Dry High", etc.,
+        // while the committed native value is 20DV/40DV/40HC.
+        await MaerskShadowDom.ClickFirstAsync(
+            page,
+            equipmentInputSelectors,
+            cancellationToken,
+            timeoutMs: 3_000);
+
+        var equipmentChosen = await MaerskShadowDom.SelectContainerTypeAsync(
+            page,
+            equipmentDisplayLabel,
+            equipmentCode,
+            cancellationToken,
+            timeoutMs: 6_000);
+
+        if (!equipmentChosen)
         {
-            var equipmentQuery = GetEquipmentSearchTerm(input.ContainerType);
-            var equipmentFilled = await MaerskShadowDom.FillAsync(
-                page,
-                equipmentInputSelectors,
-                equipmentQuery,
-                cancellationToken,
-                timeoutMs: 5_000);
-
-            var equipmentChosen = equipmentFilled
-                && await SelectSuggestionAsync(
-                    page,
-                    cancellationToken,
-                    GetEquipmentAliases(input.ContainerType),
-                    exactOnly: true,
-                    allowFirstFallback: false);
-
-            if (!equipmentChosen)
-            {
-                var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-                throw new InvalidOperationException(
-                    $"Maersk container type '{input.ContainerType}' could not be selected from the booking options. " +
-                    $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
-            }
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk container type '{input.ContainerType}' could not be selected from the booking options. " +
+                $"Expected visible label='{equipmentDisplayLabel}', code='{equipmentCode}'. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
         var quantitySelectors = new[]
@@ -208,26 +167,19 @@ public sealed class MaerskBrowserAutomation
         };
 
         var quantityText = input.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var quantityFilled = await MaerskShadowDom.FillAsync(
+
+        var quantityChosen = await MaerskShadowDom.SetContainerQuantityAsync(
             page,
             quantitySelectors,
-            quantityText,
+            input.Quantity,
             cancellationToken,
-            timeoutMs: 3_000);
-
-        var quantityChosen = quantityFilled
-            && await SelectSuggestionAsync(
-                page,
-                cancellationToken,
-                [quantityText],
-                exactOnly: true,
-                allowFirstFallback: false);
+            timeoutMs: 6_000);
 
         if (!quantityChosen)
         {
             var diagnostics = await MaerskShadowDom.DescribeAsync(page);
             throw new InvalidOperationException(
-                $"Maersk container quantity '{quantityText}' could not be selected from the booking options. " +
+                $"Maersk container quantity '{quantityText}' could not be set after selecting '{equipmentDisplayLabel}'. " +
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
@@ -258,10 +210,42 @@ public sealed class MaerskBrowserAutomation
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
+        var priceOwnerSelected = await MaerskShadowDom.SelectPriceOwnerAsync(
+            page,
+            cancellationToken,
+            timeoutMs: 5_000);
+
+        if (!priceOwnerSelected)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk price owner option 'I am the price owner' could not be selected. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
+
+        var date = input.CargoReadyDate.ToString(
+            "dd MMM yyyy",
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        await FillFirstAsync(
+            page,
+            [
+                "#mc-input-earliestDepartureDatePicker",
+                "input#mc-input-earliestDepartureDatePicker",
+                "input[name='earliestDepartureDatePicker']",
+                "input[type='date']",
+                "input[name*='date' i]",
+                "input[placeholder*='DD MMM YYYY' i]",
+                "input[aria-label*='date' i]"
+            ],
+            ["date", "cargo ready"],
+            date,
+            cancellationToken);
+
         var submitted =
             await MaerskShadowDom.ClickByTextAsync(
                 page,
-                ["Search", "Get prices", "Find prices", "Show prices"],
+                ["Continue", "Continue to book", "Search", "Get prices", "Find prices", "Show prices"],
                 cancellationToken,
                 timeoutMs: 10_000)
             || await MaerskShadowDom.ClickFirstAsync(
@@ -357,12 +341,6 @@ public sealed class MaerskBrowserAutomation
                     timeoutMs: 4_000))
                 return;
 
-            if (await MaerskShadowDom.IsLocationSelectionSettledAsync(
-                    page,
-                    componentId,
-                    cancellationToken,
-                    timeoutMs: 2_000))
-                return;
         }
 
         var diagnostics = await MaerskShadowDom.DescribeAsync(page);
@@ -382,9 +360,13 @@ public sealed class MaerskBrowserAutomation
             ? trimmed[..commaIndex].Trim()
             : trimmed;
 
-        return string.IsNullOrWhiteSpace(cityOnly)
-            ? []
-            : [cityOnly];
+        if (string.IsNullOrWhiteSpace(cityOnly))
+            return [];
+
+        if (cityOnly.Equals(trimmed, StringComparison.OrdinalIgnoreCase))
+            return [cityOnly];
+
+        return [cityOnly, trimmed];
     }
 
     private static async Task FillFirstAsync(
@@ -467,6 +449,16 @@ public sealed class MaerskBrowserAutomation
             cancellationToken,
             timeoutMs: 2_000,
             force: true);
+    }
+
+    private static string GetEquipmentDisplayLabel(string containerType)
+    {
+        var openParen = containerType.LastIndexOf('(');
+
+        return (openParen > 0
+                ? containerType[..openParen]
+                : containerType)
+            .Trim();
     }
 
     private static string GetEquipmentSearchTerm(string containerType)
