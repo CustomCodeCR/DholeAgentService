@@ -253,11 +253,13 @@ public sealed class MaerskOfferParser
             offer,
             "transitTime");
 
-        var transitDays = etd.HasValue && eta.HasValue
-            ? Math.Max(
+        var transitDays = NormalizeTransitDays(rawTransit);
+        if (transitDays == 0 && etd.HasValue && eta.HasValue)
+        {
+            transitDays = Math.Max(
                 0,
-                (int)Math.Ceiling((eta.Value - etd.Value).TotalDays))
-            : NormalizeTransitDays(rawTransit);
+                (int)Math.Ceiling((eta.Value - etd.Value).TotalDays));
+        }
 
         var vessel = legs
             .Select(x => x.Vessel)
