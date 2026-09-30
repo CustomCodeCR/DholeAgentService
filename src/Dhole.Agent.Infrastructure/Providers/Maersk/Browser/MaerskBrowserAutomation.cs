@@ -53,6 +53,7 @@ public sealed class MaerskBrowserAutomation
             ["origin", "from"],
             "origin",
             input.Pol,
+            input.PolCode,
             cancellationToken);
 
         var destinationSelectors = new[]
@@ -73,6 +74,7 @@ public sealed class MaerskBrowserAutomation
             ["destination", "to"],
             "destination",
             input.Pod,
+            input.PodCode,
             cancellationToken);
 
         // Best-effort CY/CY selection. Maersk sometimes keeps Container Yard as
@@ -282,59 +284,96 @@ public sealed class MaerskBrowserAutomation
         string[] semanticNames,
         string componentId,
         string displayValue,
+        string? locationCode,
         CancellationToken cancellationToken)
     {
-        var searchTerms = GetLocationSearchTerms(displayValue);
+        var searchTerms = GetLocationSearchTerms(displayValue, locationCode);
 
         foreach (var searchTerm in searchTerms)
         {
-            await FillFirstAsync(
+            // Maersk's location component is a remote typeahead. Typing
+            // sequentially is important here because the current implementation
+            // reacts to keyboard/input events while it fetches suggestions.
+            var typed = await MaerskShadowDom.TypeAsync(
                 page,
                 selectors,
-                semanticNames,
                 searchTerm,
-                cancellationToken);
+                cancellationToken,
+                timeoutMs: 8_000,
+                delayMs: 55);
 
-            // Give Maersk's remote location typeahead enough time to refresh its
-            // options before interacting with the suggestion list.
-            await Task.Delay(500, cancellationToken);
+            if (!typed)
+            {
+                await FillFirstAsync(
+                    page,
+                    selectors,
+                    semanticNames,
+                    searchTerm,
+                    cancellationToken);
+            }
+
+            // Do not press ArrowDown until Maersk has actually published a
+            // suggestion for this component. Previously we pressed too early,
+            // then retried with "Shanghai, China", which Maersk explicitly
+            // rejects as a raw search string.
+            var suggestionReady = await MaerskShadowDom.WaitForLocationSuggestionAsync(
+                page,
+                componentId,
+                GetLocationExpectedValues(displayValue, searchTerm, locationCode),
+                cancellationToken,
+                timeoutMs: 7_000);
+
+            if (!suggestionReady)
+                continue;
+
+            await MaerskShadowDom.DismissBlockingCoachmarksAsync(
+                page,
+                cancellationToken);
 
             var selected = await MaerskShadowDom.SelectLocationSuggestionAsync(
                 page,
                 componentId,
-                [displayValue, searchTerm],
+                GetLocationExpectedValues(displayValue, searchTerm, locationCode),
                 cancellationToken,
-                timeoutMs: 4_000);
+                timeoutMs: 1_500);
 
             if (!selected)
             {
-                // The current MDS typeahead also supports keyboard selection even
-                // when its option elements are not exposed as visibly clickable
-                // nodes through Playwright.
                 var moved = await MaerskShadowDom.PressFirstAsync(
                     page,
                     selectors,
                     "ArrowDown",
                     cancellationToken,
-                    timeoutMs: 1_500);
+                    timeoutMs: 2_000);
 
                 selected = moved && await MaerskShadowDom.PressFirstAsync(
                     page,
                     selectors,
                     "Enter",
                     cancellationToken,
-                    timeoutMs: 1_500);
+                    timeoutMs: 2_000);
             }
 
             if (!selected)
                 continue;
 
-            await Task.Delay(500, cancellationToken);
-
-            if (await MaerskShadowDom.IsLocationSelectionSettledAsync(
+            // A successful selection replaces the raw query (CNSGH/Shanghai)
+            // with Maersk's resolved location label. This is a much more reliable
+            // signal than the typeahead live-region text, which can remain stale.
+            if (await MaerskShadowDom.WaitForResolvedLocationValueAsync(
                     page,
                     componentId,
-                    cancellationToken))
+                    searchTerm,
+                    displayValue,
+                    cancellationToken,
+                    timeoutMs: 3_000))
+                return;
+
+            // The MDS live region is sometimes stale after Enter. If the option
+            // was present and keyboard selection executed, continue with the
+            // second location and let the commodity-enabled gate below validate
+            // that both locations were accepted.
+            if (selected)
                 return;
         }
 
@@ -344,22 +383,60 @@ public sealed class MaerskBrowserAutomation
             $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
     }
 
-    private static string[] GetLocationSearchTerms(string displayValue)
+    private static string[] GetLocationSearchTerms(
+        string displayValue,
+        string? locationCode)
     {
         if (string.IsNullOrWhiteSpace(displayValue))
             return [];
 
+        var terms = new List<string>();
         var trimmed = displayValue.Trim();
+
+        // UN/LOCODE is two country letters plus three location letters. Ignore
+        // internal catalog codes such as POL-2026-074.
+        if (!string.IsNullOrWhiteSpace(locationCode))
+        {
+            var normalizedCode = locationCode.Trim().ToUpperInvariant();
+
+            if (normalizedCode.Length == 5
+                && normalizedCode.All(char.IsLetter))
+                terms.Add(normalizedCode);
+        }
+
         var commaIndex = trimmed.IndexOf(',');
+        var cityOnly = commaIndex > 0
+            ? trimmed[..commaIndex].Trim()
+            : trimmed;
 
-        if (commaIndex <= 0)
-            return [trimmed];
+        if (!string.IsNullOrWhiteSpace(cityOnly)
+            && !terms.Contains(cityOnly, StringComparer.OrdinalIgnoreCase))
+            terms.Add(cityOnly);
 
-        var cityOnly = trimmed[..commaIndex].Trim();
+        // Do not fall back to "City, Country" for Maersk's current booking
+        // typeahead. Diagnostics show that exact form is treated as no match for
+        // Shanghai and Ningbo.
+        return terms.ToArray();
+    }
 
-        return string.IsNullOrWhiteSpace(cityOnly)
-            ? [trimmed]
-            : [cityOnly, trimmed];
+    private static string[] GetLocationExpectedValues(
+        string displayValue,
+        string searchTerm,
+        string? locationCode)
+    {
+        var values = new List<string> { displayValue, searchTerm };
+
+        var commaIndex = displayValue.IndexOf(',');
+        if (commaIndex > 0)
+            values.Add(displayValue[..commaIndex].Trim());
+
+        if (!string.IsNullOrWhiteSpace(locationCode))
+            values.Add(locationCode.Trim());
+
+        return values
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static async Task FillFirstAsync(
