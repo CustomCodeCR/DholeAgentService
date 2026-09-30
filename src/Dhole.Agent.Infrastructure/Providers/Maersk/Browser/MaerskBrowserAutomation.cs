@@ -79,24 +79,55 @@ public sealed class MaerskBrowserAutomation
             [input.Pod],
             exactOnly: false);
 
-        await FillFirstAsync(
+        var cySelected = await MaerskShadowDom.SelectContainerYardServiceModesAsync(
             page,
-            [
-                "mc-c-commodity input[placeholder*='minimum 2 characters' i]",
-                "mc-c-commodity input[type='text']",
-                "input[name*='commodity' i]",
-                "input[aria-label*='commodity' i]"
-            ],
-            ["commodity"],
+            cancellationToken,
+            timeoutMs: 8_000);
+
+        if (!cySelected)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk CY/CY service mode could not be selected after POL/POD. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
+
+        var commoditySelectors = new[]
+        {
+            "mc-c-commodity input[placeholder*='minimum 2 characters' i]",
+            "mc-c-commodity input[type='text']",
+            "input[name*='commodity' i]",
+            "input[aria-label*='commodity' i]"
+        };
+
+        var commodityFilled = await MaerskShadowDom.FillAsync(
+            page,
+            commoditySelectors,
             input.Commodity,
             cancellationToken,
-            required: false);
+            timeoutMs: 10_000);
 
-        await SelectSuggestionAsync(
+        if (!commodityFilled)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk commodity field did not become enabled after selecting CY/CY. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
+
+        var commoditySelected = await SelectSuggestionAsync(
             page,
             cancellationToken,
             [input.Commodity],
             exactOnly: false);
+
+        if (!commoditySelected)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk commodity '{input.Commodity}' could not be selected. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
 
         var priceOwnerSelected = await MaerskShadowDom.SelectPriceOwnerAsync(
             page,

@@ -8,10 +8,13 @@ public sealed class MaerskEquipmentResolverTests
     private readonly MaerskEquipmentResolver _sut = new();
 
     [DataTestMethod]
+    [DataRow("22G1", MaerskEquipmentResolver.TwentyDryStandard)]
     [DataRow("20DV", MaerskEquipmentResolver.TwentyDryStandard)]
     [DataRow("20STD", MaerskEquipmentResolver.TwentyDryStandard)]
+    [DataRow("42G1", MaerskEquipmentResolver.FortyDryStandard)]
     [DataRow("40DV", MaerskEquipmentResolver.FortyDryStandard)]
     [DataRow("40STD", MaerskEquipmentResolver.FortyDryStandard)]
+    [DataRow("45G1", MaerskEquipmentResolver.FortyDryHigh)]
     [DataRow("40HC", MaerskEquipmentResolver.FortyDryHigh)]
     [DataRow("45HC", MaerskEquipmentResolver.FortyFiveDryHigh)]
     [DataRow("20 TANK", MaerskEquipmentResolver.TwentyTank)]

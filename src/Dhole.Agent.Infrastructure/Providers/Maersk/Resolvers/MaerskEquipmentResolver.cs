@@ -24,13 +24,13 @@ public sealed class MaerskEquipmentResolver
 
         return normalized switch
         {
-            "20DV" or "20STD" or "20DRY" or "20DRYSTANDARD"
+            "22G1" or "20DV" or "20STD" or "20DRY" or "20DRYSTANDARD"
                 => TwentyDryStandard,
 
-            "40DV" or "40STD" or "40DRY" or "40DRYSTANDARD"
+            "42G1" or "40DV" or "40STD" or "40DRY" or "40DRYSTANDARD"
                 => FortyDryStandard,
 
-            "40HC" or "40DRYHIGH" or "40HIGHCUBE" or "40HIGHCUBEDRY"
+            "45G1" or "40HC" or "40DRYHIGH" or "40HIGHCUBE" or "40HIGHCUBEDRY"
                 => FortyDryHigh,
 
             "45HC" or "45DRYHIGH" or "45HIGHCUBE" or "45HIGHCUBEDRY"
