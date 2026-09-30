@@ -94,6 +94,113 @@ public sealed class MaerskOfferParserTests
     }
 
     [TestMethod]
+    public void Parse_ShouldExtractCurrentMaersk202PayloadShape()
+    {
+        const string json = """
+        [
+          {
+            "routeId": "REAL-1",
+            "status": "OFFERED",
+            "availabilityFlag": true,
+            "selectedProducts": [
+              { "productName": "Maersk Spot" }
+            ],
+            "productDataCollection": [
+              {
+                "productReference": "MaerskSpot",
+                "dataBundle": [
+                  {
+                    "dataType": "DEADLINES",
+                    "data": {
+                      "deadlines": [
+                        {
+                          "code": "CCC",
+                          "date": "2026-10-08T10:00:00"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "dataType": "ROUTE_SCHEDULE",
+                    "data": {
+                      "transitTime": "67440",
+                      "schedules": [
+                        {
+                          "originDepartureDatetime": "2026-10-09T19:00:00",
+                          "destinationArrivalDatetime": "2026-11-15T15:00:00",
+                          "startLocation": { "cityName": "Shanghai" },
+                          "endLocation": { "cityName": "Balboa" },
+                          "sailing": {
+                            "vessel": { "name": "MAERSK EUREKA" },
+                            "voyageNumber": "641E"
+                          }
+                        },
+                        {
+                          "originDepartureDatetime": "2026-11-22T13:00:00",
+                          "destinationArrivalDatetime": "2026-11-25T01:00:00",
+                          "startLocation": { "cityName": "Balboa" },
+                          "endLocation": { "cityName": "Puerto Caldera" },
+                          "sailing": {
+                            "vessel": { "name": "AS Savanna" },
+                            "voyageNumber": "647W"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "dataType": "PRICE_BREAKDOWN",
+                    "data": {
+                      "charges": [
+                        {
+                          "chargeApplicationCode": "Freight",
+                          "chargeTypeCode": "BAS",
+                          "chargeTypeName": "Basic Ocean Freight",
+                          "amount": { "unit": "USD", "value": 8150.0 }
+                        },
+                        {
+                          "chargeApplicationCode": "Destination",
+                          "chargeTypeCode": "DHC",
+                          "chargeTypeName": "Terminal Handling Service - Destination",
+                          "amount": { "unit": "USD", "value": 245.0 }
+                        }
+                      ],
+                      "totalAmount": { "unit": "USD", "value": 8732.0 },
+                      "totalBasicFreightAmount": { "unit": "USD", "value": 8150.0 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+        """;
+
+        var offer = new MaerskOfferParser().Parse(json).Offers.Single();
+
+        Assert.AreEqual("USD", offer.OceanFreight?.Currency);
+        Assert.AreEqual(8150m, offer.OceanFreight?.Amount);
+        Assert.AreEqual("USD", offer.AllIn?.Currency);
+        Assert.AreEqual(8732m, offer.AllIn?.Amount);
+        Assert.AreEqual(2, offer.Charges.Count);
+        Assert.AreEqual(2, offer.Legs.Count);
+        Assert.AreEqual("Shanghai", offer.Legs.First().From);
+        Assert.AreEqual("Puerto Caldera", offer.Legs.Last().To);
+        Assert.AreEqual("MAERSK EUREKA", offer.Vessel);
+        Assert.AreEqual("641E", offer.Voyage);
+        Assert.AreEqual(
+            new DateTimeOffset(2026, 10, 8, 10, 0, 0, TimeSpan.Zero),
+            offer.CargoCutoff);
+        Assert.AreEqual(
+            new DateTimeOffset(2026, 10, 9, 19, 0, 0, TimeSpan.Zero),
+            offer.Etd);
+        Assert.AreEqual(
+            new DateTimeOffset(2026, 11, 25, 1, 0, 0, TimeSpan.Zero),
+            offer.Eta);
+        Assert.AreEqual(47, offer.TransitDays);
+    }
+
+    [TestMethod]
     public void Parse_ShouldSupportAlternativeMaerskFieldNames()
     {
         const string json = """

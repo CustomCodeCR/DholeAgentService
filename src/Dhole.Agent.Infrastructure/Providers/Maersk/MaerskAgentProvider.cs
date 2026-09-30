@@ -646,8 +646,10 @@ public sealed class MaerskAgentProvider(
         {
             values[key] = key.Trim().ToLowerInvariant() switch
             {
-                "etd" => first?.Etd,
+                "etd" => first?.CargoCutoff ?? first?.Etd,
+                "scheduleetd" or "sailingetd" => first?.Etd,
                 "eta" => first?.Eta,
+                "cargocutoff" or "ccc" => first?.CargoCutoff,
                 "transittime" or "transitdays" => first?.TransitDays,
                 "vessel" => first?.Vessel,
                 "voyage" => first?.Voyage,
