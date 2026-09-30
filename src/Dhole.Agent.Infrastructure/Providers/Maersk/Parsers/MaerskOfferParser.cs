@@ -334,7 +334,7 @@ public sealed class MaerskOfferParser
             if (!TryGetProperty(element, propertyName, out var value))
                 continue;
 
-            var money = ParseMoney(value);
+            var money = ParseMoney(element, value);
 
             if (money is not null)
                 return money;
@@ -343,26 +343,58 @@ public sealed class MaerskOfferParser
         return null;
     }
 
-    private static NormalizedMoney? ParseMoney(JsonElement value)
+    private static NormalizedMoney? ParseMoney(
+        JsonElement parent,
+        JsonElement value)
     {
-        if (value.ValueKind != JsonValueKind.Object)
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var currency = GetFirstString(
+                value,
+                "unit",
+                "currency",
+                "currencyCode",
+                "currencyIsoCode");
+
+            var amount = GetFirstDecimal(
+                value,
+                "value",
+                "amount");
+
+            return !string.IsNullOrWhiteSpace(currency) && amount.HasValue
+                ? new NormalizedMoney(currency, amount.Value)
+                : null;
+        }
+
+        decimal? scalarAmount = null;
+
+        if (value.ValueKind == JsonValueKind.Number
+            && value.TryGetDecimal(out var number))
+        {
+            scalarAmount = number;
+        }
+        else if (decimal.TryParse(
+                     value.ToString(),
+                     NumberStyles.Any,
+                     CultureInfo.InvariantCulture,
+                     out number))
+        {
+            scalarAmount = number;
+        }
+
+        if (!scalarAmount.HasValue)
             return null;
 
-        var currency = GetFirstString(
-            value,
-            "unit",
-            "currency",
+        var parentCurrency = GetFirstString(
+            parent,
             "currencyCode",
-            "currencyIsoCode");
+            "currency",
+            "currencyIsoCode",
+            "currencyISOCode");
 
-        var amount = GetFirstDecimal(
-            value,
-            "value",
-            "amount");
-
-        return !string.IsNullOrWhiteSpace(currency) && amount.HasValue
-            ? new NormalizedMoney(currency, amount.Value)
-            : null;
+        return string.IsNullOrWhiteSpace(parentCurrency)
+            ? null
+            : new NormalizedMoney(parentCurrency, scalarAmount.Value);
     }
 
     private static string? GetNestedString(
