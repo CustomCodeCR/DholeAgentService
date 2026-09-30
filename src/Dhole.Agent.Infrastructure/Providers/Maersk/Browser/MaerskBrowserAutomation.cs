@@ -79,18 +79,13 @@ public sealed class MaerskBrowserAutomation
             [input.Pod],
             exactOnly: false);
 
-        var cySelected = await MaerskShadowDom.SelectContainerYardServiceModesAsync(
+        // Best-effort CY/CY selection. Maersk sometimes keeps Container Yard as
+        // the default state without exposing a clickable radio/button. The actual
+        // readiness check is the commodity control becoming enabled below.
+        await MaerskShadowDom.SelectContainerYardServiceModesAsync(
             page,
             cancellationToken,
             timeoutMs: 8_000);
-
-        if (!cySelected)
-        {
-            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-            throw new InvalidOperationException(
-                $"Maersk CY/CY service mode could not be selected after POL/POD. " +
-                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
-        }
 
         var commoditySelectors = new[]
         {
@@ -111,7 +106,7 @@ public sealed class MaerskBrowserAutomation
         {
             var diagnostics = await MaerskShadowDom.DescribeAsync(page);
             throw new InvalidOperationException(
-                $"Maersk commodity field did not become enabled after selecting CY/CY. " +
+                $"Maersk commodity field did not become enabled after POL/POD and CY/CY resolution. " +
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
