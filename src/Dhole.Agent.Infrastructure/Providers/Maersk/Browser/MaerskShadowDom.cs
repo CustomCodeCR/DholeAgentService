@@ -114,100 +114,163 @@ internal static class MaerskShadowDom
                 .trim()
                 .toLowerCase();
 
-            const isVisible = element => {
-                if (!(element instanceof Element)) return false;
-                const style = getComputedStyle(element);
-                const rect = element.getBoundingClientRect();
-                return style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && rect.width > 0
-                    && rect.height > 0;
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
             };
 
-            const roots = [];
-            const collectRoots = root => {
-                roots.push(root);
-                for (const host of root.querySelectorAll('*')) {
-                    if (host.shadowRoot)
-                        collectRoots(host.shadowRoot);
+            const elementText = element => normalize([
+                element.innerText,
+                element.textContent,
+                element.getAttribute?.('label'),
+                element.getAttribute?.('aria-label'),
+                element.getAttribute?.('value'),
+                element.getAttribute?.('data-value'),
+                element.getAttribute?.('data-cy'),
+                element.getAttribute?.('name')
+            ].filter(Boolean).join(' '));
+
+            const isCy = element => {
+                const text = elementText(element);
+                return text === 'cy'
+                    || text.includes('container yard')
+                    || text.includes('container-yard')
+                    || text.includes('containeryard')
+                    || text.includes('service mode cy')
+                    || text.includes('servicemode cy');
+            };
+
+            const interactiveAncestor = element => {
+                let current = element;
+
+                while (current && current instanceof Element) {
+                    const tag = current.tagName?.toLowerCase?.() || '';
+                    const role = normalize(current.getAttribute?.('role'));
+
+                    if (['button', 'label', 'input', 'option', 'mc-radio', 'mc-button', 'mc-option', 'mc-tab'].includes(tag)
+                        || ['radio', 'button', 'option', 'tab'].includes(role)
+                        || current.hasAttribute?.('tabindex')) {
+                        return current;
+                    }
+
+                    current = current.parentElement;
+                }
+
+                return element;
+            };
+
+            const activate = element => {
+                const target = interactiveAncestor(element);
+                const input =
+                    target instanceof HTMLInputElement
+                        ? target
+                        : target.shadowRoot?.querySelector?.("input[type='radio'],input[type='checkbox']")
+                          || target.querySelector?.("input[type='radio'],input[type='checkbox']");
+
+                try {
+                    if (input) {
+                        if (input.checked)
+                            return true;
+
+                        input.click();
+
+                        if (!input.checked) {
+                            const descriptor = Object.getOwnPropertyDescriptor(
+                                HTMLInputElement.prototype,
+                                'checked');
+
+                            descriptor?.set?.call(input, true);
+                            input.dispatchEvent(new Event('input', {
+                                bubbles: true,
+                                composed: true
+                            }));
+                            input.dispatchEvent(new Event('change', {
+                                bubbles: true,
+                                composed: true
+                            }));
+                        }
+
+                        return !!input.checked;
+                    }
+
+                    target.click();
+                    return true;
+                } catch {
+                    return false;
                 }
             };
 
-            collectRoots(document);
-
+            const allRoots = rootsOf(document);
             const components = [];
-            for (const root of roots) {
-                for (const component of root.querySelectorAll('mc-c-location-servicemode')) {
+
+            for (const root of allRoots) {
+                for (const component of root.querySelectorAll?.('mc-c-location-servicemode') || []) {
                     if (!components.includes(component))
                         components.push(component);
                 }
             }
 
-            const selectInRoot = root => {
-                const candidates = root.querySelectorAll(
-                    "mc-radio,label,[role='radio'],button,input[type='radio']");
+            let activated = 0;
 
-                for (const element of candidates) {
-                    const text = normalize(
-                        element.innerText
-                        || element.textContent
-                        || element.getAttribute?.('label')
-                        || element.getAttribute?.('aria-label')
-                        || element.getAttribute?.('value'));
+            const activateCyInside = component => {
+                for (const root of rootsOf(component)) {
+                    // First prefer semantic/interactive controls.
+                    for (const element of root.querySelectorAll?.(
+                        "input,button,label,mc-radio,mc-button,mc-option,[role='radio'],[role='button'],[role='option'],[tabindex]"
+                    ) || []) {
+                        if (isCy(element) && activate(element))
+                            return true;
+                    }
 
-                    const isContainerYard =
-                        text.includes('container yard')
-                        || text === 'cy'
-                        || text.includes('yard');
-
-                    if (!isContainerYard)
-                        continue;
-
-                    const nativeInput =
-                        element instanceof HTMLInputElement
-                            ? element
-                            : element.shadowRoot?.querySelector?.("input[type='radio']")
-                              || element.querySelector?.("input[type='radio']");
-
-                    if (nativeInput?.checked)
-                        return true;
-
-                    try {
-                        if (isVisible(element) || nativeInput) {
-                            (nativeInput || element).click();
-                            return nativeInput ? !!nativeInput.checked : true;
-                        }
-                    } catch {
-                        // Continue looking for another representation of the control.
+                    // Maersk has also rendered the label as a plain span/div inside a
+                    // clickable parent. Inspect all descendants and climb to the
+                    // closest interactive ancestor.
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (isCy(element) && activate(element))
+                            return true;
                     }
                 }
 
                 return false;
             };
 
-            let selected = 0;
-
             if (components.length > 0) {
                 for (const component of components) {
-                    const rootsToTry = [component];
-                    if (component.shadowRoot)
-                        rootsToTry.unshift(component.shadowRoot);
-
-                    if (rootsToTry.some(selectInRoot))
-                        selected++;
+                    if (activateCyInside(component))
+                        activated++;
                 }
 
-                return selected === components.length;
+                // Some versions render one component that controls both ends.
+                return activated === components.length || (components.length === 1 && activated === 1);
             }
 
-            // Fallback for a Maersk layout that renders the same controls without
-            // the mc-c-location-servicemode host.
-            for (const root of roots) {
-                if (selectInRoot(root))
-                    selected++;
+            // Fallback when the custom host is flattened/renamed but the visible
+            // "Container Yard" controls are still present.
+            for (const root of allRoots) {
+                for (const element of root.querySelectorAll?.('*') || []) {
+                    if (isCy(element) && activate(element))
+                        activated++;
+                }
             }
 
-            return selected > 0;
+            return activated > 0;
         }
         """;
 
@@ -370,7 +433,8 @@ internal static class MaerskShadowDom
                 mdsInputs: [],
                 inputs: [],
                 customElements: [],
-                visibleOptions: []
+                visibleOptions: [],
+                serviceModes: []
             };
 
             const visit = root => {
@@ -392,6 +456,25 @@ internal static class MaerskShadowDom
                             && style.visibility !== 'hidden'
                             && rect.width > 0
                             && rect.height > 0
+                    });
+                }
+
+                for (const component of root.querySelectorAll('mc-c-location-servicemode')) {
+                    const attrs = {};
+                    for (const attr of component.attributes || [])
+                        attrs[attr.name] = attr.value;
+
+                    result.serviceModes.push({
+                        text: (component.innerText || component.textContent || '')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 500),
+                        attributes: attrs,
+                        hasShadowRoot: !!component.shadowRoot,
+                        shadowText: (component.shadowRoot?.textContent || '')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 500)
                     });
                 }
 
