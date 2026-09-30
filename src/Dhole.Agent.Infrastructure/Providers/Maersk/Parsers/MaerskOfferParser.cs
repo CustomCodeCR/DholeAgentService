@@ -24,15 +24,18 @@ public sealed class MaerskOfferParser
         return new NormalizedOceanFreightRates("MAERSK", "MAERSK", offers);
     }
 
-    private static void CollectOfferObjects(JsonElement element, List<JsonElement> output)
+    private static void CollectOfferObjects(
+        JsonElement element,
+        List<JsonElement> output)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
             if (TryGetString(element, "status", out _)
                 && (TryGetProperty(element, "routeId", out _)
-                    || TryGetProperty(element, "externalRouteId", out _)
                     || TryGetProperty(element, "productDataCollection", out _)))
+            {
                 output.Add(element);
+            }
 
             foreach (var property in element.EnumerateObject())
                 CollectOfferObjects(property.Value, output);
@@ -48,8 +51,14 @@ public sealed class MaerskOfferParser
     {
         var status = GetString(offer, "status");
 
-        if (!string.Equals(status, "OFFERED", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(status, "AVAILABLE", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(
+                status,
+                "OFFERED",
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(
+                status,
+                "AVAILABLE",
+                StringComparison.OrdinalIgnoreCase))
             return false;
 
         return !TryGetProperty(offer, "availabilityFlag", out var available)
@@ -69,8 +78,10 @@ public sealed class MaerskOfferParser
         var products = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var charges = new List<NormalizedCharge>();
         var legs = new List<NormalizedLeg>();
-        NormalizedMoney? ocean = null;
+
+        NormalizedMoney? oceanFreight = null;
         NormalizedMoney? allIn = null;
+        DateTimeOffset? cargoCutoff = null;
 
         Visit(offer, node =>
         {
@@ -83,19 +94,21 @@ public sealed class MaerskOfferParser
             if (!string.IsNullOrWhiteSpace(productName))
                 products.Add(productName);
 
-            var currency = GetFirstString(
-                node,
-                "currencyCode",
-                "currency",
-                "currencyIsoCode",
-                "currencyISOCode");
-
-            var basicFreightAmount = GetFirstDecimal(
+            // Current Maersk PRICE_BREAKDOWN returns money as:
+            // { "unit": "USD", "value": 8150.0 }
+            oceanFreight ??= GetFirstMoney(
                 node,
                 "totalBasicFreightAmount",
                 "basicFreightAmount",
                 "oceanFreightAmount",
                 "freightAmount");
+
+            allIn ??= GetFirstMoney(
+                node,
+                "totalAmount",
+                "allInAmount",
+                "totalPrice",
+                "totalPriceAmount");
 
             var chargeType = GetFirstString(
                 node,
@@ -103,212 +116,166 @@ public sealed class MaerskOfferParser
                 "chargeCode",
                 "chargeType");
 
-            var application = GetFirstString(
-                node,
-                "chargeApplicationCode",
-                "applicationCode",
-                "chargeApplication");
-
-            if (basicFreightAmount.HasValue && currency is not null)
-            {
-                ocean ??= new NormalizedMoney(
-                    currency,
-                    basicFreightAmount.Value);
-            }
-            else if (string.Equals(
-                         chargeType,
-                         "BAS",
-                         StringComparison.OrdinalIgnoreCase)
-                     && (string.IsNullOrWhiteSpace(application)
-                         || application.Contains(
-                             "freight",
-                             StringComparison.OrdinalIgnoreCase)))
-            {
-                var amount = GetFirstDecimal(
-                    node,
-                    "amount",
-                    "totalAmount",
-                    "priceAmount");
-
-                if (amount.HasValue && currency is not null)
-                    ocean ??= new NormalizedMoney(currency, amount.Value);
-            }
-
-            var total = GetFirstDecimal(
-                node,
-                "allInAmount",
-                "totalPrice",
-                "totalAmount",
-                "totalPriceAmount");
-
-            if (total.HasValue && currency is not null)
-                allIn ??= new NormalizedMoney(currency, total.Value);
-
             var chargeName = GetFirstString(
                 node,
+                "chargeTypeName",
                 "chargeName",
                 "chargeDescription",
+                "displayName",
                 "description");
 
             if (!string.IsNullOrWhiteSpace(chargeType)
                 || !string.IsNullOrWhiteSpace(chargeName))
             {
-                var chargeAmount = GetFirstDecimal(
+                var chargeMoney = GetFirstMoney(
                     node,
                     "amount",
-                    "chargeAmount",
-                    "totalAmount",
-                    "priceAmount",
-                    "totalBasicFreightAmount");
+                    "amountInOriginalCurrency",
+                    "unitPrice",
+                    "unitPriceInOriginalCurrency");
 
-                if (chargeAmount.HasValue && currency is not null)
+                if (chargeMoney is not null)
                 {
                     charges.Add(new NormalizedCharge(
                         chargeType ?? "UNKNOWN",
                         chargeName,
-                        currency,
-                        chargeAmount.Value));
+                        chargeMoney.Currency,
+                        chargeMoney.Amount));
+
+                    if (oceanFreight is null
+                        && string.Equals(
+                            chargeType,
+                            "BAS",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        oceanFreight = chargeMoney;
+                    }
                 }
             }
 
-            var dep = GetFirstDate(
+            // Commercial Cargo Cutoff (CCC). This is the ETD field requested by
+            // the extraction profile, while the sailing departure is preserved
+            // separately on the offer/legs.
+            if (string.Equals(
+                    GetString(node, "code"),
+                    "CCC",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                cargoCutoff ??= GetDate(node, "date");
+            }
+
+            // Current ROUTE_SCHEDULE shape:
+            // schedules[].originDepartureDatetime
+            // schedules[].destinationArrivalDatetime
+            var departure = GetFirstDate(
                 node,
+                "originDepartureDatetime",
                 "departureDateTime",
                 "departureDate",
                 "estimatedDepartureDateTime",
                 "estimatedDepartureDate",
                 "etd");
 
-            var arr = GetFirstDate(
+            var arrival = GetFirstDate(
                 node,
+                "destinationArrivalDatetime",
                 "arrivalDateTime",
                 "arrivalDate",
                 "estimatedArrivalDateTime",
                 "estimatedArrivalDate",
                 "eta");
 
-            var isRouteNode =
-                string.Equals(
-                    GetString(node, "dataBundleType"),
-                    "ROUTE_SCHEDULE",
-                    StringComparison.OrdinalIgnoreCase)
-                || TryGetProperty(node, "routeSchedule", out _)
-                || dep.HasValue
-                || arr.HasValue;
-
-            if (isRouteNode)
+            if (departure.HasValue || arrival.HasValue)
             {
-                var from = GetFirstString(
-                    node,
-                    "from",
-                    "origin",
-                    "originName",
-                    "departureLocationName");
+                var from =
+                    GetNestedString(node, "startLocation", "cityName")
+                    ?? GetNestedString(node, "startLocation", "siteName")
+                    ?? GetNestedString(node, "startLocation", "unLocode")
+                    ?? GetFirstString(
+                        node,
+                        "from",
+                        "origin",
+                        "originName",
+                        "departureLocationName");
 
-                var to = GetFirstString(
-                    node,
-                    "to",
-                    "destination",
-                    "destinationName",
-                    "arrivalLocationName");
+                var to =
+                    GetNestedString(node, "endLocation", "cityName")
+                    ?? GetNestedString(node, "endLocation", "siteName")
+                    ?? GetNestedString(node, "endLocation", "unLocode")
+                    ?? GetFirstString(
+                        node,
+                        "to",
+                        "destination",
+                        "destinationName",
+                        "arrivalLocationName");
 
-                var vessel = GetFirstString(
-                    node,
-                    "vesselName",
-                    "vessel",
-                    "transportName");
+                var vessel =
+                    GetNestedString(node, "sailing", "vessel", "name")
+                    ?? GetFirstString(
+                        node,
+                        "vesselName",
+                        "transportName");
 
-                var voyage = GetFirstString(
-                    node,
-                    "voyageNumber",
-                    "voyage",
-                    "transportVoyage");
+                var voyage =
+                    GetNestedString(node, "sailing", "voyageNumber")
+                    ?? GetFirstString(
+                        node,
+                        "voyageNumber",
+                        "voyage",
+                        "transportVoyage");
 
-                if (from is not null
-                    || to is not null
-                    || dep.HasValue
-                    || arr.HasValue
-                    || vessel is not null
-                    || voyage is not null)
-                {
-                    legs.Add(new NormalizedLeg(
-                        from,
-                        to,
-                        dep,
-                        arr,
-                        vessel,
-                        voyage));
-                }
+                legs.Add(new NormalizedLeg(
+                    from,
+                    to,
+                    departure,
+                    arrival,
+                    vessel,
+                    voyage));
             }
         });
 
-        var etd = GetFirstDate(
-                offer,
-                "etd",
-                "departureDateTime",
-                "departureDate",
-                "estimatedDepartureDateTime",
-                "estimatedDepartureDate")
-            ?? legs
-                .Where(x => x.Departure.HasValue)
-                .Select(x => x.Departure)
-                .Min();
+        var etd = legs
+            .Where(x => x.Departure.HasValue)
+            .Select(x => x.Departure)
+            .Min();
 
-        var eta = GetFirstDate(
-                offer,
-                "eta",
-                "arrivalDateTime",
-                "arrivalDate",
-                "estimatedArrivalDateTime",
-                "estimatedArrivalDate")
-            ?? legs
-                .Where(x => x.Arrival.HasValue)
-                .Select(x => x.Arrival)
-                .Max();
+        var eta = legs
+            .Where(x => x.Arrival.HasValue)
+            .Select(x => x.Arrival)
+            .Max();
 
-        var transit = GetFirstInt(
-                offer,
-                "transitTime",
-                "transitDays",
-                "transitTimeInDays",
-                "totalTransitDays")
-            ?? (etd.HasValue && eta.HasValue
-                ? Math.Max(
-                    0,
-                    (int)Math.Ceiling((eta.Value - etd.Value).TotalDays))
-                : 0);
+        var rawTransit = FindFirstIntRecursive(
+            offer,
+            "transitTime");
 
-        var vesselName = GetFirstString(
-                offer,
-                "vesselName",
-                "vessel",
-                "transportName")
-            ?? legs
-                .Select(x => x.Vessel)
-                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        var transitDays = etd.HasValue && eta.HasValue
+            ? Math.Max(
+                0,
+                (int)Math.Ceiling((eta.Value - etd.Value).TotalDays))
+            : NormalizeTransitDays(rawTransit);
 
-        var voyageNumber = GetFirstString(
-                offer,
-                "voyageNumber",
-                "voyage",
-                "transportVoyage")
-            ?? legs
-                .Select(x => x.Voyage)
-                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        var vessel = legs
+            .Select(x => x.Vessel)
+            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+
+        var voyage = legs
+            .Select(x => x.Voyage)
+            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
 
         return new NormalizedOceanOffer(
             routeId,
             true,
             etd,
             eta,
-            transit,
-            vesselName,
-            voyageNumber,
-            ocean,
+            transitDays,
+            vessel,
+            voyage,
+            oceanFreight,
             allIn,
             charges.Distinct().ToArray(),
             legs.Distinct().ToArray(),
-            products.ToArray());
+            products.ToArray(),
+            cargoCutoff);
     }
 
     private static NormalizedOceanOffer MergeSameRoute(
@@ -316,18 +283,17 @@ public sealed class MaerskOfferParser
     {
         var first = offers.First();
 
-        var etd = offers
-            .Select(x => x.Etd)
-            .FirstOrDefault(x => x.HasValue);
-
-        var eta = offers
-            .Select(x => x.Eta)
-            .FirstOrDefault(x => x.HasValue);
-
         return first with
         {
-            Etd = etd,
-            Eta = eta,
+            Etd = offers
+                .Select(x => x.Etd)
+                .FirstOrDefault(x => x.HasValue),
+            Eta = offers
+                .Select(x => x.Eta)
+                .FirstOrDefault(x => x.HasValue),
+            CargoCutoff = offers
+                .Select(x => x.CargoCutoff)
+                .FirstOrDefault(x => x.HasValue),
             TransitDays = offers
                 .Select(x => x.TransitDays)
                 .FirstOrDefault(x => x > 0),
@@ -357,6 +323,123 @@ public sealed class MaerskOfferParser
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
         };
+    }
+
+    private static NormalizedMoney? GetFirstMoney(
+        JsonElement element,
+        params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!TryGetProperty(element, propertyName, out var value))
+                continue;
+
+            var money = ParseMoney(value);
+
+            if (money is not null)
+                return money;
+        }
+
+        return null;
+    }
+
+    private static NormalizedMoney? ParseMoney(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var currency = GetFirstString(
+            value,
+            "unit",
+            "currency",
+            "currencyCode",
+            "currencyIsoCode");
+
+        var amount = GetFirstDecimal(
+            value,
+            "value",
+            "amount");
+
+        return !string.IsNullOrWhiteSpace(currency) && amount.HasValue
+            ? new NormalizedMoney(currency, amount.Value)
+            : null;
+    }
+
+    private static string? GetNestedString(
+        JsonElement element,
+        params string[] path)
+    {
+        var current = element;
+
+        foreach (var segment in path)
+        {
+            if (!TryGetProperty(current, segment, out current))
+                return null;
+        }
+
+        return current.ValueKind == JsonValueKind.String
+            ? current.GetString()
+            : current.ValueKind == JsonValueKind.Null
+                ? null
+                : current.ToString();
+    }
+
+    private static int? FindFirstIntRecursive(
+        JsonElement element,
+        string propertyName)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (TryGetProperty(element, propertyName, out var value))
+            {
+                if (value.ValueKind == JsonValueKind.Number
+                    && value.TryGetInt32(out var number))
+                    return number;
+
+                if (int.TryParse(
+                        value.ToString(),
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out number))
+                    return number;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = FindFirstIntRecursive(
+                    property.Value,
+                    propertyName);
+
+                if (nested.HasValue)
+                    return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = FindFirstIntRecursive(
+                    item,
+                    propertyName);
+
+                if (nested.HasValue)
+                    return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static int NormalizeTransitDays(int? rawTransit)
+    {
+        if (!rawTransit.HasValue || rawTransit.Value <= 0)
+            return 0;
+
+        // Maersk currently returns ROUTE_SCHEDULE transitTime in minutes
+        // (e.g. 67440), while older fixtures used a day count directly.
+        return rawTransit.Value > 365
+            ? (int)Math.Ceiling(rawTransit.Value / 1440d)
+            : rawTransit.Value;
     }
 
     private static void Visit(
@@ -443,25 +526,19 @@ public sealed class MaerskOfferParser
     {
         foreach (var name in names)
         {
-            var value = GetDecimal(element, name);
+            if (!TryGetProperty(element, name, out var value))
+                continue;
 
-            if (value.HasValue)
-                return value;
-        }
+            if (value.ValueKind == JsonValueKind.Number
+                && value.TryGetDecimal(out var number))
+                return number;
 
-        return null;
-    }
-
-    private static int? GetFirstInt(
-        JsonElement element,
-        params string[] names)
-    {
-        foreach (var name in names)
-        {
-            var value = GetInt(element, name);
-
-            if (value.HasValue)
-                return value;
+            if (decimal.TryParse(
+                    value.ToString(),
+                    NumberStyles.Any,
+                    CultureInfo.InvariantCulture,
+                    out number))
+                return number;
         }
 
         return null;
@@ -473,49 +550,13 @@ public sealed class MaerskOfferParser
     {
         foreach (var name in names)
         {
-            var value = GetDate(element, name);
+            var date = GetDate(element, name);
 
-            if (value.HasValue)
-                return value;
+            if (date.HasValue)
+                return date;
         }
 
         return null;
-    }
-
-    private static decimal? GetDecimal(
-        JsonElement element,
-        string name)
-    {
-        if (!TryGetProperty(element, name, out var value))
-            return null;
-
-        if (value.ValueKind == JsonValueKind.Number
-            && value.TryGetDecimal(out var number))
-            return number;
-
-        return decimal.TryParse(
-            value.ToString(),
-            NumberStyles.Any,
-            CultureInfo.InvariantCulture,
-            out number)
-            ? number
-            : null;
-    }
-
-    private static int? GetInt(
-        JsonElement element,
-        string name)
-    {
-        if (!TryGetProperty(element, name, out var value))
-            return null;
-
-        if (value.ValueKind == JsonValueKind.Number
-            && value.TryGetInt32(out var number))
-            return number;
-
-        return int.TryParse(value.ToString(), out number)
-            ? number
-            : null;
     }
 
     private static DateTimeOffset? GetDate(

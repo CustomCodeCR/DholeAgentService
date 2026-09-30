@@ -29,7 +29,8 @@ public sealed record NormalizedOceanOffer(
     NormalizedMoney? AllIn,
     IReadOnlyCollection<NormalizedCharge> Charges,
     IReadOnlyCollection<NormalizedLeg> Legs,
-    IReadOnlyCollection<string> Products);
+    IReadOnlyCollection<string> Products,
+    DateTimeOffset? CargoCutoff = null);
 
 public sealed record NormalizedOceanFreightRates(
     string Provider,
