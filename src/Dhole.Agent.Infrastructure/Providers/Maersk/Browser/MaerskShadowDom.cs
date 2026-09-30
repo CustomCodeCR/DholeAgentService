@@ -106,6 +106,184 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string SelectLocationSuggestionScript = """
+        args => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const compact = value => normalize(value)
+                .replace(/[^a-z0-9]+/g, '');
+
+            const expected = (args.expectedValues || [])
+                .map(compact)
+                .filter(Boolean);
+
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
+            };
+
+            const findComponent = root => {
+                for (const scope of rootsOf(root)) {
+                    for (const component of scope.querySelectorAll?.(
+                        'mc-c-location-servicemode'
+                    ) || []) {
+                        if ((component.getAttribute('id') || '') === args.componentId)
+                            return component;
+                    }
+                }
+
+                return null;
+            };
+
+            const component = findComponent(document);
+            if (!component)
+                return false;
+
+            const labelOf = element => [
+                element.innerText,
+                element.textContent,
+                element.shadowRoot?.textContent,
+                element.getAttribute?.('label'),
+                element.getAttribute?.('aria-label'),
+                element.getAttribute?.('value')
+            ].filter(Boolean).join(' ');
+
+            const click = element => {
+                try {
+                    element.scrollIntoView?.({ block: 'nearest' });
+                    element.click?.();
+                    element.dispatchEvent?.(new MouseEvent('click', {
+                        bubbles: true,
+                        composed: true
+                    }));
+                    return true;
+                } catch {
+                    return false;
+                }
+            };
+
+            const candidates = [];
+            for (const root of rootsOf(component)) {
+                for (const option of root.querySelectorAll?.(
+                    "mc-option,[role='option'],li[role='option'],[part*='option'],[data-test*='suggestion' i],[data-testid*='suggestion' i]"
+                ) || []) {
+                    if (!candidates.includes(option))
+                        candidates.push(option);
+                }
+            }
+
+            for (const option of candidates) {
+                const label = compact(labelOf(option));
+
+                if (expected.some(value =>
+                    label === value
+                    || label.includes(value)
+                    || value.includes(label))) {
+                    return click(option);
+                }
+            }
+
+            // The location list is scoped to one origin/destination component, so
+            // choosing its first returned option is safer than the old page-global
+            // fallback which could hit another typeahead.
+            return candidates.length > 0 && click(candidates[0]);
+        }
+        """;
+
+    private const string IsLocationSelectionSettledScript = """
+        componentId => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
+            };
+
+            let component = null;
+            for (const root of rootsOf(document)) {
+                for (const candidate of root.querySelectorAll?.(
+                    'mc-c-location-servicemode'
+                ) || []) {
+                    if ((candidate.getAttribute('id') || '') === componentId) {
+                        component = candidate;
+                        break;
+                    }
+                }
+
+                if (component)
+                    break;
+            }
+
+            if (!component)
+                return false;
+
+            const text = normalize([
+                component.innerText,
+                component.textContent,
+                component.shadowRoot?.textContent
+            ].filter(Boolean).join(' '));
+
+            if (text.includes('cannot be left blank')
+                || text.includes('no location matching')
+                || text.includes('no matching location found')) {
+                return false;
+            }
+
+            // When the list is still open Maersk announces the available
+            // suggestions through its live region. A committed selection closes
+            // that state and leaves the CY/SD badge.
+            if (text.includes('suggestions available')
+                || text.includes('first:')) {
+                return false;
+            }
+
+            const serviceMode = normalize(component.getAttribute('servicemode'));
+            return serviceMode === 'cy' || serviceMode === 'sd';
+        }
+        """;
+
     private const string SelectContainerYardServiceModesScript = """
         () => {
             const normalize = value => (value || '')
@@ -859,6 +1037,77 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SelectLocationSuggestionAsync(
+        IPage page,
+        string componentId,
+        IReadOnlyCollection<string> expectedValues,
+        CancellationToken cancellationToken,
+        int timeoutMs = 5_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            SelectLocationSuggestionScript,
+                            new
+                            {
+                                componentId,
+                                expectedValues = expectedValues.ToArray()
+                            }))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while Maersk refreshes the remote location list.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> IsLocationSelectionSettledAsync(
+        IPage page,
+        string componentId,
+        CancellationToken cancellationToken,
+        int timeoutMs = 3_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            IsLocationSelectionSettledScript,
+                            componentId))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the typeahead commits its selection.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
         }
 
         return false;

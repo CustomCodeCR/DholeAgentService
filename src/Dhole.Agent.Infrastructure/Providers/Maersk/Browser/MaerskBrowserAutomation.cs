@@ -35,49 +35,45 @@ public sealed class MaerskBrowserAutomation
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        await FillFirstAsync(
+        var originSelectors = new[]
+        {
+            "#mc-input-origin",
+            "input#mc-input-origin",
+            "mc-c-origin-destination #mc-input-origin",
+            "input[name*='origin' i]",
+            "input[placeholder*='origin' i]",
+            "input[aria-label*='origin' i]",
+            "input[name*='from' i]",
+            "input[placeholder*='from' i]"
+        };
+
+        await FillAndSelectLocationAsync(
             page,
-            [
-                "#mc-input-origin",
-                "input#mc-input-origin",
-                "mc-c-origin-destination #mc-input-origin",
-                "input[name*='origin' i]",
-                "input[placeholder*='origin' i]",
-                "input[aria-label*='origin' i]",
-                "input[name*='from' i]",
-                "input[placeholder*='from' i]"
-            ],
+            originSelectors,
             ["origin", "from"],
+            "origin",
             input.Pol,
             cancellationToken);
 
-        await SelectSuggestionAsync(
-            page,
-            cancellationToken,
-            [input.Pol],
-            exactOnly: false);
+        var destinationSelectors = new[]
+        {
+            "#mc-input-destination",
+            "input#mc-input-destination",
+            "mc-c-origin-destination #mc-input-destination",
+            "input[name*='destination' i]",
+            "input[placeholder*='destination' i]",
+            "input[aria-label*='destination' i]",
+            "input[name*='to' i]",
+            "input[placeholder*='to' i]"
+        };
 
-        await FillFirstAsync(
+        await FillAndSelectLocationAsync(
             page,
-            [
-                "#mc-input-destination",
-                "input#mc-input-destination",
-                "mc-c-origin-destination #mc-input-destination",
-                "input[name*='destination' i]",
-                "input[placeholder*='destination' i]",
-                "input[aria-label*='destination' i]",
-                "input[name*='to' i]",
-                "input[placeholder*='to' i]"
-            ],
+            destinationSelectors,
             ["destination", "to"],
+            "destination",
             input.Pod,
             cancellationToken);
-
-        await SelectSuggestionAsync(
-            page,
-            cancellationToken,
-            [input.Pod],
-            exactOnly: false);
 
         // Best-effort CY/CY selection. Maersk sometimes keeps Container Yard as
         // the default state without exposing a clickable radio/button. The actual
@@ -278,6 +274,92 @@ public sealed class MaerskBrowserAutomation
             throw new InvalidOperationException(
                 $"Maersk price search button was not found. URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
+    }
+
+    private static async Task FillAndSelectLocationAsync(
+        IPage page,
+        string[] selectors,
+        string[] semanticNames,
+        string componentId,
+        string displayValue,
+        CancellationToken cancellationToken)
+    {
+        var searchTerms = GetLocationSearchTerms(displayValue);
+
+        foreach (var searchTerm in searchTerms)
+        {
+            await FillFirstAsync(
+                page,
+                selectors,
+                semanticNames,
+                searchTerm,
+                cancellationToken);
+
+            // Give Maersk's remote location typeahead enough time to refresh its
+            // options before interacting with the suggestion list.
+            await Task.Delay(500, cancellationToken);
+
+            var selected = await MaerskShadowDom.SelectLocationSuggestionAsync(
+                page,
+                componentId,
+                [displayValue, searchTerm],
+                cancellationToken,
+                timeoutMs: 4_000);
+
+            if (!selected)
+            {
+                // The current MDS typeahead also supports keyboard selection even
+                // when its option elements are not exposed as visibly clickable
+                // nodes through Playwright.
+                var moved = await MaerskShadowDom.PressFirstAsync(
+                    page,
+                    selectors,
+                    "ArrowDown",
+                    cancellationToken,
+                    timeoutMs: 1_500);
+
+                selected = moved && await MaerskShadowDom.PressFirstAsync(
+                    page,
+                    selectors,
+                    "Enter",
+                    cancellationToken,
+                    timeoutMs: 1_500);
+            }
+
+            if (!selected)
+                continue;
+
+            await Task.Delay(500, cancellationToken);
+
+            if (await MaerskShadowDom.IsLocationSelectionSettledAsync(
+                    page,
+                    componentId,
+                    cancellationToken))
+                return;
+        }
+
+        var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+        throw new InvalidOperationException(
+            $"Maersk location '{displayValue}' could not be committed for '{componentId}'. " +
+            $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+    }
+
+    private static string[] GetLocationSearchTerms(string displayValue)
+    {
+        if (string.IsNullOrWhiteSpace(displayValue))
+            return [];
+
+        var trimmed = displayValue.Trim();
+        var commaIndex = trimmed.IndexOf(',');
+
+        if (commaIndex <= 0)
+            return [trimmed];
+
+        var cityOnly = trimmed[..commaIndex].Trim();
+
+        return string.IsNullOrWhiteSpace(cityOnly)
+            ? [trimmed]
+            : [cityOnly, trimmed];
     }
 
     private static async Task FillFirstAsync(
