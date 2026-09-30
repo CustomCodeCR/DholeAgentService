@@ -106,6 +106,217 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string SelectContainerTypeScript = """
+        args => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/[^a-z0-9]+/gi, '')
+                .toUpperCase();
+
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
+            };
+
+            const components = [];
+            for (const root of rootsOf(document)) {
+                for (const component of root.querySelectorAll?.(
+                    'mc-c-container-select,mc-c-container-selection-input'
+                ) || []) {
+                    if (!components.includes(component))
+                        components.push(component);
+                }
+            }
+
+            const expectedLabel = normalize(args.label);
+            const candidates = [];
+
+            for (const component of components) {
+                for (const root of rootsOf(component)) {
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        const text = (element.innerText || element.textContent || '').trim();
+                        const normalized = normalize(text);
+
+                        if (!normalized)
+                            continue;
+
+                        if (normalized === expectedLabel
+                            || (normalized.startsWith(expectedLabel)
+                                && normalized.length <= expectedLabel.length + 40)) {
+                            candidates.push({ element, textLength: text.length });
+                        }
+                    }
+                }
+            }
+
+            candidates.sort((a, b) => a.textLength - b.textLength);
+
+            const interactive = element => {
+                let current = element;
+
+                while (current && current instanceof Element) {
+                    const tag = current.tagName?.toLowerCase?.() || '';
+                    const role = (current.getAttribute?.('role') || '').toLowerCase();
+
+                    if (['button', 'li', 'mc-option', 'mc-button'].includes(tag)
+                        || ['option', 'button'].includes(role)
+                        || current.hasAttribute?.('tabindex')) {
+                        return current;
+                    }
+
+                    current = current.parentElement;
+                }
+
+                return element;
+            };
+
+            for (const candidate of candidates) {
+                try {
+                    const target = interactive(candidate.element);
+                    target.scrollIntoView?.({ block: 'nearest' });
+                    target.click?.();
+                    target.dispatchEvent?.(new MouseEvent('click', {
+                        bubbles: true,
+                        composed: true
+                    }));
+                    return true;
+                } catch {
+                    // Try the next matching representation.
+                }
+            }
+
+            return false;
+        }
+        """;
+
+    private const string SetContainerQuantityScript = """
+        args => {
+            const desired = Number(args.quantity);
+            if (!Number.isFinite(desired) || desired < 1)
+                return false;
+
+            const isVisible = element => {
+                if (!(element instanceof Element)) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
+            };
+
+            let visibleInput = null;
+            let stepper = null;
+
+            for (const root of rootsOf(document)) {
+                for (const input of root.querySelectorAll?.("input[name='containers']") || []) {
+                    if (isVisible(input)) {
+                        visibleInput = input;
+                        break;
+                    }
+                }
+
+                if (visibleInput)
+                    break;
+            }
+
+            if (!visibleInput)
+                return false;
+
+            const current = Number(visibleInput.value);
+            if (current === desired)
+                return !visibleInput.disabled;
+
+            let node = visibleInput;
+            while (node && node instanceof Element) {
+                if (node.tagName?.toLowerCase?.() === 'mc-number-stepper') {
+                    stepper = node;
+                    break;
+                }
+                node = node.parentElement;
+            }
+
+            if (!stepper) {
+                for (const root of rootsOf(document)) {
+                    const candidate = root.querySelector?.('mc-number-stepper');
+                    if (candidate) {
+                        stepper = candidate;
+                        break;
+                    }
+                }
+            }
+
+            if (!stepper)
+                return false;
+
+            const buttons = [];
+            for (const root of rootsOf(stepper)) {
+                for (const button of root.querySelectorAll?.(
+                    "button,mc-button,[role='button']"
+                ) || []) {
+                    if (isVisible(button) && !buttons.includes(button))
+                        buttons.push(button);
+                }
+            }
+
+            if (buttons.length < 2)
+                return false;
+
+            let value = Number(visibleInput.value);
+            let guard = 0;
+
+            while (value !== desired && guard++ < 50) {
+                const button = desired > value
+                    ? buttons[buttons.length - 1]
+                    : buttons[0];
+
+                button.click();
+                value = Number(visibleInput.value);
+            }
+
+            return Number(visibleInput.value) === desired;
+        }
+        """;
+
     private const string WaitForLocationSuggestionScript = """
         args => {
             const normalize = value => (value || '')
@@ -174,12 +385,10 @@ internal static class MaerskShadowDom
                 .map(compact)
                 .filter(Boolean);
 
-            // Prefer an actual label/code match in the component text. If MDS
-            // exposes only its accessibility announcement, a positive
-            // "suggestions available" state is still enough for keyboard
-            // selection because the query is scoped to this single component.
-            return expected.some(value => compactText.includes(value))
-                || /\b[1-9][0-9]* suggestions? available\b/i.test(text);
+            // Only proceed when the returned suggestion actually matches what
+            // we searched for. This prevents "Puerto Caldera" from silently
+            // selecting "Caldera, Chile" just because a suggestion exists.
+            return expected.some(value => compactText.includes(value));
         }
         """;
 
@@ -1251,6 +1460,81 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SelectContainerTypeAsync(
+        IPage page,
+        string label,
+        string code,
+        CancellationToken cancellationToken,
+        int timeoutMs = 6_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    var clicked = await frame.EvaluateAsync<bool>(
+                        SelectContainerTypeScript,
+                        new { label, code });
+
+                    if (!clicked)
+                        continue;
+
+                    // Give the web component time to commit the selected code and
+                    // enable the number-of-containers stepper.
+                    await Task.Delay(300, cancellationToken);
+                    return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the custom dropdown is rendering.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SetContainerQuantityAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        int quantity,
+        CancellationToken cancellationToken,
+        int timeoutMs = 6_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            SetContainerQuantityScript,
+                            new { quantity }))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the number stepper is being enabled.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
         }
 
         return false;
