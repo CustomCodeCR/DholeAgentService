@@ -189,8 +189,8 @@ public sealed class MaerskAgentProvider(
                     status,
                     fields = BuildConfiguredFields(plan.FieldKeys!, normalized),
                     offers = normalized.Offers,
-                    captured.Status,
-                    captured.CorrelationId,
+                    httpStatus = captured.Status,
+                    correlationId = captured.CorrelationId,
                     error = (string?)null
                 });
             }
