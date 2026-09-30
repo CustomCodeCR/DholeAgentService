@@ -108,11 +108,29 @@ public sealed class MaerskBrowserAutomation
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
-        var commoditySelected = await SelectSuggestionAsync(
+        var commoditySelected = await MaerskShadowDom.SelectTypeaheadOptionAsync(
             page,
-            cancellationToken,
             [input.Commodity],
-            exactOnly: false);
+            cancellationToken,
+            timeoutMs: 4_000,
+            exactOnly: true);
+
+        if (!commoditySelected)
+        {
+            var moved = await MaerskShadowDom.PressFirstAsync(
+                page,
+                commoditySelectors,
+                "ArrowDown",
+                cancellationToken,
+                timeoutMs: 2_000);
+
+            commoditySelected = moved && await MaerskShadowDom.PressFirstAsync(
+                page,
+                commoditySelectors,
+                "Enter",
+                cancellationToken,
+                timeoutMs: 2_000);
+        }
 
         if (!commoditySelected)
         {
@@ -227,20 +245,34 @@ public sealed class MaerskBrowserAutomation
             "dd MMM yyyy",
             System.Globalization.CultureInfo.InvariantCulture);
 
-        await FillFirstAsync(
-            page,
-            [
-                "#mc-input-earliestDepartureDatePicker",
-                "input#mc-input-earliestDepartureDatePicker",
-                "input[name='earliestDepartureDatePicker']",
-                "input[type='date']",
-                "input[name*='date' i]",
-                "input[placeholder*='DD MMM YYYY' i]",
-                "input[aria-label*='date' i]"
-            ],
-            ["date", "cargo ready"],
-            date,
-            cancellationToken);
+        var dateSelected = false;
+
+        if (input.CargoReadyDate == Dhole.Agent.Application.Agents.MaerskExecutionDefaults.GetCargoReadyDate())
+        {
+            dateSelected = await MaerskShadowDom.ClickByTextAsync(
+                page,
+                ["Select tomorrow"],
+                cancellationToken,
+                timeoutMs: 4_000);
+        }
+
+        if (!dateSelected)
+        {
+            await FillFirstAsync(
+                page,
+                [
+                    "#mc-input-earliestDepartureDatePicker",
+                    "input#mc-input-earliestDepartureDatePicker",
+                    "input[name='earliestDepartureDatePicker']",
+                    "input[type='date']",
+                    "input[name*='date' i]",
+                    "input[placeholder*='DD MMM YYYY' i]",
+                    "input[aria-label*='date' i]"
+                ],
+                ["date", "cargo ready"],
+                date,
+                cancellationToken);
+        }
 
         var submitted =
             await MaerskShadowDom.ClickByTextAsync(
@@ -258,7 +290,8 @@ public sealed class MaerskBrowserAutomation
         {
             var diagnostics = await MaerskShadowDom.DescribeAsync(page);
             throw new InvalidOperationException(
-                $"Maersk price search button was not found. URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+                $"Maersk Continue/Search action did not become enabled after completing the booking fields. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
     }
 

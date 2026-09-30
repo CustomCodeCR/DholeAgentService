@@ -82,6 +82,23 @@ internal static class MaerskShadowDom
                 || element.getAttribute('value')
             );
 
+            const isEnabled = element => {
+                if (element.hasAttribute?.('disabled'))
+                    return false;
+
+                if ((element.getAttribute?.('aria-disabled') || '').toLowerCase() === 'true')
+                    return false;
+
+                const native = element.shadowRoot?.querySelector?.(
+                    "button,input[type='submit'],input[type='button']"
+                );
+
+                if (native?.disabled)
+                    return false;
+
+                return true;
+            };
+
             const find = root => {
                 // Prefer the native control inside an open shadow root over the custom host.
                 for (const host of root.querySelectorAll('*')) {
@@ -91,7 +108,7 @@ internal static class MaerskShadowDom
                 }
 
                 for (const element of root.querySelectorAll("button,a,input[type='submit'],mc-button,[role='button'],[role='link']")) {
-                    if (!isVisible(element)) continue;
+                    if (!isVisible(element) || !isEnabled(element)) continue;
                     const label = labelOf(element);
                     if (wanted.some(value => label === value || label.includes(value))) return element;
                 }
@@ -103,6 +120,103 @@ internal static class MaerskShadowDom
             if (!target) return false;
             target.click();
             return true;
+        }
+        """;
+
+    private const string SelectTypeaheadOptionScript = """
+        args => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const compact = value => normalize(value)
+                .replace(/[^a-z0-9]+/g, '');
+
+            const expected = (args.expectedValues || [])
+                .map(compact)
+                .filter(Boolean);
+
+            if (expected.length === 0)
+                return false;
+
+            const isVisible = element => {
+                if (!(element instanceof Element)) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+
+            const isEnabled = element =>
+                !element.hasAttribute?.('disabled')
+                && element.getAttribute?.('aria-disabled') !== 'true';
+
+            const roots = [];
+            const seen = new Set();
+
+            const visit = root => {
+                if (!root || seen.has(root)) return;
+                seen.add(root);
+                roots.push(root);
+
+                for (const element of root.querySelectorAll?.('*') || []) {
+                    if (element.shadowRoot)
+                        visit(element.shadowRoot);
+                }
+            };
+
+            visit(document);
+
+            const candidates = [];
+            for (const root of roots) {
+                for (const option of root.querySelectorAll?.(
+                    "mc-option,[role='option'],li[role='option']"
+                ) || []) {
+                    if (!candidates.includes(option))
+                        candidates.push(option);
+                }
+            }
+
+            for (const option of candidates) {
+                if (!isVisible(option) || !isEnabled(option))
+                    continue;
+
+                const text = compact(
+                    option.innerText
+                    || option.textContent
+                    || option.getAttribute?.('label')
+                );
+                const value = compact(option.getAttribute?.('value'));
+
+                const matches = args.exactOnly
+                    ? expected.some(x => text === x || value === x)
+                    : expected.some(x =>
+                        text.includes(x)
+                        || value.includes(x)
+                        || x.includes(text)
+                        || x.includes(value));
+
+                if (!matches)
+                    continue;
+
+                try {
+                    option.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+                    option.click?.();
+                    option.dispatchEvent?.(new MouseEvent('click', {
+                        bubbles: true,
+                        composed: true
+                    }));
+                    return true;
+                } catch {
+                    // Continue with another matching representation.
+                }
+            }
+
+            return false;
         }
         """;
 
@@ -1460,6 +1574,44 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SelectTypeaheadOptionAsync(
+        IPage page,
+        IReadOnlyCollection<string> expectedValues,
+        CancellationToken cancellationToken,
+        int timeoutMs = 5_000,
+        bool exactOnly = false)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            SelectTypeaheadOptionScript,
+                            new
+                            {
+                                expectedValues = expectedValues.ToArray(),
+                                exactOnly
+                            }))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while Maersk re-renders the typeahead.
+                }
+            }
+
+            await Task.Delay(150, cancellationToken);
         }
 
         return false;
