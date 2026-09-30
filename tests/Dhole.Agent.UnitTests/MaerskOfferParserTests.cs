@@ -92,4 +92,43 @@ public sealed class MaerskOfferParserTests
         Assert.AreEqual(1, result.Offers.Count);
         Assert.AreEqual("ROUTE-001", result.Offers.Single().ExternalRouteId);
     }
+
+    [TestMethod]
+    public void Parse_ShouldSupportAlternativeMaerskFieldNames()
+    {
+        const string json = """
+        {
+          "offers": [
+            {
+              "status": "OFFERED",
+              "routeId": "ALT-001",
+              "productDataCollection": [
+                {
+                  "productDisplayName": "Maersk Spot",
+                  "currencyIsoCode": "USD",
+                  "basicFreightAmount": 3210.50,
+                  "totalPrice": 3500.00,
+                  "departureDate": "2026-10-02T10:00:00Z",
+                  "arrivalDate": "2026-10-29T10:00:00Z",
+                  "transitDays": 27,
+                  "vesselName": "MAERSK ALT",
+                  "voyage": "ALT123"
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+        var offer = new MaerskOfferParser().Parse(json).Offers.Single();
+
+        Assert.AreEqual(3210.50m, offer.OceanFreight?.Amount);
+        Assert.AreEqual("USD", offer.OceanFreight?.Currency);
+        Assert.AreEqual(3500m, offer.AllIn?.Amount);
+        Assert.AreEqual(27, offer.TransitDays);
+        Assert.AreEqual("MAERSK ALT", offer.Vessel);
+        Assert.AreEqual("ALT123", offer.Voyage);
+        Assert.IsNotNull(offer.Etd);
+        Assert.IsNotNull(offer.Eta);
+    }
 }

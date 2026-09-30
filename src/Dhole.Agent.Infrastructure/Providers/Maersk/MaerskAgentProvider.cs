@@ -174,6 +174,9 @@ public sealed class MaerskAgentProvider(
 
                 var normalized = parser.Parse(captured.ResponseJson);
                 var status = normalized.Offers.Count > 0 ? "Available" : "Unavailable";
+                var responseDiagnostics = NeedsMaerskResponseDiagnostics(normalized)
+                    ? BuildMaerskResponseDiagnostics(captured.ResponseJson)
+                    : Array.Empty<MaerskResponseDiagnostic>();
 
                 completed++;
                 if (normalized.Offers.Count > 0)
@@ -191,6 +194,7 @@ public sealed class MaerskAgentProvider(
                     offers = normalized.Offers,
                     httpStatus = captured.Status,
                     correlationId = captured.CorrelationId,
+                    responseDiagnostics,
                     error = (string?)null
                 });
             }
@@ -514,6 +518,122 @@ public sealed class MaerskAgentProvider(
         }
     }
 
+    private static bool NeedsMaerskResponseDiagnostics(
+        NormalizedOceanFreightRates normalized)
+    {
+        var first = normalized.Offers.FirstOrDefault();
+
+        if (first is null)
+            return false;
+
+        return first.OceanFreight is null
+               || first.Etd is null
+               || first.Eta is null
+               || first.Charges.Count == 0;
+    }
+
+    private static MaerskResponseDiagnostic[] BuildMaerskResponseDiagnostics(
+        string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var output = new List<MaerskResponseDiagnostic>();
+
+            CollectMaerskResponseDiagnostics(
+                document.RootElement,
+                "$",
+                output);
+
+            return output
+                .DistinctBy(
+                    x => $"{x.Path}|{x.Value}",
+                    StringComparer.OrdinalIgnoreCase)
+                .Take(80)
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static void CollectMaerskResponseDiagnostics(
+        JsonElement element,
+        string path,
+        List<MaerskResponseDiagnostic> output)
+    {
+        if (output.Count >= 120)
+            return;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                var childPath = $"{path}.{property.Name}";
+
+                if (IsRelevantMaerskResponseProperty(property.Name)
+                    && property.Value.ValueKind is JsonValueKind.String
+                        or JsonValueKind.Number
+                        or JsonValueKind.True
+                        or JsonValueKind.False)
+                {
+                    var value = property.Value.ToString();
+
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        output.Add(new MaerskResponseDiagnostic(
+                            childPath,
+                            value.Length > 180
+                                ? value[..180]
+                                : value));
+                    }
+                }
+
+                CollectMaerskResponseDiagnostics(
+                    property.Value,
+                    childPath,
+                    output);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
+
+            foreach (var item in element.EnumerateArray())
+            {
+                CollectMaerskResponseDiagnostics(
+                    item,
+                    $"{path}[{index}]",
+                    output);
+
+                index++;
+
+                if (output.Count >= 120)
+                    break;
+            }
+        }
+    }
+
+    private static bool IsRelevantMaerskResponseProperty(string name)
+    {
+        var normalized = name.ToLowerInvariant();
+
+        return normalized.Contains("amount")
+               || normalized.Contains("price")
+               || normalized.Contains("currency")
+               || normalized.Contains("departure")
+               || normalized.Contains("arrival")
+               || normalized is "etd" or "eta"
+               || normalized.Contains("transit")
+               || normalized.Contains("vessel")
+               || normalized.Contains("voyage")
+               || normalized.Contains("charge")
+               || normalized.Contains("cutoff")
+               || normalized.Contains("route")
+               || normalized.Contains("product");
+    }
+
     private static Dictionary<string, object?> BuildConfiguredFields(
         IReadOnlyCollection<string> fieldKeys,
         NormalizedOceanFreightRates normalized)
@@ -791,6 +911,10 @@ public sealed class MaerskAgentProvider(
         value = default;
         return false;
     }
+
+    private sealed record MaerskResponseDiagnostic(
+        string Path,
+        string Value);
 
     private sealed record RuntimeInput(
         string? Commodity);
