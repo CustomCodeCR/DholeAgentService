@@ -9,7 +9,9 @@ public sealed record MaerskSearchInput(
     int Quantity,
     decimal WeightKg,
     string Commodity,
-    DateOnly CargoReadyDate);
+    DateOnly CargoReadyDate,
+    string? PolCode = null,
+    string? PodCode = null);
 
 public sealed record NormalizedMoney(string Currency, decimal Amount);
 public sealed record NormalizedCharge(string Code, string? Name, string Currency, decimal Amount);

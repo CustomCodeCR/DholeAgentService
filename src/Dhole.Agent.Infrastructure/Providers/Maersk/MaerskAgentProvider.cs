@@ -398,9 +398,13 @@ public sealed class MaerskAgentProvider(
             foreach (var route in routes)
             {
                 var pol = TryGetString(route, "polName");
+                var polCode = TryGetString(route, "polCode");
                 var destination =
                     TryGetString(route, "poeName")
                     ?? TryGetString(route, "podName");
+                var destinationCode =
+                    TryGetString(route, "poeCode")
+                    ?? TryGetString(route, "podCode");
 
                 if (string.IsNullOrWhiteSpace(pol)
                     || string.IsNullOrWhiteSpace(destination))
@@ -430,7 +434,9 @@ public sealed class MaerskAgentProvider(
                         Math.Max(1, quantity),
                         weightKg.Value,
                         commodity,
-                        cargoReadyDate);
+                        cargoReadyDate,
+                        polCode,
+                        destinationCode);
 
                     searches.Add(new PlannedSearch(
                         index++,

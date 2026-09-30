@@ -106,6 +106,149 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string WaitForLocationSuggestionScript = """
+        args => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const compact = value => normalize(value)
+                .replace(/[^a-z0-9]+/g, '');
+
+            const rootsOf = node => {
+                const roots = [];
+                const seen = new Set();
+
+                const visit = root => {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    roots.push(root);
+
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot)
+                            visit(element.shadowRoot);
+                    }
+                };
+
+                visit(node);
+                if (node?.shadowRoot)
+                    visit(node.shadowRoot);
+
+                return roots;
+            };
+
+            let component = null;
+            for (const root of rootsOf(document)) {
+                for (const candidate of root.querySelectorAll?.(
+                    'mc-c-location-servicemode'
+                ) || []) {
+                    if ((candidate.getAttribute('id') || '') === args.componentId) {
+                        component = candidate;
+                        break;
+                    }
+                }
+
+                if (component)
+                    break;
+            }
+
+            if (!component)
+                return false;
+
+            const text = normalize([
+                component.innerText,
+                component.textContent,
+                component.shadowRoot?.textContent
+            ].filter(Boolean).join(' '));
+
+            if (text.includes('no results found')
+                || text.includes('no location matching')
+                || text.includes('no matching location found')) {
+                return false;
+            }
+
+            const compactText = compact(text);
+            const expected = (args.expectedValues || [])
+                .map(compact)
+                .filter(Boolean);
+
+            // Prefer an actual label/code match in the component text. If MDS
+            // exposes only its accessibility announcement, a positive
+            // "suggestions available" state is still enough for keyboard
+            // selection because the query is scoped to this single component.
+            return expected.some(value => compactText.includes(value))
+                || /\b[1-9][0-9]* suggestions? available\b/i.test(text);
+        }
+        """;
+
+    private const string ResolvedLocationValueScript = """
+        args => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const compact = value => normalize(value)
+                .replace(/[^a-z0-9]+/g, '');
+
+            const inputId = args.componentId === 'origin'
+                ? 'mc-input-origin'
+                : args.componentId === 'destination'
+                    ? 'mc-input-destination'
+                    : '';
+
+            if (!inputId)
+                return false;
+
+            let input = document.getElementById(inputId);
+
+            if (!input) {
+                const visit = root => {
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (element.id === inputId)
+                            return element;
+
+                        if (element.shadowRoot) {
+                            const nested = visit(element.shadowRoot);
+                            if (nested)
+                                return nested;
+                        }
+                    }
+
+                    return null;
+                };
+
+                input = visit(document);
+            }
+
+            if (!input)
+                return false;
+
+            const current = compact(input.value);
+            const rawQuery = compact(args.searchTerm);
+            const expected = compact(args.displayValue);
+
+            if (!current)
+                return false;
+
+            if (current === expected && current !== rawQuery)
+                return true;
+
+            if (current !== rawQuery) {
+                const city = compact(
+                    (args.displayValue || '').toString().split(',')[0]
+                );
+
+                return city.length > 0 && current.includes(city);
+            }
+
+            return false;
+        }
+        """;
+
     private const string SelectLocationSuggestionScript = """
         args => {
             const normalize = value => (value || '')
@@ -797,6 +940,77 @@ internal static class MaerskShadowDom
         return false;
     }
 
+    public static async Task<bool> TypeAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        string value,
+        CancellationToken cancellationToken,
+        int timeoutMs = 10_000,
+        int delayMs = 50)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                foreach (var selector in selectors)
+                {
+                    ILocator matches;
+                    int count;
+
+                    try
+                    {
+                        matches = frame.Locator(selector);
+                        count = await matches.CountAsync();
+                    }
+                    catch (PlaywrightException)
+                    {
+                        continue;
+                    }
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        var candidate = matches.Nth(index);
+
+                        try
+                        {
+                            if (!await candidate.IsVisibleAsync()
+                                || !await candidate.IsEnabledAsync()
+                                || !await candidate.IsEditableAsync())
+                                continue;
+
+                            await candidate.FillAsync(
+                                string.Empty,
+                                new LocatorFillOptions { Timeout = 1_500 });
+
+                            await candidate.PressSequentiallyAsync(
+                                value,
+                                new LocatorPressSequentiallyOptions
+                                {
+                                    Delay = delayMs,
+                                    Timeout = Math.Min(5_000, timeoutMs)
+                                });
+
+                            return true;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Retry because the SPA can replace the native input
+                            // while the custom element re-renders.
+                        }
+                    }
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
     public static async Task<bool> HasVisibleAsync(
         IPage page,
         IReadOnlyCollection<string> selectors,
@@ -1037,6 +1251,84 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> WaitForLocationSuggestionAsync(
+        IPage page,
+        string componentId,
+        IReadOnlyCollection<string> expectedValues,
+        CancellationToken cancellationToken,
+        int timeoutMs = 6_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            WaitForLocationSuggestionScript,
+                            new
+                            {
+                                componentId,
+                                expectedValues = expectedValues.ToArray()
+                            }))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the remote typeahead is loading/re-rendering.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> WaitForResolvedLocationValueAsync(
+        IPage page,
+        string componentId,
+        string searchTerm,
+        string displayValue,
+        CancellationToken cancellationToken,
+        int timeoutMs = 3_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            ResolvedLocationValueScript,
+                            new
+                            {
+                                componentId,
+                                searchTerm,
+                                displayValue
+                            }))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the selected value is committed by MDS.
+                }
+            }
+
+            await Task.Delay(150, cancellationToken);
         }
 
         return false;
