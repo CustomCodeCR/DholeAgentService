@@ -14,7 +14,12 @@ public sealed record MaerskSearchInput(
     string? PodCode = null);
 
 public sealed record NormalizedMoney(string Currency, decimal Amount);
-public sealed record NormalizedCharge(string Code, string? Name, string Currency, decimal Amount);
+public sealed record NormalizedCharge(
+    string Code,
+    string? Name,
+    string Currency,
+    decimal Amount,
+    string? Application = null);
 public sealed record NormalizedLeg(string? From, string? To, DateTimeOffset? Departure, DateTimeOffset? Arrival, string? Vessel, string? Voyage);
 
 public sealed record NormalizedOceanOffer(

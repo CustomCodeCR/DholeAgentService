@@ -244,6 +244,7 @@ public sealed class MaerskAgentProvider(
             {
                 provider = ProviderCode,
                 providerName = "Maersk",
+                commodity = plan.Searches![0].Input.Commodity,
                 cargoReadyDate = plan.Searches![0].Input.CargoReadyDate,
                 extractionProfileId = context.Execution.ExtractionProfileId,
                 strategy = "NativeBrowserNetworkCapture",

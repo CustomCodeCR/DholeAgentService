@@ -29,9 +29,29 @@ public sealed class AgentResult : AuditableAggregateRoot<Guid>
     public static AgentResult Create(Guid executionId, Guid providerId, string resultType, string schemaVersion,
         string dataJson, DateTime? createdAt = null)
     {
-        var entity = new AgentResult(Guid.NewGuid(), executionId, providerId, resultType, schemaVersion, dataJson, createdAt ?? DateTime.UtcNow);
+        var extractedAtUtc = createdAt ?? DateTime.UtcNow;
+        var entity = new AgentResult(
+            Guid.NewGuid(),
+            executionId,
+            providerId,
+            resultType,
+            schemaVersion,
+            dataJson,
+            extractedAtUtc);
+
         if (string.Equals(entity.ResultType, OceanFreightRates, StringComparison.OrdinalIgnoreCase))
-            entity.AddDomainEvent(new OceanFreightRatesExtractedDomainEvent(entity.Id, executionId, providerId, entity.ResultType, entity.SchemaVersion));
+        {
+            entity.AddDomainEvent(
+                new OceanFreightRatesExtractedDomainEvent(
+                    entity.Id,
+                    executionId,
+                    providerId,
+                    entity.ResultType,
+                    entity.SchemaVersion,
+                    entity.DataJson,
+                    extractedAtUtc));
+        }
+
         return entity;
     }
 
