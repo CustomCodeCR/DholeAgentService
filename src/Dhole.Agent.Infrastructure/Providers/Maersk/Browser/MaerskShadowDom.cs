@@ -106,6 +106,111 @@ internal static class MaerskShadowDom
         }
         """;
 
+    private const string SelectContainerYardServiceModesScript = """
+        () => {
+            const normalize = value => (value || '')
+                .toString()
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            const isVisible = element => {
+                if (!(element instanceof Element)) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+
+            const roots = [];
+            const collectRoots = root => {
+                roots.push(root);
+                for (const host of root.querySelectorAll('*')) {
+                    if (host.shadowRoot)
+                        collectRoots(host.shadowRoot);
+                }
+            };
+
+            collectRoots(document);
+
+            const components = [];
+            for (const root of roots) {
+                for (const component of root.querySelectorAll('mc-c-location-servicemode')) {
+                    if (!components.includes(component))
+                        components.push(component);
+                }
+            }
+
+            const selectInRoot = root => {
+                const candidates = root.querySelectorAll(
+                    "mc-radio,label,[role='radio'],button,input[type='radio']");
+
+                for (const element of candidates) {
+                    const text = normalize(
+                        element.innerText
+                        || element.textContent
+                        || element.getAttribute?.('label')
+                        || element.getAttribute?.('aria-label')
+                        || element.getAttribute?.('value'));
+
+                    const isContainerYard =
+                        text.includes('container yard')
+                        || text === 'cy'
+                        || text.includes('yard');
+
+                    if (!isContainerYard)
+                        continue;
+
+                    const nativeInput =
+                        element instanceof HTMLInputElement
+                            ? element
+                            : element.shadowRoot?.querySelector?.("input[type='radio']")
+                              || element.querySelector?.("input[type='radio']");
+
+                    if (nativeInput?.checked)
+                        return true;
+
+                    try {
+                        if (isVisible(element) || nativeInput) {
+                            (nativeInput || element).click();
+                            return nativeInput ? !!nativeInput.checked : true;
+                        }
+                    } catch {
+                        // Continue looking for another representation of the control.
+                    }
+                }
+
+                return false;
+            };
+
+            let selected = 0;
+
+            if (components.length > 0) {
+                for (const component of components) {
+                    const rootsToTry = [component];
+                    if (component.shadowRoot)
+                        rootsToTry.unshift(component.shadowRoot);
+
+                    if (rootsToTry.some(selectInRoot))
+                        selected++;
+                }
+
+                return selected === components.length;
+            }
+
+            // Fallback for a Maersk layout that renders the same controls without
+            // the mc-c-location-servicemode host.
+            for (const root of roots) {
+                if (selectInRoot(root))
+                    selected++;
+            }
+
+            return selected > 0;
+        }
+        """;
+
     private const string SelectPriceOwnerScript = """
         () => {
             const normalize = value => (value || '')
@@ -668,6 +773,37 @@ internal static class MaerskShadowDom
                                 Force = force
                             })))
                     return true;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> SelectContainerYardServiceModesAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        int timeoutMs = 8_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                try
+                {
+                    if (await frame.EvaluateAsync<bool>(
+                            SelectContainerYardServiceModesScript))
+                        return true;
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while Maersk renders/replaces the CY/CY controls.
+                }
             }
 
             await Task.Delay(250, cancellationToken);
