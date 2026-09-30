@@ -30,4 +30,6 @@ public sealed record OceanFreightRatesExtractedDomainEvent(
     Guid ExecutionId,
     Guid ProviderId,
     string ResultType,
-    string SchemaVersion) : DomainEvent;
+    string SchemaVersion,
+    string DataJson,
+    DateTime ExtractedAtUtc) : DomainEvent;

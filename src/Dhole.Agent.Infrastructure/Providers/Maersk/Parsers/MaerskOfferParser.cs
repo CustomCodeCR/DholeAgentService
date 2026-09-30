@@ -140,7 +140,12 @@ public sealed class MaerskOfferParser
                         chargeType ?? "UNKNOWN",
                         chargeName,
                         chargeMoney.Currency,
-                        chargeMoney.Amount));
+                        chargeMoney.Amount,
+                        GetFirstString(
+                            node,
+                            "chargeApplicationCode",
+                            "applicationCode",
+                            "chargeApplication")));
 
                     if (oceanFreight is null
                         && string.Equals(
