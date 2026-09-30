@@ -140,12 +140,7 @@ public sealed class MaerskOfferParser
                         chargeType ?? "UNKNOWN",
                         chargeName,
                         chargeMoney.Currency,
-                        chargeMoney.Amount,
-                        GetFirstString(
-                            node,
-                            "chargeApplicationCode",
-                            "applicationCode",
-                            "chargeApplication")));
+                        chargeMoney.Amount));
 
                     if (oceanFreight is null
                         && string.Equals(
@@ -253,13 +248,11 @@ public sealed class MaerskOfferParser
             offer,
             "transitTime");
 
-        var transitDays = NormalizeTransitDays(rawTransit);
-        if (transitDays == 0 && etd.HasValue && eta.HasValue)
-        {
-            transitDays = Math.Max(
+        var transitDays = etd.HasValue && eta.HasValue
+            ? Math.Max(
                 0,
-                (int)Math.Ceiling((eta.Value - etd.Value).TotalDays));
-        }
+                (int)Math.Ceiling((eta.Value - etd.Value).TotalDays))
+            : NormalizeTransitDays(rawTransit);
 
         var vessel = legs
             .Select(x => x.Vessel)
