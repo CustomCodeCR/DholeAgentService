@@ -46,4 +46,5 @@ public sealed record CapturedMaerskOfferResponse(
     string? RequestBody,
     int Status,
     string? CorrelationId,
-    string ResponseJson);
+    string ResponseJson,
+    int ResponseCount = 1);
