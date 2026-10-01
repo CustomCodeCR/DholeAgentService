@@ -25,17 +25,19 @@ public sealed class MaerskOfferParserTests
     }
 
     [TestMethod]
-    public void Parse_ShouldIgnoreUnavailable()
+    public void Parse_ShouldPreserveUnavailableRoutes()
     {
         var result = new MaerskOfferParser().Parse(LoadFixture());
 
-        Assert.IsFalse(result.Offers.Any(x => x.ExternalRouteId == "ROUTE-UNAVAILABLE"));
+        var unavailable = result.Offers.Single(x => x.ExternalRouteId == "ROUTE-UNAVAILABLE");
+        Assert.IsFalse(unavailable.Available);
     }
 
     [TestMethod]
     public void Parse_ShouldExtractBasicOceanFreight()
     {
-        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers.Single();
+        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers
+            .Single(x => x.ExternalRouteId == "ROUTE-001");
 
         Assert.IsNotNull(offer.OceanFreight);
         Assert.AreEqual("USD", offer.OceanFreight.Currency);
@@ -45,7 +47,8 @@ public sealed class MaerskOfferParserTests
     [TestMethod]
     public void Parse_ShouldExtractAllIn()
     {
-        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers.Single();
+        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers
+            .Single(x => x.ExternalRouteId == "ROUTE-001");
 
         Assert.IsNotNull(offer.AllIn);
         Assert.AreEqual("USD", offer.AllIn.Currency);
@@ -55,7 +58,8 @@ public sealed class MaerskOfferParserTests
     [TestMethod]
     public void Parse_ShouldExtractRouteSchedule()
     {
-        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers.Single();
+        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers
+            .Single(x => x.ExternalRouteId == "ROUTE-001");
 
         Assert.AreEqual(new DateTimeOffset(2026, 9, 21, 8, 0, 0, TimeSpan.Zero), offer.Etd);
         Assert.AreEqual(new DateTimeOffset(2026, 10, 18, 8, 0, 0, TimeSpan.Zero), offer.Eta);
@@ -66,7 +70,8 @@ public sealed class MaerskOfferParserTests
     [TestMethod]
     public void Parse_ShouldExtractVesselAndVoyage()
     {
-        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers.Single();
+        var offer = new MaerskOfferParser().Parse(LoadFixture()).Offers
+            .Single(x => x.ExternalRouteId == "ROUTE-001");
 
         Assert.AreEqual("MAERSK TEST", offer.Vessel);
         Assert.AreEqual("123W", offer.Voyage);
@@ -77,8 +82,8 @@ public sealed class MaerskOfferParserTests
     {
         var result = new MaerskOfferParser().Parse(LoadFixture());
 
-        Assert.AreEqual(1, result.Offers.Count);
-        var offer = result.Offers.Single();
+        Assert.AreEqual(2, result.Offers.Count);
+        var offer = result.Offers.Single(x => x.ExternalRouteId == "ROUTE-001");
         CollectionAssert.AreEquivalent(
             new[] { "MaerskSpot", "MaerskSpotWithVR" },
             offer.Products.ToArray());
@@ -89,8 +94,101 @@ public sealed class MaerskOfferParserTests
     {
         var result = new MaerskOfferParser().Parse(LoadFixture());
 
-        Assert.AreEqual(1, result.Offers.Count);
-        Assert.AreEqual("ROUTE-001", result.Offers.Single().ExternalRouteId);
+        Assert.AreEqual(2, result.Offers.Count);
+        Assert.AreEqual(
+            1,
+            result.Offers.Count(x => x.ExternalRouteId == "ROUTE-001"));
+    }
+
+    [TestMethod]
+    public void Parse_ShouldKeepEveryOfferedSailingAndItsAvailability()
+    {
+        const string json = """
+        [
+          {
+            "routeId": "SEARCH_1_1",
+            "status": "OFFERED",
+            "availabilityFlag": false,
+            "productDataCollection": [
+              {
+                "productReference": "MaerskSpot",
+                "dataBundle": [
+                  {
+                    "dataType": "ROUTE_SCHEDULE",
+                    "data": {
+                      "schedules": [
+                        {
+                          "originDepartureDatetime": "2026-10-02T09:30:00",
+                          "destinationArrivalDatetime": "2026-11-04T01:00:00",
+                          "sailing": {
+                            "vessel": { "name": "MAERSK TOKYO" },
+                            "voyageNumber": "638E"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "dataType": "PRICE_BREAKDOWN",
+                    "data": {
+                      "totalAmount": { "unit": "USD", "value": 8682.0 },
+                      "totalBasicFreightAmount": { "unit": "USD", "value": 8100.0 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "routeId": "SEARCH_1_2",
+            "status": "OFFERED",
+            "availabilityFlag": true,
+            "productDataCollection": [
+              {
+                "productReference": "MaerskSpot",
+                "dataBundle": [
+                  {
+                    "dataType": "ROUTE_SCHEDULE",
+                    "data": {
+                      "schedules": [
+                        {
+                          "originDepartureDatetime": "2026-10-09T19:00:00",
+                          "destinationArrivalDatetime": "2026-11-25T01:00:00",
+                          "sailing": {
+                            "vessel": { "name": "MAERSK EUREKA" },
+                            "voyageNumber": "641E"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "dataType": "PRICE_BREAKDOWN",
+                    "data": {
+                      "totalAmount": { "unit": "USD", "value": 8732.0 },
+                      "totalBasicFreightAmount": { "unit": "USD", "value": 8150.0 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+        """;
+
+        var result = new MaerskOfferParser().Parse(json);
+
+        Assert.AreEqual(2, result.Offers.Count);
+
+        var first = result.Offers.Single(x => x.ExternalRouteId == "SEARCH_1_1");
+        Assert.IsFalse(first.Available);
+        Assert.AreEqual(8100m, first.OceanFreight?.Amount);
+        Assert.AreEqual("MAERSK TOKYO", first.Vessel);
+
+        var second = result.Offers.Single(x => x.ExternalRouteId == "SEARCH_1_2");
+        Assert.IsTrue(second.Available);
+        Assert.AreEqual(8150m, second.OceanFreight?.Amount);
+        Assert.AreEqual("MAERSK EUREKA", second.Vessel);
     }
 
     [TestMethod]

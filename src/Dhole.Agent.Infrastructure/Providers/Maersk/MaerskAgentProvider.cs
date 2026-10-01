@@ -173,13 +173,14 @@ public sealed class MaerskAgentProvider(
                         $"Maersk departures/offers returned HTTP {captured.Status}.");
 
                 var normalized = parser.Parse(captured.ResponseJson);
-                var status = normalized.Offers.Count > 0 ? "Available" : "Unavailable";
+                var hasAvailableOffers = normalized.Offers.Any(x => x.Available);
+                var status = hasAvailableOffers ? "Available" : "Unavailable";
                 var responseDiagnostics = NeedsMaerskResponseDiagnostics(normalized)
                     ? BuildMaerskResponseDiagnostics(captured.ResponseJson)
                     : Array.Empty<MaerskResponseDiagnostic>();
 
                 completed++;
-                if (normalized.Offers.Count > 0)
+                if (hasAvailableOffers)
                     available++;
 
                 results.Add(new
@@ -522,7 +523,8 @@ public sealed class MaerskAgentProvider(
     private static bool NeedsMaerskResponseDiagnostics(
         NormalizedOceanFreightRates normalized)
     {
-        var first = normalized.Offers.FirstOrDefault();
+        var first = normalized.Offers.FirstOrDefault(x => x.Available)
+                    ?? normalized.Offers.FirstOrDefault();
 
         if (first is null)
             return false;
@@ -639,7 +641,8 @@ public sealed class MaerskAgentProvider(
         IReadOnlyCollection<string> fieldKeys,
         NormalizedOceanFreightRates normalized)
     {
-        var first = normalized.Offers.FirstOrDefault();
+        var first = normalized.Offers.FirstOrDefault(x => x.Available)
+                    ?? normalized.Offers.FirstOrDefault();
         var values = new Dictionary<string, object?>(
             StringComparer.OrdinalIgnoreCase);
 
