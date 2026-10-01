@@ -195,6 +195,7 @@ public sealed class MaerskAgentProvider(
                     offers = normalized.Offers,
                     httpStatus = captured.Status,
                     correlationId = captured.CorrelationId,
+                    capturedResponseCount = captured.ResponseCount,
                     responseDiagnostics,
                     error = (string?)null
                 });
