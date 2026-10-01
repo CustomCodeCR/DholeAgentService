@@ -13,7 +13,7 @@ public sealed class MaerskOfferParser
         CollectOfferObjects(document.RootElement, candidates);
 
         var offers = candidates
-            .Where(IsOfferedAndAvailable)
+            .Where(IsOffered)
             .Select(ParseOffer)
             .Where(x => x is not null)
             .Cast<NormalizedOceanOffer>()
@@ -47,22 +47,32 @@ public sealed class MaerskOfferParser
         }
     }
 
-    private static bool IsOfferedAndAvailable(JsonElement offer)
+    private static bool IsOffered(JsonElement offer)
     {
         var status = GetString(offer, "status");
 
-        if (!string.Equals(
-                status,
-                "OFFERED",
-                StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(
-                status,
-                "AVAILABLE",
-                StringComparison.OrdinalIgnoreCase))
-            return false;
+        return string.Equals(
+                   status,
+                   "OFFERED",
+                   StringComparison.OrdinalIgnoreCase)
+               || string.Equals(
+                   status,
+                   "AVAILABLE",
+                   StringComparison.OrdinalIgnoreCase);
+    }
 
-        return !TryGetProperty(offer, "availabilityFlag", out var available)
-               || available.ValueKind != JsonValueKind.False;
+    private static bool IsAvailable(JsonElement offer)
+    {
+        if (!TryGetProperty(offer, "availabilityFlag", out var available))
+            return true;
+
+        return available.ValueKind switch
+        {
+            JsonValueKind.False => false,
+            JsonValueKind.True => true,
+            JsonValueKind.String when bool.TryParse(available.GetString(), out var value) => value,
+            _ => true
+        };
     }
 
     private static NormalizedOceanOffer? ParseOffer(JsonElement offer)
@@ -264,7 +274,7 @@ public sealed class MaerskOfferParser
 
         return new NormalizedOceanOffer(
             routeId,
-            true,
+            IsAvailable(offer),
             etd,
             eta,
             transitDays,
@@ -285,6 +295,7 @@ public sealed class MaerskOfferParser
 
         return first with
         {
+            Available = offers.Any(x => x.Available),
             Etd = offers
                 .Select(x => x.Etd)
                 .FirstOrDefault(x => x.HasValue),
