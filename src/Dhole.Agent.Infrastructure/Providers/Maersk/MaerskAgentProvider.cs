@@ -315,15 +315,18 @@ public sealed class MaerskAgentProvider(
             authenticationSuccessUrl,
             cancellationToken);
 
-        // Keep the original 90-second capture window. The previous 45-second
-        // retry strategy caused every valid Maersk search to be cancelled before
-        // departures/offers had enough time to arrive.
+        // Attach the response listener before filling/submitting the form so an
+        // immediate Maersk response cannot be missed. The interceptor itself gets
+        // a long safety window because FillSearchAsync can pause for up to 10
+        // minutes while an operator solves hCaptcha through noVNC. The real
+        // 90-second offer timeout starts only after FillSearchAsync has observed
+        // the POST /v2/departures/offers request.
         using var captureCancellation =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         var captureTask = interceptor.WaitForOfferAsync(
             page,
-            TimeSpan.FromSeconds(90),
+            TimeSpan.FromMinutes(12),
             captureCancellation.Token);
 
         try
@@ -334,6 +337,33 @@ public sealed class MaerskAgentProvider(
                 cancellationToken,
                 searchUrl,
                 navigateToSearchUrl: false);
+
+            var postSubmitTimeout = Task.Delay(
+                TimeSpan.FromSeconds(90),
+                cancellationToken);
+
+            var completedTask = await Task.WhenAny(
+                captureTask,
+                postSubmitTimeout);
+
+            if (completedTask != captureTask)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                captureCancellation.Cancel();
+
+                try
+                {
+                    await captureTask;
+                }
+                catch
+                {
+                    // Replace the interceptor cancellation with the meaningful
+                    // post-submit timeout below.
+                }
+
+                throw new TimeoutException(
+                    "Maersk departures/offers response was not captured within 90 seconds after POST /v2/departures/offers was submitted.");
+            }
 
             return await captureTask;
         }
