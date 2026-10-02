@@ -284,47 +284,29 @@ public sealed class MaerskAgentProvider(
         CancellationToken cancellationToken)
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
-        TimeoutException? lastTimeout = null;
 
-        for (var attempt = 1; attempt <= 2; attempt++)
-        {
-            await NavigateToSearchStartAsync(
-                page,
-                searchUrl,
-                authenticationSuccessUrl,
-                cancellationToken);
+        await NavigateToSearchStartAsync(
+            page,
+            searchUrl,
+            authenticationSuccessUrl,
+            cancellationToken);
 
-            var captureTask = interceptor.WaitForOfferAsync(
-                page,
-                TimeSpan.FromSeconds(45),
-                cancellationToken);
+        // Keep the original 90-second capture window. The previous 45-second
+        // retry strategy caused every valid Maersk search to be cancelled before
+        // departures/offers had enough time to arrive.
+        var captureTask = interceptor.WaitForOfferAsync(
+            page,
+            TimeSpan.FromSeconds(90),
+            cancellationToken);
 
-            try
-            {
-                await automation.FillSearchAsync(
-                    page,
-                    input,
-                    cancellationToken,
-                    searchUrl,
-                    navigateToSearchUrl: false);
+        await automation.FillSearchAsync(
+            page,
+            input,
+            cancellationToken,
+            searchUrl,
+            navigateToSearchUrl: false);
 
-                return await captureTask;
-            }
-            catch (TimeoutException ex) when (attempt == 1)
-            {
-                // Maersk's booking SPA can occasionally accept the UI interaction
-                // without issuing the departures/offers request. Reload the proven
-                // /book/ flow and submit the same data once more. Route/location
-                // interpretation remains data-driven; there are no port-specific
-                // retries or mappings here.
-                lastTimeout = ex;
-                await Task.Delay(750, cancellationToken);
-            }
-        }
-
-        throw lastTimeout
-              ?? new TimeoutException(
-                  "Maersk departures/offers response was not captured after retry.");
+        return await captureTask;
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
