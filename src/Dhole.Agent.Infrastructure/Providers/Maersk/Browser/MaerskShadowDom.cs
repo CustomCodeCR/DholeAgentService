@@ -2196,6 +2196,44 @@ internal static class MaerskShadowDom
         return dismissed;
     }
 
+    public static async Task<string?> ReadInteractiveHcaptchaChallengeAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        foreach (var frame in page.Frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!frame.Url.Contains(
+                    "hcaptcha.com/captcha/",
+                    StringComparison.OrdinalIgnoreCase)
+                || !frame.Url.Contains(
+                    "frame=challenge",
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                var bodyText = (await frame.Locator("body").InnerTextAsync()).Trim();
+
+                if (!string.IsNullOrWhiteSpace(bodyText))
+                {
+                    return bodyText.Length <= 500
+                        ? bodyText
+                        : bodyText[..500];
+                }
+
+                return "Interactive hCaptcha challenge is active.";
+            }
+            catch (PlaywrightException)
+            {
+                return "Interactive hCaptcha challenge is active.";
+            }
+        }
+
+        return null;
+    }
+
     public static async Task<bool> ClickVisibleActionByTextAsync(
         IPage page,
         IReadOnlyCollection<string> labels,
