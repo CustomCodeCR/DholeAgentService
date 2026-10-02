@@ -95,7 +95,7 @@ public sealed class MaerskBrowserAutomation
                 try
                 {
                     await responseArrived.Task.WaitAsync(
-                        TimeSpan.FromSeconds(12),
+                        TimeSpan.FromSeconds(6),
                         cancellationToken);
 
                     noResponseClicks = 0;
