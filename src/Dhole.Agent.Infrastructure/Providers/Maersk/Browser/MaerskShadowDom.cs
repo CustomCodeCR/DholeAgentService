@@ -2196,6 +2196,143 @@ internal static class MaerskShadowDom
         return dismissed;
     }
 
+    public static async Task<bool> ClickVisibleActionByTextAsync(
+        IPage page,
+        IReadOnlyCollection<string> labels,
+        CancellationToken cancellationToken,
+        int timeoutMs = 10_000,
+        bool force = false)
+    {
+        static string Normalize(string? value)
+            => string.Join(
+                " ",
+                (value ?? string.Empty)
+                    .Split(
+                        [' ', '\t', '\r', '\n'],
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                .ToLowerInvariant();
+
+        var wanted = labels
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(Normalize)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (wanted.Length == 0)
+            return false;
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                ILocator candidates;
+
+                try
+                {
+                    // Playwright CSS locators pierce open shadow roots. Using
+                    // Locator.ClickAsync generates a trusted browser pointer event,
+                    // unlike HTMLElement.click(), which newer Maersk MDS controls
+                    // can ignore without throwing.
+                    candidates = frame.Locator(
+                        "button,mc-button,input[type='submit'],input[type='button'],[role='button']");
+
+                    var count = await candidates.CountAsync();
+                    var matches = new List<(ILocator Locator, int Rank, int Length)>();
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        var candidate = candidates.Nth(index);
+
+                        if (!await candidate.IsVisibleAsync())
+                            continue;
+
+                        var ariaDisabled = await candidate.GetAttributeAsync("aria-disabled");
+                        var disabled = await candidate.GetAttributeAsync("disabled");
+
+                        if (disabled is not null
+                            || string.Equals(
+                                ariaDisabled,
+                                "true",
+                                StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        string text;
+
+                        try
+                        {
+                            text = Normalize(await candidate.InnerTextAsync());
+                        }
+                        catch (PlaywrightException)
+                        {
+                            text = string.Empty;
+                        }
+
+                        if (text.Length == 0)
+                        {
+                            text = Normalize(
+                                await candidate.GetAttributeAsync("aria-label")
+                                ?? await candidate.GetAttributeAsync("value"));
+                        }
+
+                        if (text.Length == 0)
+                            continue;
+
+                        var exact = wanted.Any(x => text == x);
+                        var contains = exact || wanted.Any(x => text.Contains(x, StringComparison.Ordinal));
+
+                        if (!contains)
+                            continue;
+
+                        matches.Add((
+                            candidate,
+                            exact ? 2 : 1,
+                            text.Length));
+                    }
+
+                    foreach (var match in matches
+                                 .OrderByDescending(x => x.Rank)
+                                 .ThenBy(x => x.Length))
+                    {
+                        try
+                        {
+                            await match.Locator.ScrollIntoViewIfNeededAsync(
+                                new LocatorScrollIntoViewIfNeededOptions
+                                {
+                                    Timeout = Math.Min(timeoutMs, 2_000)
+                                });
+
+                            await match.Locator.ClickAsync(
+                                new LocatorClickOptions
+                                {
+                                    Timeout = Math.Min(timeoutMs, 3_000),
+                                    Force = force
+                                });
+
+                            return true;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Maersk can replace a web component between locating
+                            // and clicking it. Try the next candidate/re-render.
+                        }
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                    // Retry while the booking SPA re-renders.
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
     public static async Task<bool> ClickByTextAsync(
         IPage page,
         IReadOnlyCollection<string> labels,
