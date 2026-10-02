@@ -502,22 +502,25 @@ internal static class MaerskShadowDom
                 component.shadowRoot?.textContent
             ].filter(Boolean).join(' '));
 
-            if (text.includes('no results found')
-                || text.includes('no location matching')
-                || text.includes('no matching location found')) {
-                return false;
-            }
-
             const expectedTokenSets = (args.expectedValues || [])
                 .map(value => normalize(value)
                     .split(/[^a-z0-9]+/g)
                     .filter(token => token.length > 1))
                 .filter(items => items.length > 0);
 
-            // Require every token from a configured city/country label. This
-            // distinguishes "Puerto Caldera, Costa Rica" from "Caldera, Chile".
-            return expectedTokenSets.some(expected =>
+            const hasExpectedLocation = expectedTokenSets.some(expected =>
                 expected.every(token => text.includes(token)));
+
+            // Maersk can leave stale "No matching location found" text in the
+            // live region at the same time it announces a valid result. Trust
+            // the positive suggestion announcement, not the stale error text.
+            // Requiring both a positive count and all city/country tokens keeps
+            // "Puerto Caldera, Costa Rica" distinct from "Caldera, Chile".
+            const suggestionMatch = text.match(/\b([1-9]\d*)\s+suggestions?\s+available\b/);
+            const hasPositiveSuggestion = suggestionMatch
+                && Number(suggestionMatch[1]) > 0;
+
+            return !!hasPositiveSuggestion && hasExpectedLocation;
         }
         """;
 
@@ -568,15 +571,63 @@ internal static class MaerskShadowDom
             const currentText = normalize(input.value);
             const rawQuery = normalize(args.searchTerm);
 
-            if (!currentText || currentText === rawQuery)
+            if (!currentText)
                 return false;
 
             const expectedTokens = normalize(args.displayValue)
                 .split(/[^a-z0-9]+/g)
                 .filter(token => token.length > 1);
 
-            return expectedTokens.length > 0
+            const valueMatches = expectedTokens.length > 0
                 && expectedTokens.every(token => currentText.includes(token));
+
+            if (!valueMatches)
+                return false;
+
+            if (currentText !== rawQuery)
+                return true;
+
+            // The committed Maersk label can be identical to the text we typed
+            // (for example "Puerto Caldera, Costa Rica"). In that case verify
+            // that the location component has closed its suggestion state.
+            let component = null;
+
+            const visit = root => {
+                for (const element of root.querySelectorAll?.('*') || []) {
+                    if (element.tagName?.toLowerCase?.() === 'mc-c-location-servicemode'
+                        && (element.getAttribute('id') || '') === args.componentId) {
+                        return element;
+                    }
+
+                    if (element.shadowRoot) {
+                        const nested = visit(element.shadowRoot);
+                        if (nested)
+                            return nested;
+                    }
+                }
+
+                return null;
+            };
+
+            component = visit(document);
+
+            if (!component)
+                return false;
+
+            const componentText = normalize([
+                component.innerText,
+                component.textContent,
+                component.shadowRoot?.textContent
+            ].filter(Boolean).join(' '));
+
+            const stillSuggesting =
+                /\b[1-9]\d*\s+suggestions?\s+available\b/.test(componentText)
+                || componentText.includes('first:');
+
+            const blankError = componentText.includes('cannot be left blank');
+
+            return !stillSuggesting && !blankError;
+
         }
         """;
 
