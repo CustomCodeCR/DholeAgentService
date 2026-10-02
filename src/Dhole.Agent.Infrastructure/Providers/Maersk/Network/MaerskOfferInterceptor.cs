@@ -7,7 +7,7 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 
 public sealed class MaerskOfferInterceptor
 {
-    private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     public async Task<CapturedMaerskOfferResponse> WaitForOfferAsync(
