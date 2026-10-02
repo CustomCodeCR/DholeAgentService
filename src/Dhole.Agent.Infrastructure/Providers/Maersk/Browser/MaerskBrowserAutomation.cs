@@ -304,10 +304,11 @@ public sealed class MaerskBrowserAutomation
         string? locationCode,
         CancellationToken cancellationToken)
     {
-        // Route configuration must remain data-driven. A newly-created POL/POE/POD
-        // must work without adding a code-specific case to AgentService.
+        // Preserve the proven path first: use the configured human label exactly
+        // as provided, then its locality portion. Generic aliases are only
+        // fallbacks, so adding new route formats cannot regress routes that
+        // already work.
         var searchTerms = GetLocationSearchTerms(displayValue);
-        var matchValues = GetLocationMatchValues(displayValue);
 
         foreach (var searchTerm in searchTerms)
         {
@@ -329,6 +330,8 @@ public sealed class MaerskBrowserAutomation
                     cancellationToken);
             }
 
+            var matchValues = GetLocationMatchValues(displayValue, searchTerm);
+
             var suggestionReady = await MaerskShadowDom.WaitForLocationSuggestionAsync(
                 page,
                 componentId,
@@ -343,30 +346,42 @@ public sealed class MaerskBrowserAutomation
                 page,
                 cancellationToken);
 
-            var selected = false;
+            // First try the configured label exactly. This is the last-known-good
+            // behavior for existing routes.
+            var selected = await MaerskShadowDom.ClickVisibleLocationOptionAsync(
+                page,
+                componentId,
+                displayValue,
+                "CY",
+                cancellationToken,
+                timeoutMs: 4_000);
 
-            // Try the most specific human label first, then progressively looser
-            // aliases derived from the same configured location. This handles
-            // labels such as:
-            //   "Qingdao, China" -> "Qingdao (Shandong), China"
-            //   "Caldera, Costa Rica" -> "Puerto Caldera (...), Costa Rica"
-            // without any per-port mapping in code.
-            foreach (var matchValue in matchValues)
+            // Only if the exact configured representation is not present, try
+            // aliases derived from the same value. No UN/LOCODE-specific mapping
+            // is required.
+            if (!selected)
             {
-                selected = await MaerskShadowDom.ClickVisibleLocationOptionAsync(
-                    page,
-                    componentId,
-                    matchValue,
-                    "CY",
-                    cancellationToken,
-                    timeoutMs: 2_500);
+                foreach (var matchValue in matchValues
+                             .Where(x => !string.Equals(
+                                 x,
+                                 displayValue,
+                                 StringComparison.OrdinalIgnoreCase)))
+                {
+                    selected = await MaerskShadowDom.ClickVisibleLocationOptionAsync(
+                        page,
+                        componentId,
+                        matchValue,
+                        "CY",
+                        cancellationToken,
+                        timeoutMs: 2_000);
 
-                if (selected)
-                    break;
+                    if (selected)
+                        break;
+                }
             }
 
-            // Keyboard navigation is a final fallback only after the typeahead
-            // positively announced a matching location.
+            // Keyboard navigation remains the final fallback, and is attempted
+            // only after Maersk has positively announced matching suggestions.
             if (!selected)
             {
                 var moved = await MaerskShadowDom.PressFirstAsync(
@@ -387,7 +402,21 @@ public sealed class MaerskBrowserAutomation
             if (!selected)
                 continue;
 
-            foreach (var matchValue in matchValues)
+            // Validate against the configured label first, then generic aliases.
+            if (await MaerskShadowDom.WaitForResolvedLocationValueAsync(
+                    page,
+                    componentId,
+                    searchTerm,
+                    displayValue,
+                    cancellationToken,
+                    timeoutMs: 4_000))
+                return;
+
+            foreach (var matchValue in matchValues
+                         .Where(x => !string.Equals(
+                             x,
+                             displayValue,
+                             StringComparison.OrdinalIgnoreCase)))
             {
                 if (await MaerskShadowDom.WaitForResolvedLocationValueAsync(
                         page,
@@ -395,7 +424,7 @@ public sealed class MaerskBrowserAutomation
                         searchTerm,
                         matchValue,
                         cancellationToken,
-                        timeoutMs: 2_500))
+                        timeoutMs: 1_500))
                     return;
             }
         }
@@ -408,79 +437,21 @@ public sealed class MaerskBrowserAutomation
 
     private static string[] GetLocationSearchTerms(string displayValue)
     {
-        var parts = ParseLocationParts(displayValue);
-        if (parts.Cleaned.Length == 0)
-            return [];
-
-        var anchorPrefix = parts.Anchor.Length >= 6
-            ? parts.Anchor[..4]
-            : null;
-
-        // Maersk's location typeahead is human-name based. Search first by the
-        // configured locality, then by a significant locality token and finally
-        // by a short prefix (e.g. Qingdao -> qing). Never type UN/LOCODE values.
-        return new[]
-            {
-                parts.Primary,
-                parts.Anchor,
-                anchorPrefix,
-                parts.Cleaned
-            }
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static string[] GetLocationMatchValues(string displayValue)
-    {
-        var parts = ParseLocationParts(displayValue);
-        if (parts.Cleaned.Length == 0)
-            return [];
-
-        var values = new List<string> { parts.Cleaned };
-
-        if (parts.Tail.Length > 0)
-        {
-            if (parts.Primary.Length > 0)
-                values.Add($"{parts.Primary}, {parts.Tail}");
-
-            if (parts.Anchor.Length > 0)
-                values.Add($"{parts.Anchor}, {parts.Tail}");
-        }
-
-        if (parts.Primary.Length > 0)
-            values.Add(parts.Primary);
-
-        if (parts.Anchor.Length > 0)
-            values.Add(parts.Anchor);
-
-        return values
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static LocationParts ParseLocationParts(string displayValue)
-    {
         if (string.IsNullOrWhiteSpace(displayValue))
-            return new LocationParts(string.Empty, string.Empty, string.Empty, string.Empty);
+            return [];
 
-        var cleaned = CollapseWhitespace(displayValue);
-        var commaParts = cleaned
+        var trimmed = CollapseLocationWhitespace(displayValue);
+        var commaParts = trimmed
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        var primary = commaParts.Length > 0
+        var locality = commaParts.Length > 0
             ? commaParts[0]
-            : cleaned;
+            : trimmed;
 
-        var parenthesisIndex = primary.IndexOf('(');
-        if (parenthesisIndex > 0)
-            primary = primary[..parenthesisIndex].Trim();
-
-        var tail = commaParts.Length > 1
-            ? string.Join(", ", commaParts.Skip(1))
-            : string.Empty;
+        var parenthesisIndex = locality.IndexOf('(');
+        var localityWithoutParenthesis = parenthesisIndex > 0
+            ? locality[..parenthesisIndex].Trim()
+            : locality;
 
         var genericWords = new HashSet<string>(
             [
@@ -497,36 +468,87 @@ public sealed class MaerskBrowserAutomation
             ],
             StringComparer.OrdinalIgnoreCase);
 
-        var tokens = primary
+        var meaningfulTokens = localityWithoutParenthesis
             .Split(
                 [' ', '-', '/', '_'],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(token => new string(token.Where(char.IsLetterOrDigit).ToArray()))
-            .Where(token => token.Length >= 3)
+            .Where(token => token.Length >= 3 && !genericWords.Contains(token))
             .ToArray();
 
-        var anchor = tokens
-            .Where(token => !genericWords.Contains(token))
-            .OrderByDescending(token => token.Length)
-            .FirstOrDefault()
-            ?? tokens.OrderByDescending(token => token.Length).FirstOrDefault()
-            ?? primary;
+        var simplifiedLocality = meaningfulTokens.Length > 0
+            ? string.Join(" ", meaningfulTokens)
+            : localityWithoutParenthesis;
 
-        return new LocationParts(cleaned, primary, tail, anchor);
+        var anchor = meaningfulTokens
+            .OrderByDescending(token => token.Length)
+            .FirstOrDefault();
+
+        var shortPrefix = anchor is { Length: >= 6 }
+            ? anchor[..4]
+            : null;
+
+        // Order matters: the two first entries are the proven behavior. The rest
+        // exist only to support newly configured route labels automatically.
+        return new[]
+            {
+                trimmed,
+                locality,
+                localityWithoutParenthesis,
+                simplifiedLocality,
+                anchor,
+                shortPrefix
+            }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
-    private static string CollapseWhitespace(string value)
+    private static string[] GetLocationMatchValues(
+        string displayValue,
+        string searchTerm)
+    {
+        var trimmed = CollapseLocationWhitespace(displayValue);
+        var commaParts = trimmed
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var countryOrTail = commaParts.Length > 1
+            ? commaParts[^1]
+            : string.Empty;
+
+        var locality = commaParts.Length > 0
+            ? commaParts[0]
+            : trimmed;
+
+        var parenthesisIndex = locality.IndexOf('(');
+        if (parenthesisIndex > 0)
+            locality = locality[..parenthesisIndex].Trim();
+
+        var search = CollapseLocationWhitespace(searchTerm);
+
+        // Keep the full configured label first. Country/tail-qualified aliases
+        // prevent similarly named locations in another country from being chosen.
+        return new[]
+            {
+                trimmed,
+                countryOrTail.Length > 0 ? $"{locality}, {countryOrTail}" : locality,
+                countryOrTail.Length > 0 ? $"{search}, {countryOrTail}" : search,
+                locality,
+                search
+            }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string CollapseLocationWhitespace(string value)
         => string.Join(
             " ",
             value.Split(
                 [' ', '\t', '\r', '\n'],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-
-    private sealed record LocationParts(
-        string Cleaned,
-        string Primary,
-        string Tail,
-        string Anchor);
 
     private static async Task FillFirstAsync(
         IPage page,
