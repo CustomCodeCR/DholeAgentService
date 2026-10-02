@@ -381,6 +381,26 @@ public sealed class MaerskAgentProvider(
             captureCts.Token,
             traversalComplete.Task);
 
+        var initialOfferObserved = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        EventHandler<Microsoft.Playwright.IResponse>? initialOfferHandler = null;
+        initialOfferHandler = (_, response) =>
+        {
+            if (response.Url.Contains(
+                    "/v2/departures/offers",
+                    StringComparison.OrdinalIgnoreCase)
+                && string.Equals(
+                    response.Request.Method,
+                    "POST",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                initialOfferObserved.TrySetResult(true);
+            }
+        };
+
+        page.Response += initialOfferHandler;
+
         try
         {
             await automation.FillSearchAsync(
@@ -390,10 +410,46 @@ public sealed class MaerskAgentProvider(
                 searchUrl,
                 navigateToSearchUrl: false);
 
-            // Exhaust the "Search more sailing options" control before marking
-            // this route/equipment search complete. The interceptor remains
-            // subscribed during the entire traversal and merges every
-            // departures/offers batch that Maersk returns.
+            // Do not use the browser URL as proof that the search fired. Maersk can
+            // issue departures/offers while the SPA still reports /book/. The
+            // network request is the authoritative signal that the form was
+            // actually submitted.
+            try
+            {
+                await initialOfferObserved.Task.WaitAsync(
+                    TimeSpan.FromSeconds(25),
+                    cancellationToken);
+            }
+            catch (TimeoutException) when (!initialOfferObserved.Task.IsCompleted)
+            {
+                logger.LogWarning(
+                    "MAERSK_SEARCH_SUBMIT_RETRY url={Url}",
+                    SanitizeBrowserUrl(page.Url));
+
+                var resubmitted = await automation.RetrySubmitSearchAsync(
+                    page,
+                    cancellationToken);
+
+                if (!resubmitted)
+                    throw new TimeoutException(
+                        $"Maersk search did not issue departures/offers and the search action could not be retried. Final URL='{SanitizeBrowserUrl(page.Url)}'.");
+
+                try
+                {
+                    await initialOfferObserved.Task.WaitAsync(
+                        TimeSpan.FromSeconds(20),
+                        cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    throw new TimeoutException(
+                        $"Maersk search submission did not issue /v2/departures/offers after retry. Final URL='{SanitizeBrowserUrl(page.Url)}'.");
+                }
+            }
+
+            // The first departures/offers response proves that the results flow is
+            // active. From here, scroll and click "Search more sailing options"
+            // wherever Maersk rendered it; do not require a specific SPA URL.
             await automation.LoadAllSailingsAsync(
                 page,
                 cancellationToken,
@@ -418,6 +474,10 @@ public sealed class MaerskAgentProvider(
             }
 
             throw;
+        }
+        finally
+        {
+            page.Response -= initialOfferHandler;
         }
     }
 
