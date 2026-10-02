@@ -249,7 +249,9 @@ public sealed class MaerskBrowserAutomation
 
         if (input.CargoReadyDate == Dhole.Agent.Application.Agents.MaerskExecutionDefaults.GetCargoReadyDate())
         {
-            dateSelected = await MaerskShadowDom.ClickByTextAsync(
+            // Maersk MDS controls increasingly ignore synthetic HTMLElement.click().
+            // Use a real Playwright pointer click for "Select tomorrow".
+            dateSelected = await MaerskShadowDom.ClickVisibleActionByTextAsync(
                 page,
                 ["Select tomorrow"],
                 cancellationToken,
@@ -274,24 +276,92 @@ public sealed class MaerskBrowserAutomation
                 cancellationToken);
         }
 
-        var submitted =
-            await MaerskShadowDom.ClickByTextAsync(
-                page,
-                ["Continue", "Continue to book", "Search", "Get prices", "Find prices", "Show prices"],
-                cancellationToken,
-                timeoutMs: 10_000)
-            || await MaerskShadowDom.ClickFirstAsync(
-                page,
-                ["button[type='submit']", "input[type='submit']"],
-                cancellationToken,
-                timeoutMs: 3_000);
+        var offerRequestStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        if (!submitted)
+        EventHandler<IRequest>? requestHandler = null;
+        requestHandler = (_, request) =>
         {
-            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-            throw new InvalidOperationException(
-                $"Maersk Continue/Search action did not become enabled after completing the booking fields. " +
-                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+            if (request.Url.Contains(
+                    "/v2/departures/offers",
+                    StringComparison.OrdinalIgnoreCase)
+                && string.Equals(
+                    request.Method,
+                    "POST",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                offerRequestStarted.TrySetResult(true);
+            }
+        };
+
+        page.Request += requestHandler;
+
+        try
+        {
+            var submitLabels = new[]
+            {
+                "Continue to book",
+                "Continue",
+                "Search",
+                "Get prices",
+                "Find prices",
+                "Show prices"
+            };
+
+            // First choice: trusted Playwright click. This is deliberately not
+            // the generic JS click because Maersk can report a synthetic click as
+            // successful while never issuing departures/offers.
+            var submitted =
+                await MaerskShadowDom.ClickVisibleActionByTextAsync(
+                    page,
+                    submitLabels,
+                    cancellationToken,
+                    timeoutMs: 10_000)
+                || await MaerskShadowDom.ClickFirstAsync(
+                    page,
+                    ["button[type='submit']", "input[type='submit']"],
+                    cancellationToken,
+                    timeoutMs: 3_000);
+
+            if (!submitted)
+            {
+                var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                throw new InvalidOperationException(
+                    $"Maersk Continue/Search action did not become enabled after completing the booking fields. " +
+                    $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+            }
+
+            var firstSignal = await Task.WhenAny(
+                offerRequestStarted.Task,
+                Task.Delay(TimeSpan.FromSeconds(12), cancellationToken));
+
+            if (firstSignal != offerRequestStarted.Task)
+            {
+                // The control was clickable but the SPA did not submit. Retry once
+                // with a forced trusted pointer event against the live control.
+                await MaerskShadowDom.ClickVisibleActionByTextAsync(
+                    page,
+                    submitLabels,
+                    cancellationToken,
+                    timeoutMs: 5_000,
+                    force: true);
+
+                var retrySignal = await Task.WhenAny(
+                    offerRequestStarted.Task,
+                    Task.Delay(TimeSpan.FromSeconds(8), cancellationToken));
+
+                if (retrySignal != offerRequestStarted.Task)
+                {
+                    var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                    throw new InvalidOperationException(
+                        $"Maersk booking form was completed, but Continue did not issue POST /v2/departures/offers. " +
+                        $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+                }
+            }
+        }
+        finally
+        {
+            page.Request -= requestHandler;
         }
     }
 
