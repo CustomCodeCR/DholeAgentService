@@ -54,14 +54,15 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
-        // A Maersk edge/WAF rejection is not something scheduled retries can fix.
-        // Preserve the persistent profile and stop automated credential submissions
-        // until an operator explicitly requests authentication again.
+        // Provider-side verification/WAF challenges are not fixed by repeating
+        // scheduled automation. Preserve the persistent profile and stop automated
+        // submissions until an operator explicitly requests authentication again.
         if (browserProfile?.Status == BrowserProfileStatus.Blocked)
         {
             return AgentProviderExecutionResult.Failed(
-                "maersk_authentication_edge_denied",
-                "Maersk Global Accounts is currently rejecting authentication at the edge. The persistent browser profile was preserved. Explicitly request browser-profile authentication after the provider allows access again.");
+                "maersk_browser_profile_blocked",
+                "The Maersk browser profile is blocked by provider-side verification or edge protection. " +
+                "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
         }
 
         // Maersk authentication relies on a persistent Chromium profile.
@@ -200,6 +201,29 @@ public sealed class MaerskAgentProvider(
                     error = (string?)null
                 });
             }
+            catch (MaerskAuthenticationException ex)
+            {
+                failed++;
+
+                errors.Add(new
+                {
+                    taskIndex = search.Index,
+                    routeId = search.RouteId,
+                    equipmentId = search.EquipmentId,
+                    errorCode = ex.ErrorCode,
+                    errorMessage = ex.Message
+                });
+
+                if (browserProfile is not null)
+                {
+                    browserProfile.SetStatus(MapBrowserProfileStatus(ex.ErrorCode));
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                }
+
+                return AgentProviderExecutionResult.Failed(
+                    ex.ErrorCode,
+                    ex.Message);
+            }
             catch (Exception ex)
             {
                 failed++;
@@ -294,19 +318,44 @@ public sealed class MaerskAgentProvider(
         // Keep the original 90-second capture window. The previous 45-second
         // retry strategy caused every valid Maersk search to be cancelled before
         // departures/offers had enough time to arrive.
+        using var captureCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
         var captureTask = interceptor.WaitForOfferAsync(
             page,
             TimeSpan.FromSeconds(90),
-            cancellationToken);
+            captureCancellation.Token);
 
-        await automation.FillSearchAsync(
-            page,
-            input,
-            cancellationToken,
-            searchUrl,
-            navigateToSearchUrl: false);
+        try
+        {
+            await automation.FillSearchAsync(
+                page,
+                input,
+                cancellationToken,
+                searchUrl,
+                navigateToSearchUrl: false);
 
-        return await captureTask;
+            return await captureTask;
+        }
+        catch
+        {
+            captureCancellation.Cancel();
+
+            try
+            {
+                await captureTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when the booking flow fails before an offer response.
+            }
+            catch
+            {
+                // Preserve the original booking/search exception.
+            }
+
+            throw;
+        }
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
@@ -798,6 +847,7 @@ public sealed class MaerskAgentProvider(
             "maersk_authentication_rate_limited" => BrowserProfileStatus.Blocked,
             "maersk_authentication_unauthorized" => BrowserProfileStatus.LoginRequired,
             "maersk_authentication_verification_required" => BrowserProfileStatus.LoginRequired,
+            "maersk_hcaptcha_required" => BrowserProfileStatus.Blocked,
             "maersk_post_auth_navigation_failed" => BrowserProfileStatus.LoginRequired,
             "maersk_authentication_service_error" => BrowserProfileStatus.Error,
             _ => BrowserProfileStatus.Error

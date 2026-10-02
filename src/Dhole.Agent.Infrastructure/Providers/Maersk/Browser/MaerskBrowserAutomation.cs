@@ -1,3 +1,4 @@
+using Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Models;
 using Microsoft.Playwright;
 
@@ -337,6 +338,20 @@ public sealed class MaerskBrowserAutomation
 
             if (firstSignal != offerRequestStarted.Task)
             {
+                var captchaChallenge =
+                    await MaerskShadowDom.ReadInteractiveHcaptchaChallengeAsync(
+                        page,
+                        cancellationToken);
+
+                if (!string.IsNullOrWhiteSpace(captchaChallenge))
+                {
+                    throw new MaerskAuthenticationException(
+                        "maersk_hcaptcha_required",
+                        "Maersk presented an interactive hCaptcha challenge after the booking form was submitted. " +
+                        "The persistent browser profile was preserved and scheduled searches must stop until the verification is completed interactively. " +
+                        $"Challenge='{captchaChallenge}'");
+                }
+
                 // The control was clickable but the SPA did not submit. Retry once
                 // with a forced trusted pointer event against the live control.
                 await MaerskShadowDom.ClickVisibleActionByTextAsync(
@@ -352,6 +367,20 @@ public sealed class MaerskBrowserAutomation
 
                 if (retrySignal != offerRequestStarted.Task)
                 {
+                    captchaChallenge =
+                        await MaerskShadowDom.ReadInteractiveHcaptchaChallengeAsync(
+                            page,
+                            cancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(captchaChallenge))
+                    {
+                        throw new MaerskAuthenticationException(
+                            "maersk_hcaptcha_required",
+                            "Maersk presented an interactive hCaptcha challenge after the booking form was submitted. " +
+                            "The persistent browser profile was preserved and scheduled searches must stop until the verification is completed interactively. " +
+                            $"Challenge='{captchaChallenge}'");
+                    }
+
                     var diagnostics = await MaerskShadowDom.DescribeAsync(page);
                     throw new InvalidOperationException(
                         $"Maersk booking form was completed, but Continue did not issue POST /v2/departures/offers. " +
