@@ -291,27 +291,56 @@ public sealed class MaerskAgentProvider(
             authenticationSuccessUrl,
             cancellationToken);
 
+        using var captureCts =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var traversalComplete = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         var captureTask = interceptor.WaitForOfferAsync(
             page,
-            TimeSpan.FromSeconds(90),
-            cancellationToken);
+            TimeSpan.FromSeconds(180),
+            captureCts.Token,
+            traversalComplete.Task);
 
-        await automation.FillSearchAsync(
-            page,
-            input,
-            cancellationToken,
-            searchUrl,
-            navigateToSearchUrl: false);
+        try
+        {
+            await automation.FillSearchAsync(
+                page,
+                input,
+                cancellationToken,
+                searchUrl,
+                navigateToSearchUrl: false);
 
-        // Maersk lazily requests additional sailing/product batches while the
-        // /book/sailings page is traversed. Keep the network interceptor active
-        // until the page stops growing so every available departure for this
-        // route + equipment is captured before moving to the next search.
-        await automation.LoadAllSailingsAsync(
-            page,
-            cancellationToken);
+            // Exhaust the "Search more sailing options" control before marking
+            // this route/equipment search complete. The interceptor remains
+            // subscribed during the entire traversal and merges every
+            // departures/offers batch that Maersk returns.
+            await automation.LoadAllSailingsAsync(
+                page,
+                cancellationToken,
+                timeoutMs: 90_000);
 
-        return await captureTask;
+            traversalComplete.TrySetResult();
+
+            return await captureTask;
+        }
+        catch
+        {
+            traversalComplete.TrySetResult();
+            captureCts.Cancel();
+
+            try
+            {
+                await captureTask;
+            }
+            catch
+            {
+                // The original browser/search exception is more useful.
+            }
+
+            throw;
+        }
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
