@@ -304,7 +304,7 @@ public sealed class MaerskBrowserAutomation
         string? locationCode,
         CancellationToken cancellationToken)
     {
-        var searchTerms = GetLocationSearchTerms(displayValue, locationCode);
+        var searchTerms = GetLocationSearchTerms(displayValue);
 
         foreach (var searchTerm in searchTerms)
         {
@@ -353,6 +353,29 @@ public sealed class MaerskBrowserAutomation
                 cancellationToken,
                 timeoutMs: 4_000);
 
+            // Some Maersk MDS builds expose the correct suggestion through the
+            // component's live region but do not expose a clickable mc-option.
+            // At this point WaitForLocationSuggestionAsync has already verified
+            // that a positive suggestion exists and contains the configured
+            // city/country tokens, so keyboard selection is safe and does not
+            // regress to a page-global "first option" fallback.
+            if (!selected)
+            {
+                var moved = await MaerskShadowDom.PressFirstAsync(
+                    page,
+                    selectors,
+                    "ArrowDown",
+                    cancellationToken,
+                    timeoutMs: 2_000);
+
+                selected = moved && await MaerskShadowDom.PressFirstAsync(
+                    page,
+                    selectors,
+                    "Enter",
+                    cancellationToken,
+                    timeoutMs: 2_000);
+            }
+
             if (!selected)
                 continue;
 
@@ -369,13 +392,11 @@ public sealed class MaerskBrowserAutomation
 
         var diagnostics = await MaerskShadowDom.DescribeAsync(page);
         throw new InvalidOperationException(
-            $"Maersk location '{displayValue}' could not be committed for '{componentId}'. " +
+            $"Maersk location '{displayValue}' (code='{locationCode ?? "-"}') could not be committed for '{componentId}'. " +
             $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
     }
 
-    private static string[] GetLocationSearchTerms(
-        string displayValue,
-        string? locationCode)
+    private static string[] GetLocationSearchTerms(string displayValue)
     {
         if (string.IsNullOrWhiteSpace(displayValue))
             return [];
@@ -386,16 +407,15 @@ public sealed class MaerskBrowserAutomation
             ? trimmed[..commaIndex].Trim()
             : trimmed;
 
+        // Maersk's location field is a human-name typeahead. RKST/port codes
+        // such as CHSGH and CRCAL return "No location matching", so never use
+        // them as a fallback search term here.
         return new[]
             {
                 trimmed,
-                cityOnly,
-                string.IsNullOrWhiteSpace(locationCode)
-                    ? null
-                    : locationCode.Trim()
+                cityOnly
             }
             .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
