@@ -362,123 +362,93 @@ public sealed class MaerskAgentProvider(
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
 
+        // Keep the original five-second stable /book/ readiness check. This was
+        // the last search-submission path known to produce departures/offers
+        // reliably before the extraction-speed experiments.
         await NavigateToSearchStartAsync(
             page,
             searchUrl,
             authenticationSuccessUrl,
             cancellationToken,
-            stableTargetPollsRequired: 4);
+            stableTargetPollsRequired: 20);
 
-        using var captureCts =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        var traversalComplete = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var captureTask = interceptor.WaitForOfferAsync(
+        // IMPORTANT: preserve the original working order exactly:
+        // subscribe -> fill/submit -> await the first departures/offers response.
+        var initialCaptureTask = interceptor.WaitForOfferAsync(
             page,
-            TimeSpan.FromSeconds(120),
-            captureCts.Token,
-            traversalComplete.Task);
+            TimeSpan.FromSeconds(90),
+            cancellationToken);
 
-        var initialOfferObserved = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        await automation.FillSearchAsync(
+            page,
+            input,
+            cancellationToken,
+            searchUrl,
+            navigateToSearchUrl: false);
 
-        EventHandler<Microsoft.Playwright.IResponse>? initialOfferHandler = null;
-        initialOfferHandler = (_, response) =>
+        var initialCapture = await initialCaptureTask;
+        var captures = new List<CapturedMaerskOfferResponse> { initialCapture };
+
+        // Additional sailings are optional enrichment. Failure to find/click the
+        // control must never invalidate a search that already returned rates.
+        const int maxAdditionalBatches = 20;
+
+        for (var batch = 0; batch < maxAdditionalBatches; batch++)
         {
-            if (response.Url.Contains(
-                    "/v2/departures/offers",
-                    StringComparison.OrdinalIgnoreCase)
-                && string.Equals(
-                    response.Request.Method,
-                    "POST",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                initialOfferObserved.TrySetResult(true);
-            }
-        };
+            cancellationToken.ThrowIfCancellationRequested();
 
-        page.Response += initialOfferHandler;
+            using var batchCts =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        try
-        {
-            await automation.FillSearchAsync(
+            var batchCaptureTask = interceptor.WaitForOfferAsync(
                 page,
-                input,
+                TimeSpan.FromSeconds(15),
+                batchCts.Token);
+
+            var clicked = await automation.TryLoadNextSailingBatchAsync(
+                page,
                 cancellationToken,
-                searchUrl,
-                navigateToSearchUrl: false);
+                timeoutMs: 3_000);
 
-            // Do not use the browser URL as proof that the search fired. Maersk can
-            // issue departures/offers while the SPA still reports /book/. The
-            // network request is the authoritative signal that the form was
-            // actually submitted.
-            try
+            if (!clicked)
             {
-                await initialOfferObserved.Task.WaitAsync(
-                    TimeSpan.FromSeconds(25),
-                    cancellationToken);
-            }
-            catch (TimeoutException) when (!initialOfferObserved.Task.IsCompleted)
-            {
-                logger.LogWarning(
-                    "MAERSK_SEARCH_SUBMIT_RETRY url={Url}",
-                    SanitizeBrowserUrl(page.Url));
-
-                var resubmitted = await automation.RetrySubmitSearchAsync(
-                    page,
-                    cancellationToken);
-
-                if (!resubmitted)
-                    throw new TimeoutException(
-                        $"Maersk search did not issue departures/offers and the search action could not be retried. Final URL='{SanitizeBrowserUrl(page.Url)}'.");
+                batchCts.Cancel();
 
                 try
                 {
-                    await initialOfferObserved.Task.WaitAsync(
-                        TimeSpan.FromSeconds(20),
-                        cancellationToken);
+                    await batchCaptureTask;
                 }
-                catch (TimeoutException)
+                catch
                 {
-                    throw new TimeoutException(
-                        $"Maersk search submission did not issue /v2/departures/offers after retry. Final URL='{SanitizeBrowserUrl(page.Url)}'.");
+                    // No "Search more sailing options" button means traversal is complete.
                 }
+
+                break;
             }
-
-            // The first departures/offers response proves that the results flow is
-            // active. From here, scroll and click "Search more sailing options"
-            // wherever Maersk rendered it; do not require a specific SPA URL.
-            await automation.LoadAllSailingsAsync(
-                page,
-                cancellationToken,
-                timeoutMs: 60_000);
-
-            traversalComplete.TrySetResult();
-
-            return await captureTask;
-        }
-        catch
-        {
-            traversalComplete.TrySetResult();
-            captureCts.Cancel();
 
             try
             {
-                await captureTask;
+                var additionalCapture = await batchCaptureTask;
+                captures.Add(additionalCapture);
+
+                logger.LogInformation(
+                    "MAERSK_SEARCH_MORE_CAPTURED batch={Batch} capturedResponses={CapturedResponses}",
+                    batch + 1,
+                    additionalCapture.ResponseCount);
             }
-            catch
+            catch (TimeoutException)
             {
-                // The original browser/search exception is more useful.
+                // A stale/re-rendered button can accept a click without issuing a
+                // new request. Keep the already captured rates and stop traversal.
+                break;
             }
 
-            throw;
+            await Task.Delay(500, cancellationToken);
         }
-        finally
-        {
-            page.Response -= initialOfferHandler;
-        }
+
+        return captures.Count == 1
+            ? initialCapture
+            : MaerskOfferInterceptor.MergeCaptures(captures);
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
