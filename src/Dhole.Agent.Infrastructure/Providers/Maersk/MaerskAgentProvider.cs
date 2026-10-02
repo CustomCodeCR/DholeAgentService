@@ -303,6 +303,14 @@ public sealed class MaerskAgentProvider(
             searchUrl,
             navigateToSearchUrl: false);
 
+        // Maersk lazily requests additional sailing/product batches while the
+        // /book/sailings page is traversed. Keep the network interceptor active
+        // until the page stops growing so every available departure for this
+        // route + equipment is captured before moving to the next search.
+        await automation.LoadAllSailingsAsync(
+            page,
+            cancellationToken);
+
         return await captureTask;
     }
 
