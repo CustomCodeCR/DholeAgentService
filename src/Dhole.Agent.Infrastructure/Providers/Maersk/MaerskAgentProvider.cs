@@ -284,26 +284,47 @@ public sealed class MaerskAgentProvider(
         CancellationToken cancellationToken)
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
+        TimeoutException? lastTimeout = null;
 
-        await NavigateToSearchStartAsync(
-            page,
-            searchUrl,
-            authenticationSuccessUrl,
-            cancellationToken);
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            await NavigateToSearchStartAsync(
+                page,
+                searchUrl,
+                authenticationSuccessUrl,
+                cancellationToken);
 
-        var captureTask = interceptor.WaitForOfferAsync(
-            page,
-            TimeSpan.FromSeconds(90),
-            cancellationToken);
+            var captureTask = interceptor.WaitForOfferAsync(
+                page,
+                TimeSpan.FromSeconds(45),
+                cancellationToken);
 
-        await automation.FillSearchAsync(
-            page,
-            input,
-            cancellationToken,
-            searchUrl,
-            navigateToSearchUrl: false);
+            try
+            {
+                await automation.FillSearchAsync(
+                    page,
+                    input,
+                    cancellationToken,
+                    searchUrl,
+                    navigateToSearchUrl: false);
 
-        return await captureTask;
+                return await captureTask;
+            }
+            catch (TimeoutException ex) when (attempt == 1)
+            {
+                // Maersk's booking SPA can occasionally accept the UI interaction
+                // without issuing the departures/offers request. Reload the proven
+                // /book/ flow and submit the same data once more. Route/location
+                // interpretation remains data-driven; there are no port-specific
+                // retries or mappings here.
+                lastTimeout = ex;
+                await Task.Delay(750, cancellationToken);
+            }
+        }
+
+        throw lastTimeout
+              ?? new TimeoutException(
+                  "Maersk departures/offers response was not captured after retry.");
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
