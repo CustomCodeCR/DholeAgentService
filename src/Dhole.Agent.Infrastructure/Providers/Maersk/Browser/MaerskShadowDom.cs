@@ -587,46 +587,85 @@ internal static class MaerskShadowDom
             if (currentText !== rawQuery)
                 return true;
 
-            // The committed Maersk label can be identical to the text we typed
-            // (for example "Puerto Caldera, Costa Rica"). In that case verify
-            // that the location component has closed its suggestion state.
-            let component = null;
+            // The committed Maersk label can be identical to what was typed
+            // (for example "Puerto Caldera, Costa Rica"). Hidden validation/live
+            // region text remains in the shadow DOM even after a valid selection,
+            // so determine settlement from actual visible mc-option elements.
+            const roots = [];
+            const seen = new Set();
 
-            const visit = root => {
+            const collectRoots = root => {
+                if (!root || seen.has(root))
+                    return;
+
+                seen.add(root);
+                roots.push(root);
+
                 for (const element of root.querySelectorAll?.('*') || []) {
-                    if (element.tagName?.toLowerCase?.() === 'mc-c-location-servicemode'
-                        && (element.getAttribute('id') || '') === args.componentId) {
-                        return element;
-                    }
+                    if (element.shadowRoot)
+                        collectRoots(element.shadowRoot);
+                }
+            };
 
-                    if (element.shadowRoot) {
-                        const nested = visit(element.shadowRoot);
-                        if (nested)
-                            return nested;
+            collectRoots(document);
+
+            let component = null;
+            for (const root of roots) {
+                for (const element of root.querySelectorAll?.(
+                    'mc-c-location-servicemode'
+                ) || []) {
+                    if ((element.getAttribute('id') || '') === args.componentId) {
+                        component = element;
+                        break;
                     }
                 }
 
-                return null;
-            };
-
-            component = visit(document);
+                if (component)
+                    break;
+            }
 
             if (!component)
                 return false;
 
-            const componentText = normalize([
-                component.innerText,
-                component.textContent,
-                component.shadowRoot?.textContent
-            ].filter(Boolean).join(' '));
+            const isVisible = element => {
+                if (!(element instanceof Element))
+                    return false;
 
-            const stillSuggesting =
-                /\b[1-9]\d*\s+suggestions?\s+available\b/.test(componentText)
-                || componentText.includes('first:');
+                const style = getComputedStyle(element);
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && style.opacity !== '0'
+                    && element.getClientRects().length > 0;
+            };
 
-            const blankError = componentText.includes('cannot be left blank');
+            const componentRoots = [];
+            const componentSeen = new Set();
 
-            return !stillSuggesting && !blankError;
+            const collectComponentRoots = root => {
+                if (!root || componentSeen.has(root))
+                    return;
+
+                componentSeen.add(root);
+                componentRoots.push(root);
+
+                for (const element of root.querySelectorAll?.('*') || []) {
+                    if (element.shadowRoot)
+                        collectComponentRoots(element.shadowRoot);
+                }
+            };
+
+            collectComponentRoots(component);
+            if (component.shadowRoot)
+                collectComponentRoots(component.shadowRoot);
+
+            for (const root of componentRoots) {
+                for (const option of root.querySelectorAll?.('mc-option') || []) {
+                    if (isVisible(option))
+                        return false;
+                }
+            }
+
+            return true;
 
         }
         """;
@@ -1538,6 +1577,136 @@ internal static class MaerskShadowDom
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> ClickVisibleLocationOptionAsync(
+        IPage page,
+        string componentId,
+        string displayValue,
+        string serviceMode,
+        CancellationToken cancellationToken,
+        int timeoutMs = 5_000)
+    {
+        static string[] Tokens(string? value)
+            => (value ?? string.Empty)
+                .ToUpperInvariant()
+                .Split(
+                    [
+                        ' ', ',', '.', '(', ')', '-', '_', '/', '\\', ':', ';'
+                    ],
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(x => x.Length > 1)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+        var expectedTokens = Tokens(displayValue);
+        if (expectedTokens.Length == 0)
+            return false;
+
+        var desiredSuffix = string.IsNullOrWhiteSpace(serviceMode)
+            ? string.Empty
+            : $"-{serviceMode.Trim().ToUpperInvariant()}";
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                ILocator matches;
+                int count;
+
+                try
+                {
+                    // Scope to the requested origin/destination component first.
+                    // Playwright's CSS engine pierces open shadow roots used by MDS.
+                    matches = frame.Locator(
+                        $"mc-c-location-servicemode#{componentId} mc-option");
+
+                    count = await matches.CountAsync();
+
+                    // Fall back to visible page options only if Maersk moves the
+                    // popup outside the component's shadow tree in a future build.
+                    if (count == 0)
+                    {
+                        matches = frame.Locator("mc-option");
+                        count = await matches.CountAsync();
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                    continue;
+                }
+
+                var candidates = new List<(ILocator Locator, bool DesiredMode, int LabelLength)>();
+
+                for (var index = 0; index < count; index++)
+                {
+                    var candidate = matches.Nth(index);
+
+                    try
+                    {
+                        if (!await candidate.IsVisibleAsync()
+                            || !await candidate.IsEnabledAsync())
+                            continue;
+
+                        var text = (await candidate.InnerTextAsync()).Trim();
+                        var value = (await candidate.GetAttributeAsync("value") ?? string.Empty).Trim();
+                        var normalizedText = text.ToUpperInvariant();
+
+                        if (!expectedTokens.All(token =>
+                                normalizedText.Contains(token, StringComparison.Ordinal)))
+                            continue;
+
+                        var isDesiredMode = desiredSuffix.Length == 0
+                            || value.EndsWith(desiredSuffix, StringComparison.OrdinalIgnoreCase);
+
+                        candidates.Add((candidate, isDesiredMode, text.Length));
+                    }
+                    catch (PlaywrightException)
+                    {
+                        // The SPA can replace individual options while typing.
+                    }
+                }
+
+                foreach (var candidate in candidates
+                             .OrderByDescending(x => x.DesiredMode)
+                             .ThenBy(x => x.LabelLength))
+                {
+                    try
+                    {
+                        await candidate.Locator.ClickAsync(
+                            new LocatorClickOptions { Timeout = 1_750 });
+
+                        return true;
+                    }
+                    catch (PlaywrightException)
+                    {
+                        try
+                        {
+                            await candidate.Locator.ClickAsync(
+                                new LocatorClickOptions
+                                {
+                                    Timeout = 1_750,
+                                    Force = true
+                                });
+
+                            return true;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Try the next matching option.
+                        }
+                    }
+                }
+            }
+
+            await Task.Delay(150, cancellationToken);
         }
 
         return false;
