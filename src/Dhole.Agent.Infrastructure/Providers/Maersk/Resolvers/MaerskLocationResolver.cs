@@ -7,17 +7,16 @@ public sealed class MaerskLocationResolver
 
     public string Normalize(string value, string? locationCode)
     {
-        var trimmed = value.Trim();
-        var code = (locationCode ?? string.Empty)
-            .Trim()
-            .ToUpperInvariant();
+        // Location behavior must not be hardcoded by UN/LOCODE. Routes are
+        // configuration data and new POL/POE/POD entries must work without a
+        // code deployment. Browser automation resolves the human label against
+        // Maersk's live typeahead and validates the returned suggestion.
+        _ = locationCode;
 
-        return code switch
-        {
-            // Maersk's booking UI identifies CRCAL as "Puerto Caldera".
-            // Using only "Caldera" can resolve to Caldera, Chile.
-            "CRCAL" => "Puerto Caldera, Costa Rica",
-            _ => trimmed
-        };
+        return string.Join(
+            " ",
+            value.Split(
+                [' ', '\t', '\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 }
