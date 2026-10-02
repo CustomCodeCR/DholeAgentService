@@ -304,7 +304,7 @@ public sealed class MaerskBrowserAutomation
         string? locationCode,
         CancellationToken cancellationToken)
     {
-        var searchTerms = GetLocationSearchTerms(displayValue);
+        var searchTerms = GetLocationSearchTerms(displayValue, locationCode);
 
         foreach (var searchTerm in searchTerms)
         {
@@ -343,38 +343,15 @@ public sealed class MaerskBrowserAutomation
                 page,
                 cancellationToken);
 
-            // Use a real Playwright click on the Maersk location option.
-            // Calling HTMLElement.click() on this MDS web component can report
-            // success without committing the internal typeahead selection.
-            // Prefer the CY option explicitly and require the complete configured
-            // city/country tokens, so "Puerto Caldera, Costa Rica" cannot fall
-            // back to Caldera, Chile or to the Store Door variant.
-            var selected = await MaerskShadowDom.ClickVisibleLocationOptionAsync(
+            // Do not select the first location merely because the city name
+            // matches. "Caldera" also returns Caldera, Chile. Match the complete
+            // configured city/country label inside the destination component.
+            var selected = await MaerskShadowDom.SelectLocationSuggestionAsync(
                 page,
                 componentId,
-                displayValue,
-                "CY",
+                [displayValue],
                 cancellationToken,
                 timeoutMs: 4_000);
-
-            // Keyboard navigation is retained only as a last resort after the
-            // positive city/country suggestion has already been validated.
-            if (!selected)
-            {
-                var moved = await MaerskShadowDom.PressFirstAsync(
-                    page,
-                    selectors,
-                    "ArrowDown",
-                    cancellationToken,
-                    timeoutMs: 2_000);
-
-                selected = moved && await MaerskShadowDom.PressFirstAsync(
-                    page,
-                    selectors,
-                    "Enter",
-                    cancellationToken,
-                    timeoutMs: 2_000);
-            }
 
             if (!selected)
                 continue;
@@ -392,11 +369,13 @@ public sealed class MaerskBrowserAutomation
 
         var diagnostics = await MaerskShadowDom.DescribeAsync(page);
         throw new InvalidOperationException(
-            $"Maersk location '{displayValue}' (code='{locationCode ?? "-"}') could not be committed for '{componentId}'. " +
+            $"Maersk location '{displayValue}' could not be committed for '{componentId}'. " +
             $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
     }
 
-    private static string[] GetLocationSearchTerms(string displayValue)
+    private static string[] GetLocationSearchTerms(
+        string displayValue,
+        string? locationCode)
     {
         if (string.IsNullOrWhiteSpace(displayValue))
             return [];
@@ -407,15 +386,16 @@ public sealed class MaerskBrowserAutomation
             ? trimmed[..commaIndex].Trim()
             : trimmed;
 
-        // Maersk's location field is a human-name typeahead. RKST/port codes
-        // such as CHSGH and CRCAL return "No location matching", so never use
-        // them as a fallback search term here.
         return new[]
             {
                 trimmed,
-                cityOnly
+                cityOnly,
+                string.IsNullOrWhiteSpace(locationCode)
+                    ? null
+                    : locationCode.Trim()
             }
             .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
