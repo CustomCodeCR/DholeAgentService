@@ -48,7 +48,7 @@ jobs:
           done
           mkdir -p "$RUNNER_TEMP/dhole-env"
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
-          echo "AGENT_NOVNC_PORT=6081" >> "$RUNNER_TEMP/dhole-env/.env.staging"
+          echo "AGENT_NOVNC_HOST_PORT=6081" >> "$RUNNER_TEMP/dhole-env/.env.staging"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
 
       - name: Ensure Agent database exists
