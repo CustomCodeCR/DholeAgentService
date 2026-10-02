@@ -35,7 +35,7 @@ public sealed class MaerskAgentProvider(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string CurrentMaerskBookingUrl = "https://www.maersk.com/book/";
-    private const int MaxParallelSearches = 2;
+    private const int MaxParallelSearches = 3;
 
     public string ProviderCode => "MAERSK";
 
@@ -408,7 +408,8 @@ public sealed class MaerskAgentProvider(
             page,
             searchUrl,
             authenticationSuccessUrl,
-            cancellationToken);
+            cancellationToken,
+            stableTargetPollsRequired: 4);
 
         using var captureCts =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -418,7 +419,7 @@ public sealed class MaerskAgentProvider(
 
         var captureTask = interceptor.WaitForOfferAsync(
             page,
-            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(120),
             captureCts.Token,
             traversalComplete.Task);
 
@@ -438,7 +439,7 @@ public sealed class MaerskAgentProvider(
             await automation.LoadAllSailingsAsync(
                 page,
                 cancellationToken,
-                timeoutMs: 90_000);
+                timeoutMs: 60_000);
 
             traversalComplete.TrySetResult();
 
@@ -831,7 +832,8 @@ public sealed class MaerskAgentProvider(
         Microsoft.Playwright.IPage page,
         string? configuredSearchUrl,
         string? authenticationSuccessUrl,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int stableTargetPollsRequired = 20)
     {
         var targetUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
 
@@ -880,7 +882,7 @@ public sealed class MaerskAgentProvider(
                     // Require five continuous seconds on /book/. This prevents the
                     // race where DOMContentLoaded fires on /book/ immediately before
                     // Maersk redirects the browser back to Global Accounts.
-                    if (stableTargetPolls >= 20)
+                    if (stableTargetPolls >= stableTargetPollsRequired)
                         return;
                 }
                 else
