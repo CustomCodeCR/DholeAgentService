@@ -2214,6 +2214,23 @@ internal static class MaerskShadowDom
 
             try
             {
+                var frameElement = await frame.FrameElementAsync();
+                var visible = await frameElement.EvaluateAsync<bool>(
+                    """
+                    element => {
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.display !== 'none'
+                            && style.visibility !== 'hidden'
+                            && Number(style.opacity || '1') > 0
+                            && rect.width > 0
+                            && rect.height > 0;
+                    }
+                    """);
+
+                if (!visible)
+                    continue;
+
                 var bodyText = (await frame.Locator("body").InnerTextAsync()).Trim();
 
                 if (!string.IsNullOrWhiteSpace(bodyText))
@@ -2232,6 +2249,30 @@ internal static class MaerskShadowDom
         }
 
         return null;
+    }
+
+    public static async Task<bool> WaitForInteractiveHcaptchaToClearAsync(
+        IPage page,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (await ReadInteractiveHcaptchaChallengeAsync(
+                    page,
+                    cancellationToken) is null)
+                return true;
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        return await ReadInteractiveHcaptchaChallengeAsync(
+                   page,
+                   cancellationToken) is null;
     }
 
     public static async Task<bool> ClickVisibleActionByTextAsync(

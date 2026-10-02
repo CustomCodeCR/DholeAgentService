@@ -50,13 +50,17 @@ services:
       Hermes__TaskTimeoutSeconds: ${HERMES_AGENT_TASK_TIMEOUT_SECONDS:-300}
       Hermes__MaxParallelTasks: ${HERMES_AGENT_MAX_PARALLEL_TASKS:-2}
       Browser__ProfilesPath: /data/browser-profiles
-      Browser__Headless: "true"
+      Browser__Headless: "false"
+      AGENT_NOVNC_ENABLED: "true"
+      AGENT_NOVNC_PORT: "6080"
       CredentialProtection__KeyRingPath: /data/agent-keys
       MAERSK_USERNAME: ${MAERSK_USERNAME:-}
       MAERSK_PASSWORD: ${MAERSK_PASSWORD:-}
     volumes:
       - agent-browser-profiles:/data/browser-profiles
       - agent-data-protection-keys:/data/agent-keys
+    ports:
+      - "127.0.0.1:${AGENT_NOVNC_PORT:-6080}:6080"
     shm_size: "2gb"
     networks:
       - dhole-internal
