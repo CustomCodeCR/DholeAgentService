@@ -435,8 +435,8 @@ public sealed class MaerskAgentProvider(
                     }
 
                     var input = new MaerskSearchInput(
-                        locations.Normalize(pol),
-                        locations.Normalize(destination),
+                        locations.Normalize(pol, polCode),
+                        locations.Normalize(destination, destinationCode),
                         equipment.Normalize(code),
                         Math.Max(1, quantity),
                         weightKg.Value,
