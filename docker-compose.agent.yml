@@ -60,7 +60,7 @@ services:
       - agent-browser-profiles:/data/browser-profiles
       - agent-data-protection-keys:/data/agent-keys
     ports:
-      - "127.0.0.1:${AGENT_NOVNC_PORT:-6080}:6080"
+      - "127.0.0.1:${AGENT_NOVNC_HOST_PORT:-6080}:6080"
     shm_size: "2gb"
     networks:
       - dhole-internal
