@@ -5,6 +5,109 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 
 public sealed class MaerskBrowserAutomation
 {
+    public async Task LoadAllSailingsAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        int timeoutMs = 30_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        // The booking submit navigates to /book/sailings. Maersk progressively
+        // loads later departures as the results page is scrolled, so returning
+        // after the first departures/offers response truncates the available
+        // sailings for a route/equipment combination.
+        while (DateTime.UtcNow < deadline
+               && !page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(250, cancellationToken);
+        }
+
+        if (!page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var stableRounds = 0;
+        double previousHeight = -1;
+
+        while (DateTime.UtcNow < deadline && stableRounds < 5)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            double height;
+            try
+            {
+                height = await page.EvaluateAsync<double>(
+                    """
+                    () => Math.max(
+                        document.body?.scrollHeight || 0,
+                        document.documentElement?.scrollHeight || 0
+                    )
+                    """);
+            }
+            catch (PlaywrightException)
+            {
+                await Task.Delay(300, cancellationToken);
+                continue;
+            }
+
+            try
+            {
+                await page.EvaluateAsync(
+                    """
+                    () => {
+                        const height = Math.max(
+                            document.body?.scrollHeight || 0,
+                            document.documentElement?.scrollHeight || 0
+                        );
+
+                        window.scrollTo(0, height);
+                    }
+                    """);
+            }
+            catch (PlaywrightException)
+            {
+                await Task.Delay(300, cancellationToken);
+                continue;
+            }
+
+            // Give Maersk's intersection observers and product batch requests
+            // time to append the next block before measuring again.
+            await Task.Delay(1_000, cancellationToken);
+
+            double nextHeight;
+            try
+            {
+                nextHeight = await page.EvaluateAsync<double>(
+                    """
+                    () => Math.max(
+                        document.body?.scrollHeight || 0,
+                        document.documentElement?.scrollHeight || 0
+                    )
+                    """);
+            }
+            catch (PlaywrightException)
+            {
+                stableRounds = 0;
+                continue;
+            }
+
+            if (Math.Abs(nextHeight - height) <= 1
+                && Math.Abs(nextHeight - previousHeight) <= 1)
+            {
+                stableRounds++;
+            }
+            else
+            {
+                stableRounds = 0;
+            }
+
+            previousHeight = nextHeight;
+        }
+
+        // One final wait lets late PRICE_BREAKDOWN/departures batches finish.
+        await Task.Delay(1_500, cancellationToken);
+    }
+
     public async Task FillSearchAsync(
         IPage page,
         MaerskSearchInput input,
