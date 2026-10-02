@@ -343,22 +343,22 @@ public sealed class MaerskBrowserAutomation
                 page,
                 cancellationToken);
 
-            // Do not select the first location merely because the city name
-            // matches. "Caldera" also returns Caldera, Chile. Match the complete
-            // configured city/country label inside the destination component.
-            var selected = await MaerskShadowDom.SelectLocationSuggestionAsync(
+            // Use a real Playwright click on the Maersk location option.
+            // Calling HTMLElement.click() on this MDS web component can report
+            // success without committing the internal typeahead selection.
+            // Prefer the CY option explicitly and require the complete configured
+            // city/country tokens, so "Puerto Caldera, Costa Rica" cannot fall
+            // back to Caldera, Chile or to the Store Door variant.
+            var selected = await MaerskShadowDom.ClickVisibleLocationOptionAsync(
                 page,
                 componentId,
-                [displayValue],
+                displayValue,
+                "CY",
                 cancellationToken,
                 timeoutMs: 4_000);
 
-            // Some Maersk MDS builds expose the correct suggestion through the
-            // component's live region but do not expose a clickable mc-option.
-            // At this point WaitForLocationSuggestionAsync has already verified
-            // that a positive suggestion exists and contains the configured
-            // city/country tokens, so keyboard selection is safe and does not
-            // regress to a page-global "first option" fallback.
+            // Keyboard navigation is retained only as a last resort after the
+            // positive city/country suggestion has already been validated.
             if (!selected)
             {
                 var moved = await MaerskShadowDom.PressFirstAsync(
