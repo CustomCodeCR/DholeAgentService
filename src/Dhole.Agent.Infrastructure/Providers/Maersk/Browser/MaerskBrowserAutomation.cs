@@ -451,10 +451,10 @@ public sealed class MaerskBrowserAutomation
 
                             if (postCaptchaSignal != offerRequestStarted.Task)
                             {
-                                var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                                var postCaptchaDiagnostics = await MaerskShadowDom.DescribeAsync(page);
                                 throw new InvalidOperationException(
                                     $"Maersk hCaptcha was cleared, but Continue still did not issue POST /v2/departures/offers. " +
-                                    $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+                                    $"URL='{page.Url}'. ShadowDOM diagnostics={postCaptchaDiagnostics}");
                             }
                         }
 
