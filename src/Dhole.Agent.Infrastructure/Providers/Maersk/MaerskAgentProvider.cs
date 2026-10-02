@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
 using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
@@ -30,12 +29,10 @@ public sealed class MaerskAgentProvider(
     ICredentialProtector credentialProtector,
     ISecretProvider legacySecrets,
     IBrowserProfileRepository browserProfiles,
-    IUnitOfWork unitOfWork,
-    ILogger<MaerskAgentProvider> logger) : IAgentProvider
+    IUnitOfWork unitOfWork) : IAgentProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string CurrentMaerskBookingUrl = "https://www.maersk.com/book/";
-    private const int MaxParallelSearches = 1;
 
     public string ProviderCode => "MAERSK";
 
@@ -51,16 +48,6 @@ public sealed class MaerskAgentProvider(
         var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
-
-        var executionStartedAtUtc = DateTime.UtcNow;
-        var callerCancellationToken = cancellationToken;
-        using var executionCts =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        if (context.TimeoutSeconds is > 0)
-            executionCts.CancelAfter(TimeSpan.FromSeconds(context.TimeoutSeconds.Value));
-
-        cancellationToken = executionCts.Token;
 
         var browserProfile = await browserProfiles.GetByProviderCredentialAsync(
             context.Provider.Id,
@@ -137,14 +124,6 @@ public sealed class MaerskAgentProvider(
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
         }
-        catch (OperationCanceledException)
-            when (executionCts.IsCancellationRequested
-                  && !callerCancellationToken.IsCancellationRequested)
-        {
-            return AgentProviderExecutionResult.Failed(
-                "maersk_execution_timeout",
-                $"Maersk execution exceeded the configured timeout of {context.TimeoutSeconds} seconds.");
-        }
         catch (MaerskAuthenticationException ex)
         {
             if (browserProfile is not null)
@@ -175,135 +154,81 @@ public sealed class MaerskAgentProvider(
         var completed = 0;
         var available = 0;
         var failed = 0;
-        var plannedSearches = plan.Searches!;
 
-        try
+        foreach (var search in plan.Searches!)
         {
-            foreach (var search in plannedSearches)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                var captured = await ExecuteSearchAsync(
+                    page,
+                    search.Input,
+                    plan.SearchUrl,
+                    plan.AuthenticationSuccessUrl,
+                    cancellationToken);
 
-                var searchStartedAtUtc = DateTime.UtcNow;
+                if (captured.Status is < 200 or >= 300)
+                    throw new InvalidOperationException(
+                        $"Maersk departures/offers returned HTTP {captured.Status}.");
 
-                try
+                var normalized = parser.Parse(captured.ResponseJson);
+                var hasAvailableOffers = normalized.Offers.Any(x => x.Available);
+                var status = hasAvailableOffers ? "Available" : "Unavailable";
+                var responseDiagnostics = NeedsMaerskResponseDiagnostics(normalized)
+                    ? BuildMaerskResponseDiagnostics(captured.ResponseJson)
+                    : Array.Empty<MaerskResponseDiagnostic>();
+
+                completed++;
+                if (hasAvailableOffers)
+                    available++;
+
+                results.Add(new
                 {
-                    logger.LogInformation(
-                        "MAERSK_SEARCH_START execution={ExecutionId} search={SearchIndex}/{SearchCount} route={Route} equipment={Equipment}",
-                        context.Execution.Id,
-                        search.Index,
-                        plannedSearches.Count,
-                        search.Route,
-                        search.Equipment);
-
-                    // Reuse the already authenticated Maersk page. The booking SPA
-                    // keeps provider/session state tied to this page flow; parallel
-                    // tabs can submit the form without producing departures/offers.
-                    var captured = await ExecuteSearchAsync(
-                        page,
-                        search.Input,
-                        plan.SearchUrl,
-                        plan.AuthenticationSuccessUrl,
-                        cancellationToken);
-
-                    if (captured.Status is < 200 or >= 300)
-                        throw new InvalidOperationException(
-                            $"Maersk departures/offers returned HTTP {captured.Status}.");
-
-                    var normalized = parser.Parse(captured.ResponseJson);
-                    var hasAvailableOffers = normalized.Offers.Any(x => x.Available);
-                    var status = hasAvailableOffers ? "Available" : "Unavailable";
-                    var responseDiagnostics = NeedsMaerskResponseDiagnostics(normalized)
-                        ? BuildMaerskResponseDiagnostics(captured.ResponseJson)
-                        : Array.Empty<MaerskResponseDiagnostic>();
-                    var elapsedMs = (long)(DateTime.UtcNow - searchStartedAtUtc).TotalMilliseconds;
-
-                    completed++;
-                    if (hasAvailableOffers)
-                        available++;
-
-                    logger.LogInformation(
-                        "MAERSK_SEARCH_COMPLETED execution={ExecutionId} search={SearchIndex}/{SearchCount} status={Status} offers={OfferCount} captures={CaptureCount} elapsedMs={ElapsedMs}",
-                        context.Execution.Id,
-                        search.Index,
-                        plannedSearches.Count,
-                        status,
-                        normalized.Offers.Count,
-                        captured.ResponseCount,
-                        elapsedMs);
-
-                    results.Add(new
-                    {
-                        taskIndex = search.Index,
-                        routeId = search.RouteId,
-                        equipmentId = search.EquipmentId,
-                        route = search.Route,
-                        equipment = search.Equipment,
-                        status,
-                        elapsedMs,
-                        fields = BuildConfiguredFields(plan.FieldKeys!, normalized),
-                        offers = normalized.Offers,
-                        httpStatus = captured.Status,
-                        correlationId = captured.CorrelationId,
-                        capturedResponseCount = captured.ResponseCount,
-                        responseDiagnostics,
-                        error = (string?)null
-                    });
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    failed++;
-                    var elapsedMs = (long)(DateTime.UtcNow - searchStartedAtUtc).TotalMilliseconds;
-                    var errorCode = ex is TimeoutException
-                        ? "maersk_offer_timeout"
-                        : "maersk_search_failed";
-
-                    logger.LogWarning(
-                        ex,
-                        "MAERSK_SEARCH_FAILED execution={ExecutionId} search={SearchIndex}/{SearchCount} route={Route} equipment={Equipment} elapsedMs={ElapsedMs}",
-                        context.Execution.Id,
-                        search.Index,
-                        plannedSearches.Count,
-                        search.Route,
-                        search.Equipment,
-                        elapsedMs);
-
-                    errors.Add(new
-                    {
-                        taskIndex = search.Index,
-                        routeId = search.RouteId,
-                        equipmentId = search.EquipmentId,
-                        errorCode,
-                        errorMessage = ex.Message,
-                        elapsedMs
-                    });
-
-                    results.Add(new
-                    {
-                        taskIndex = search.Index,
-                        routeId = search.RouteId,
-                        equipmentId = search.EquipmentId,
-                        route = search.Route,
-                        equipment = search.Equipment,
-                        status = "Error",
-                        elapsedMs,
-                        fields = new Dictionary<string, object?>(),
-                        offers = Array.Empty<object>(),
-                        error = ex.Message
-                    });
-                }
+                    taskIndex = search.Index,
+                    routeId = search.RouteId,
+                    equipmentId = search.EquipmentId,
+                    route = search.Route,
+                    equipment = search.Equipment,
+                    status,
+                    fields = BuildConfiguredFields(plan.FieldKeys!, normalized),
+                    offers = normalized.Offers,
+                    httpStatus = captured.Status,
+                    correlationId = captured.CorrelationId,
+                    capturedResponseCount = captured.ResponseCount,
+                    responseDiagnostics,
+                    error = (string?)null
+                });
             }
-        }
-        catch (OperationCanceledException)
-            when (executionCts.IsCancellationRequested
-                  && !callerCancellationToken.IsCancellationRequested)
-        {
-            return AgentProviderExecutionResult.Failed(
-                "maersk_execution_timeout",
-                $"Maersk execution exceeded the configured timeout of {context.TimeoutSeconds} seconds.");
+            catch (Exception ex)
+            {
+                failed++;
+                var errorCode = ex is TimeoutException
+                    ? "maersk_offer_timeout"
+                    : "maersk_search_failed";
+
+                errors.Add(new
+                {
+                    taskIndex = search.Index,
+                    routeId = search.RouteId,
+                    equipmentId = search.EquipmentId,
+                    errorCode,
+                    errorMessage = ex.Message
+                });
+
+                results.Add(new
+                {
+                    taskIndex = search.Index,
+                    routeId = search.RouteId,
+                    equipmentId = search.EquipmentId,
+                    route = search.Route,
+                    equipment = search.Equipment,
+                    status = "Error",
+                    fields = new Dictionary<string, object?>(),
+                    offers = Array.Empty<object>(),
+                    error = ex.Message
+                });
+            }
         }
 
         if (completed == 0)
@@ -330,8 +255,6 @@ public sealed class MaerskAgentProvider(
                 completedSearchCount = completed,
                 availableSearchCount = available,
                 failedSearchCount = failed,
-                maxParallelSearches = MaxParallelSearches,
-                executionElapsedMs = (long)(DateTime.UtcNow - executionStartedAtUtc).TotalMilliseconds,
                 data = new
                 {
                     results,
@@ -362,19 +285,13 @@ public sealed class MaerskAgentProvider(
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
 
-        // Keep the original five-second stable /book/ readiness check. This was
-        // the last search-submission path known to produce departures/offers
-        // reliably before the extraction-speed experiments.
         await NavigateToSearchStartAsync(
             page,
             searchUrl,
             authenticationSuccessUrl,
-            cancellationToken,
-            stableTargetPollsRequired: 20);
+            cancellationToken);
 
-        // IMPORTANT: preserve the original working order exactly:
-        // subscribe -> fill/submit -> await the first departures/offers response.
-        var initialCaptureTask = interceptor.WaitForOfferAsync(
+        var captureTask = interceptor.WaitForOfferAsync(
             page,
             TimeSpan.FromSeconds(90),
             cancellationToken);
@@ -386,69 +303,7 @@ public sealed class MaerskAgentProvider(
             searchUrl,
             navigateToSearchUrl: false);
 
-        var initialCapture = await initialCaptureTask;
-        var captures = new List<CapturedMaerskOfferResponse> { initialCapture };
-
-        // Additional sailings are optional enrichment. Failure to find/click the
-        // control must never invalidate a search that already returned rates.
-        const int maxAdditionalBatches = 20;
-
-        for (var batch = 0; batch < maxAdditionalBatches; batch++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            using var batchCts =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-            var batchCaptureTask = interceptor.WaitForOfferAsync(
-                page,
-                TimeSpan.FromSeconds(15),
-                batchCts.Token);
-
-            var clicked = await automation.TryLoadNextSailingBatchAsync(
-                page,
-                cancellationToken,
-                timeoutMs: 3_000);
-
-            if (!clicked)
-            {
-                batchCts.Cancel();
-
-                try
-                {
-                    await batchCaptureTask;
-                }
-                catch
-                {
-                    // No "Search more sailing options" button means traversal is complete.
-                }
-
-                break;
-            }
-
-            try
-            {
-                var additionalCapture = await batchCaptureTask;
-                captures.Add(additionalCapture);
-
-                logger.LogInformation(
-                    "MAERSK_SEARCH_MORE_CAPTURED batch={Batch} capturedResponses={CapturedResponses}",
-                    batch + 1,
-                    additionalCapture.ResponseCount);
-            }
-            catch (TimeoutException)
-            {
-                // A stale/re-rendered button can accept a click without issuing a
-                // new request. Keep the already captured rates and stop traversal.
-                break;
-            }
-
-            await Task.Delay(500, cancellationToken);
-        }
-
-        return captures.Count == 1
-            ? initialCapture
-            : MaerskOfferInterceptor.MergeCaptures(captures);
+        return await captureTask;
     }
 
     private async Task<CredentialResolution> ResolveCredentialsAsync(
@@ -820,8 +675,7 @@ public sealed class MaerskAgentProvider(
         Microsoft.Playwright.IPage page,
         string? configuredSearchUrl,
         string? authenticationSuccessUrl,
-        CancellationToken cancellationToken,
-        int stableTargetPollsRequired = 20)
+        CancellationToken cancellationToken)
     {
         var targetUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
 
@@ -870,7 +724,7 @@ public sealed class MaerskAgentProvider(
                     // Require five continuous seconds on /book/. This prevents the
                     // race where DOMContentLoaded fires on /book/ immediately before
                     // Maersk redirects the browser back to Global Accounts.
-                    if (stableTargetPolls >= stableTargetPollsRequired)
+                    if (stableTargetPolls >= 20)
                         return;
                 }
                 else
