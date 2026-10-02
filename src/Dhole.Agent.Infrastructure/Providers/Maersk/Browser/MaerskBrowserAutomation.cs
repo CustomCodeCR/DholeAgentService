@@ -16,94 +16,24 @@ public sealed class MaerskBrowserAutomation
                && !page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await Task.Delay(250, cancellationToken);
+            await Task.Delay(200, cancellationToken);
         }
 
         if (!page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var noGrowthClicks = 0;
         var missingButtonRounds = 0;
+        var noResponseClicks = 0;
         var clickCount = 0;
         const int maxClicks = 20;
 
         while (DateTime.UtcNow < deadline
                && clickCount < maxClicks
                && missingButtonRounds < 3
-               && noGrowthClicks < 2)
+               && noResponseClicks < 2)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var beforeHeight = await ReadDocumentHeightAsync(page);
-
-            try
-            {
-                await page.EvaluateAsync(
-                    """
-                    () => {
-                        const height = Math.max(
-                            document.body?.scrollHeight || 0,
-                            document.documentElement?.scrollHeight || 0
-                        );
-
-                        window.scrollTo(0, height);
-                    }
-                    """);
-            }
-            catch (PlaywrightException)
-            {
-                await Task.Delay(300, cancellationToken);
-                continue;
-            }
-
-            // Maersk places "Search more sailing options" at the bottom of the
-            // currently loaded result set. Scrolling alone does not request the
-            // next batch; the button must be clicked.
-            await Task.Delay(600, cancellationToken);
-
-            var clicked = await TryClickSearchMoreSailingOptionsAsync(
-                page,
-                cancellationToken,
-                timeoutMs: 2_500);
-
-            if (!clicked)
-            {
-                missingButtonRounds++;
-                await Task.Delay(750, cancellationToken);
-                continue;
-            }
-
-            clickCount++;
-            missingButtonRounds = 0;
-
-            // Wait for the newly requested sailing batch to render. The button
-            // can temporarily remain in the DOM while Maersk is loading, so do
-            // not click it again immediately.
-            var grew = false;
-            var growthDeadline = DateTime.UtcNow.AddSeconds(8);
-
-            while (DateTime.UtcNow < growthDeadline
-                   && DateTime.UtcNow < deadline)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await Task.Delay(400, cancellationToken);
-
-                var currentHeight = await ReadDocumentHeightAsync(page);
-
-                if (currentHeight > beforeHeight + 1)
-                {
-                    grew = true;
-                    break;
-                }
-            }
-
-            if (grew)
-                noGrowthClicks = 0;
-            else
-                noGrowthClicks++;
-
-            // Move to the new bottom before checking for the next "Search more"
-            // button. This is what exposes the following Maersk page of sailings.
             try
             {
                 await page.EvaluateAsync(
@@ -119,33 +49,75 @@ public sealed class MaerskBrowserAutomation
             }
             catch (PlaywrightException)
             {
-                // The next loop will retry after the SPA settles.
+                await Task.Delay(200, cancellationToken);
+                continue;
             }
 
-            await Task.Delay(900, cancellationToken);
+            await Task.Delay(250, cancellationToken);
+
+            var responseArrived = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            EventHandler<IResponse>? responseHandler = null;
+            responseHandler = (_, response) =>
+            {
+                if (response.Url.Contains(
+                        "/v2/departures/offers",
+                        StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        response.Request.Method,
+                        "POST",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    responseArrived.TrySetResult(true);
+                }
+            };
+
+            page.Response += responseHandler;
+
+            try
+            {
+                var clicked = await TryClickSearchMoreSailingOptionsAsync(
+                    page,
+                    cancellationToken,
+                    timeoutMs: 2_500);
+
+                if (!clicked)
+                {
+                    missingButtonRounds++;
+                    await Task.Delay(350, cancellationToken);
+                    continue;
+                }
+
+                clickCount++;
+                missingButtonRounds = 0;
+
+                try
+                {
+                    await responseArrived.Task.WaitAsync(
+                        TimeSpan.FromSeconds(12),
+                        cancellationToken);
+
+                    noResponseClicks = 0;
+                }
+                catch (TimeoutException)
+                {
+                    noResponseClicks++;
+                }
+            }
+            finally
+            {
+                page.Response -= responseHandler;
+            }
+
+            // Let the SPA render the newly returned sailing cards before looking
+            // for the next "Search more sailing options" control.
+            await Task.Delay(400, cancellationToken);
         }
 
-        // Allow any late PRICE_BREAKDOWN/departures requests caused by the final
-        // click to complete before the caller releases the network capture.
-        await Task.Delay(2_000, cancellationToken);
-    }
-
-    private static async Task<double> ReadDocumentHeightAsync(IPage page)
-    {
-        try
-        {
-            return await page.EvaluateAsync<double>(
-                """
-                () => Math.max(
-                    document.body?.scrollHeight || 0,
-                    document.documentElement?.scrollHeight || 0
-                )
-                """);
-        }
-        catch (PlaywrightException)
-        {
-            return 0;
-        }
+        // The interceptor separately waits for its quiet period. This short settle
+        // only allows a final response body/render already in flight to finish.
+        await Task.Delay(500, cancellationToken);
     }
 
     private static async Task<bool> TryClickSearchMoreSailingOptionsAsync(
