@@ -260,6 +260,7 @@ internal static class MaerskShadowDom
             }
 
             const expectedLabel = normalize(args.label);
+            const expectedCode = normalize(args.code);
             const candidates = [];
 
             for (const component of components) {
@@ -267,20 +268,33 @@ internal static class MaerskShadowDom
                     for (const element of root.querySelectorAll?.('*') || []) {
                         const text = (element.innerText || element.textContent || '').trim();
                         const normalized = normalize(text);
+                        const value = normalize(
+                            element.getAttribute?.('value')
+                            || element.getAttribute?.('data-value')
+                            || element.value
+                        );
 
-                        if (!normalized)
-                            continue;
+                        const codeMatch = expectedCode
+                            && value === expectedCode;
+                        const labelMatch = normalized
+                            && (normalized === expectedLabel
+                                || (normalized.startsWith(expectedLabel)
+                                    && normalized.length <= expectedLabel.length + 40));
 
-                        if (normalized === expectedLabel
-                            || (normalized.startsWith(expectedLabel)
-                                && normalized.length <= expectedLabel.length + 40)) {
-                            candidates.push({ element, textLength: text.length });
+                        if (codeMatch || labelMatch) {
+                            candidates.push({
+                                element,
+                                textLength: text.length,
+                                priority: codeMatch ? 0 : 1
+                            });
                         }
                     }
                 }
             }
 
-            candidates.sort((a, b) => a.textLength - b.textLength);
+            candidates.sort((a, b) =>
+                a.priority - b.priority
+                || a.textLength - b.textLength);
 
             const interactive = element => {
                 let current = element;
@@ -494,15 +508,16 @@ internal static class MaerskShadowDom
                 return false;
             }
 
-            const compactText = compact(text);
-            const expected = (args.expectedValues || [])
-                .map(compact)
-                .filter(Boolean);
+            const expectedTokenSets = (args.expectedValues || [])
+                .map(value => normalize(value)
+                    .split(/[^a-z0-9]+/g)
+                    .filter(token => token.length > 1))
+                .filter(items => items.length > 0);
 
-            // Only proceed when the returned suggestion actually matches what
-            // we searched for. This prevents "Puerto Caldera" from silently
-            // selecting "Caldera, Chile" just because a suggestion exists.
-            return expected.some(value => compactText.includes(value));
+            // Require every token from a configured city/country label. This
+            // distinguishes "Puerto Caldera, Costa Rica" from "Caldera, Chile".
+            return expectedTokenSets.some(expected =>
+                expected.every(token => text.includes(token)));
         }
         """;
 
@@ -550,25 +565,18 @@ internal static class MaerskShadowDom
             if (!input)
                 return false;
 
-            const current = compact(input.value);
-            const rawQuery = compact(args.searchTerm);
-            const expected = compact(args.displayValue);
+            const currentText = normalize(input.value);
+            const rawQuery = normalize(args.searchTerm);
 
-            if (!current)
+            if (!currentText || currentText === rawQuery)
                 return false;
 
-            if (current === expected && current !== rawQuery)
-                return true;
+            const expectedTokens = normalize(args.displayValue)
+                .split(/[^a-z0-9]+/g)
+                .filter(token => token.length > 1);
 
-            if (current !== rawQuery) {
-                const city = compact(
-                    (args.displayValue || '').toString().split(',')[0]
-                );
-
-                return city.length > 0 && current.includes(city);
-            }
-
-            return false;
+            return expectedTokens.length > 0
+                && expectedTokens.every(token => currentText.includes(token));
         }
         """;
 
@@ -580,12 +588,13 @@ internal static class MaerskShadowDom
                 .trim()
                 .toLowerCase();
 
-            const compact = value => normalize(value)
-                .replace(/[^a-z0-9]+/g, '');
+            const tokens = value => normalize(value)
+                .split(/[^a-z0-9]+/g)
+                .filter(token => token.length > 1);
 
-            const expected = (args.expectedValues || [])
-                .map(compact)
-                .filter(Boolean);
+            const expectedTokenSets = (args.expectedValues || [])
+                .map(tokens)
+                .filter(items => items.length > 0);
 
             const rootsOf = node => {
                 const roots = [];
@@ -609,37 +618,67 @@ internal static class MaerskShadowDom
                 return roots;
             };
 
-            const findComponent = root => {
-                for (const scope of rootsOf(root)) {
-                    for (const component of scope.querySelectorAll?.(
-                        'mc-c-location-servicemode'
-                    ) || []) {
-                        if ((component.getAttribute('id') || '') === args.componentId)
-                            return component;
+            let component = null;
+            for (const root of rootsOf(document)) {
+                for (const candidate of root.querySelectorAll?.(
+                    'mc-c-location-servicemode'
+                ) || []) {
+                    if ((candidate.getAttribute('id') || '') === args.componentId) {
+                        component = candidate;
+                        break;
                     }
                 }
 
-                return null;
-            };
+                if (component)
+                    break;
+            }
 
-            const component = findComponent(document);
             if (!component)
                 return false;
 
-            const labelOf = element => [
+            const labelOf = element => normalize([
                 element.innerText,
                 element.textContent,
                 element.shadowRoot?.textContent,
                 element.getAttribute?.('label'),
                 element.getAttribute?.('aria-label'),
                 element.getAttribute?.('value')
-            ].filter(Boolean).join(' ');
+            ].filter(Boolean).join(' '));
+
+            const matches = element => {
+                const label = labelOf(element);
+                if (!label)
+                    return false;
+
+                return expectedTokenSets.some(expected =>
+                    expected.every(token => label.includes(token)));
+            };
+
+            const interactive = element => {
+                let current = element;
+
+                while (current && current instanceof Element) {
+                    const tag = current.tagName?.toLowerCase?.() || '';
+                    const role = normalize(current.getAttribute?.('role'));
+
+                    if (['button', 'li', 'mc-option', 'mc-button'].includes(tag)
+                        || ['option', 'button'].includes(role)
+                        || current.hasAttribute?.('tabindex')) {
+                        return current;
+                    }
+
+                    current = current.parentElement;
+                }
+
+                return element;
+            };
 
             const click = element => {
                 try {
-                    element.scrollIntoView?.({ block: 'nearest' });
-                    element.click?.();
-                    element.dispatchEvent?.(new MouseEvent('click', {
+                    const target = interactive(element);
+                    target.scrollIntoView?.({ block: 'nearest' });
+                    target.click?.();
+                    target.dispatchEvent?.(new MouseEvent('click', {
                         bubbles: true,
                         composed: true
                     }));
@@ -649,31 +688,42 @@ internal static class MaerskShadowDom
                 }
             };
 
-            const candidates = [];
+            const matchesFound = [];
+
             for (const root of rootsOf(component)) {
                 for (const option of root.querySelectorAll?.(
                     "mc-option,[role='option'],li[role='option'],[part*='option'],[data-test*='suggestion' i],[data-testid*='suggestion' i]"
                 ) || []) {
-                    if (!candidates.includes(option))
-                        candidates.push(option);
+                    if (matches(option)) {
+                        matchesFound.push({
+                            element: option,
+                            length: labelOf(option).length
+                        });
+                    }
                 }
             }
 
-            for (const option of candidates) {
-                const label = compact(labelOf(option));
-
-                if (expected.some(value =>
-                    label === value
-                    || label.includes(value)
-                    || value.includes(label))) {
-                    return click(option);
+            if (matchesFound.length === 0) {
+                for (const root of rootsOf(component)) {
+                    for (const element of root.querySelectorAll?.('*') || []) {
+                        if (matches(element)) {
+                            matchesFound.push({
+                                element,
+                                length: labelOf(element).length
+                            });
+                        }
+                    }
                 }
             }
 
-            // The location list is scoped to one origin/destination component, so
-            // choosing its first returned option is safer than the old page-global
-            // fallback which could hit another typeahead.
-            return candidates.length > 0 && click(candidates[0]);
+            matchesFound.sort((a, b) => a.length - b.length);
+
+            for (const match of matchesFound) {
+                if (click(match.element))
+                    return true;
+            }
+
+            return false;
         }
         """;
 

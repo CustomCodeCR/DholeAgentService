@@ -304,7 +304,7 @@ public sealed class MaerskBrowserAutomation
         string? locationCode,
         CancellationToken cancellationToken)
     {
-        var searchTerms = GetLocationSearchTerms(displayValue);
+        var searchTerms = GetLocationSearchTerms(displayValue, locationCode);
 
         foreach (var searchTerm in searchTerms)
         {
@@ -332,7 +332,7 @@ public sealed class MaerskBrowserAutomation
             var suggestionReady = await MaerskShadowDom.WaitForLocationSuggestionAsync(
                 page,
                 componentId,
-                [searchTerm],
+                [displayValue],
                 cancellationToken,
                 timeoutMs: 7_000);
 
@@ -343,24 +343,15 @@ public sealed class MaerskBrowserAutomation
                 page,
                 cancellationToken);
 
-            // Maersk renders the location list inside its own MDS component and
-            // does not consistently expose the rows as normal mc-option nodes.
-            // Keyboard navigation is the reliable path here. The first row for
-            // the city is the Container Yard result, which is exactly our CY/CY
-            // requirement.
-            var moved = await MaerskShadowDom.PressFirstAsync(
+            // Do not select the first location merely because the city name
+            // matches. "Caldera" also returns Caldera, Chile. Match the complete
+            // configured city/country label inside the destination component.
+            var selected = await MaerskShadowDom.SelectLocationSuggestionAsync(
                 page,
-                selectors,
-                "ArrowDown",
+                componentId,
+                [displayValue],
                 cancellationToken,
-                timeoutMs: 2_000);
-
-            var selected = moved && await MaerskShadowDom.PressFirstAsync(
-                page,
-                selectors,
-                "Enter",
-                cancellationToken,
-                timeoutMs: 2_000);
+                timeoutMs: 4_000);
 
             if (!selected)
                 continue;
@@ -382,7 +373,9 @@ public sealed class MaerskBrowserAutomation
             $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
     }
 
-    private static string[] GetLocationSearchTerms(string displayValue)
+    private static string[] GetLocationSearchTerms(
+        string displayValue,
+        string? locationCode)
     {
         if (string.IsNullOrWhiteSpace(displayValue))
             return [];
@@ -393,13 +386,18 @@ public sealed class MaerskBrowserAutomation
             ? trimmed[..commaIndex].Trim()
             : trimmed;
 
-        if (string.IsNullOrWhiteSpace(cityOnly))
-            return [];
-
-        if (cityOnly.Equals(trimmed, StringComparison.OrdinalIgnoreCase))
-            return [cityOnly];
-
-        return [cityOnly, trimmed];
+        return new[]
+            {
+                trimmed,
+                cityOnly,
+                string.IsNullOrWhiteSpace(locationCode)
+                    ? null
+                    : locationCode.Trim()
+            }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static async Task FillFirstAsync(
@@ -486,29 +484,59 @@ public sealed class MaerskBrowserAutomation
 
     private static string GetEquipmentDisplayLabel(string containerType)
     {
-        var openParen = containerType.LastIndexOf('(');
+        var key = NormalizeEquipmentKey(containerType);
 
-        return (openParen > 0
-                ? containerType[..openParen]
-                : containerType)
-            .Trim();
+        return key switch
+        {
+            "20DRYSTANDARD20DV" or "22G1" => "20 Dry Standard",
+            "40DRYSTANDARD40DV" or "42G1" => "40 Dry Standard",
+            "40DRYHIGH40HC" or "45G1" => "40 Dry High",
+            "45DRYHIGH45HC" or "L5G1" => "45 Dry High",
+            "20TANK" or "22T3" => "20 Tank",
+            "40TANK" or "42T3" => "40 Tank",
+            "20REEFERSTANDARD20NOR" or "22R1" => "20 Reefer Standard",
+            "40REEFERHIGH40NOR" or "45R1" => "40 Reefer High",
+            "40REEFERSTANDARD" or "42R1" => "40 Reefer Standard",
+            "20OPENTOP20OT" or "22U1" => "20 Open Top",
+            "40OPENTOP40OT" or "42U1" => "40 Open Top",
+            "40OPENTOPHIGH" or "45U1" => "40 Open Top High",
+            "40FLATSTANDARD" or "42P3" => "40 Flat Standard",
+            "40FLATHIGH" or "45P3" => "40 Flat High",
+            "20FLAT" or "22P1" => "20 Flat",
+            _ => containerType.Trim()
+        };
     }
 
     private static string GetEquipmentSearchTerm(string containerType)
     {
-        var openParen = containerType.LastIndexOf('(');
-        var closeParen = containerType.LastIndexOf(')');
+        var key = NormalizeEquipmentKey(containerType);
 
-        if (openParen >= 0 && closeParen > openParen)
+        return key switch
         {
-            var code = containerType[(openParen + 1)..closeParen].Trim();
-
-            if (!string.IsNullOrWhiteSpace(code))
-                return code;
-        }
-
-        return containerType;
+            "20DRYSTANDARD20DV" or "22G1" => "22G1",
+            "40DRYSTANDARD40DV" or "42G1" => "42G1",
+            "40DRYHIGH40HC" or "45G1" => "45G1",
+            "45DRYHIGH45HC" or "L5G1" => "L5G1",
+            "20TANK" or "22T3" => "22T3",
+            "40TANK" or "42T3" => "42T3",
+            "20REEFERSTANDARD20NOR" or "22R1" => "22R1",
+            "40REEFERHIGH40NOR" or "45R1" => "45R1",
+            "40REEFERSTANDARD" or "42R1" => "42R1",
+            "20OPENTOP20OT" or "22U1" => "22U1",
+            "40OPENTOP40OT" or "42U1" => "42U1",
+            "40OPENTOPHIGH" or "45U1" => "45U1",
+            "40FLATSTANDARD" or "42P3" => "42P3",
+            "40FLATHIGH" or "45P3" => "45P3",
+            "20FLAT" or "22P1" => "22P1",
+            _ => containerType.Trim()
+        };
     }
+
+    private static string NormalizeEquipmentKey(string value)
+        => new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
 
     private static string[] GetEquipmentAliases(string containerType)
         => [containerType];

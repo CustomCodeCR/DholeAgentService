@@ -33,40 +33,40 @@ public sealed class MaerskEquipmentResolver
             "45G1" or "40HC" or "40DRYHIGH" or "40HIGHCUBE" or "40HIGHCUBEDRY"
                 => FortyDryHigh,
 
-            "45HC" or "45DRYHIGH" or "45HIGHCUBE" or "45HIGHCUBEDRY"
+            "L5G1" or "45HC" or "45DRYHIGH" or "45HIGHCUBE" or "45HIGHCUBEDRY"
                 => FortyFiveDryHigh,
 
-            "20TANK"
+            "22T3" or "20TANK"
                 => TwentyTank,
 
-            "40TANK"
+            "42T3" or "40TANK"
                 => FortyTank,
 
-            "20NOR" or "20REEFERSTANDARD"
+            "22R1" or "20NOR" or "20REEFERSTANDARD"
                 => TwentyReeferStandard,
 
-            "40NOR" or "40REEFERHIGH"
+            "45R1" or "40NOR" or "40REEFERHIGH"
                 => FortyReeferHigh,
 
-            "40REEFERSTANDARD"
+            "42R1" or "40REEFERSTANDARD"
                 => FortyReeferStandard,
 
-            "20OT" or "20OPENTOP"
+            "22U1" or "20OT" or "20OPENTOP"
                 => TwentyOpenTop,
 
-            "40OT" or "40OPENTOP"
+            "42U1" or "40OT" or "40OPENTOP"
                 => FortyOpenTop,
 
-            "40OPENTOPHIGH"
+            "45U1" or "40OPENTOPHIGH"
                 => FortyOpenTopHigh,
 
-            "40FLATSTANDARD"
+            "42P3" or "40FLATSTANDARD"
                 => FortyFlatStandard,
 
-            "40FLATHIGH"
+            "45P3" or "40FLATHIGH"
                 => FortyFlatHigh,
 
-            "20FLAT"
+            "22P1" or "20FLAT"
                 => TwentyFlat,
 
             _ => value.Trim()
