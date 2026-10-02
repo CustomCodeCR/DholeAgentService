@@ -345,11 +345,54 @@ public sealed class MaerskBrowserAutomation
 
                 if (!string.IsNullOrWhiteSpace(captchaChallenge))
                 {
-                    throw new MaerskAuthenticationException(
-                        "maersk_hcaptcha_required",
-                        "Maersk presented an interactive hCaptcha challenge after the booking form was submitted. " +
-                        "The persistent browser profile was preserved and scheduled searches must stop until the verification is completed interactively. " +
-                        $"Challenge='{captchaChallenge}'");
+                    // Keep the same persistent Chromium session alive so an
+                    // operator can solve hCaptcha through the localhost-only
+                    // noVNC console. Do not refresh or rebuild the form while the
+                    // challenge is active.
+                    var cleared =
+                        await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
+                            page,
+                            TimeSpan.FromMinutes(10),
+                            cancellationToken);
+
+                    if (!cleared)
+                    {
+                        throw new MaerskAuthenticationException(
+                            "maersk_hcaptcha_required",
+                            "Maersk presented an interactive hCaptcha challenge and it was not completed within 10 minutes. " +
+                            "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
+                            $"Challenge='{captchaChallenge}'");
+                    }
+
+                    // hCaptcha can resume the pending submit automatically. Give it
+                    // a short opportunity before clicking Continue again.
+                    var captchaResumeSignal = await Task.WhenAny(
+                        offerRequestStarted.Task,
+                        Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
+
+                    if (captchaResumeSignal != offerRequestStarted.Task)
+                    {
+                        await MaerskShadowDom.ClickVisibleActionByTextAsync(
+                            page,
+                            submitLabels,
+                            cancellationToken,
+                            timeoutMs: 5_000,
+                            force: true);
+
+                        var postCaptchaSignal = await Task.WhenAny(
+                            offerRequestStarted.Task,
+                            Task.Delay(TimeSpan.FromSeconds(20), cancellationToken));
+
+                        if (postCaptchaSignal != offerRequestStarted.Task)
+                        {
+                            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                            throw new InvalidOperationException(
+                                $"Maersk hCaptcha was cleared, but Continue still did not issue POST /v2/departures/offers. " +
+                                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+                        }
+                    }
+
+                    return;
                 }
 
                 // The control was clickable but the SPA did not submit. Retry once
@@ -374,11 +417,48 @@ public sealed class MaerskBrowserAutomation
 
                     if (!string.IsNullOrWhiteSpace(captchaChallenge))
                     {
-                        throw new MaerskAuthenticationException(
-                            "maersk_hcaptcha_required",
-                            "Maersk presented an interactive hCaptcha challenge after the booking form was submitted. " +
-                            "The persistent browser profile was preserved and scheduled searches must stop until the verification is completed interactively. " +
-                            $"Challenge='{captchaChallenge}'");
+                        var cleared =
+                            await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
+                                page,
+                                TimeSpan.FromMinutes(10),
+                                cancellationToken);
+
+                        if (!cleared)
+                        {
+                            throw new MaerskAuthenticationException(
+                                "maersk_hcaptcha_required",
+                                "Maersk presented an interactive hCaptcha challenge and it was not completed within 10 minutes. " +
+                                "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
+                                $"Challenge='{captchaChallenge}'");
+                        }
+
+                        var postCaptchaSignal = await Task.WhenAny(
+                            offerRequestStarted.Task,
+                            Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
+
+                        if (postCaptchaSignal != offerRequestStarted.Task)
+                        {
+                            await MaerskShadowDom.ClickVisibleActionByTextAsync(
+                                page,
+                                submitLabels,
+                                cancellationToken,
+                                timeoutMs: 5_000,
+                                force: true);
+
+                            postCaptchaSignal = await Task.WhenAny(
+                                offerRequestStarted.Task,
+                                Task.Delay(TimeSpan.FromSeconds(20), cancellationToken));
+
+                            if (postCaptchaSignal != offerRequestStarted.Task)
+                            {
+                                var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+                                throw new InvalidOperationException(
+                                    $"Maersk hCaptcha was cleared, but Continue still did not issue POST /v2/departures/offers. " +
+                                    $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+                            }
+                        }
+
+                        return;
                     }
 
                     var diagnostics = await MaerskShadowDom.DescribeAsync(page);
