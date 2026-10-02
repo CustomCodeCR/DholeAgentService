@@ -13,7 +13,8 @@ public sealed class MaerskOfferInterceptor
     public async Task<CapturedMaerskOfferResponse> WaitForOfferAsync(
         IPage page,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Task? collectionComplete = null)
     {
         var sync = new object();
         var captures = new List<CapturedMaerskOfferResponse>();
@@ -99,8 +100,12 @@ public sealed class MaerskOfferInterceptor
 
                 var elapsed = DateTime.UtcNow - startedAtUtc;
 
+                var traversalComplete =
+                    collectionComplete is null || collectionComplete.IsCompleted;
+
                 if (snapshot.Count > 0
                     && pending == 0
+                    && traversalComplete
                     && DateTime.UtcNow - lastActivity >= QuietPeriod)
                 {
                     return MergeCaptures(snapshot);

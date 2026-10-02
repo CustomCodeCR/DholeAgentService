@@ -8,14 +8,10 @@ public sealed class MaerskBrowserAutomation
     public async Task LoadAllSailingsAsync(
         IPage page,
         CancellationToken cancellationToken,
-        int timeoutMs = 30_000)
+        int timeoutMs = 90_000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
-        // The booking submit navigates to /book/sailings. Maersk progressively
-        // loads later departures as the results page is scrolled, so returning
-        // after the first departures/offers response truncates the available
-        // sailings for a route/equipment combination.
         while (DateTime.UtcNow < deadline
                && !page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
         {
@@ -26,29 +22,19 @@ public sealed class MaerskBrowserAutomation
         if (!page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var stableRounds = 0;
-        double previousHeight = -1;
+        var noGrowthClicks = 0;
+        var missingButtonRounds = 0;
+        var clickCount = 0;
+        const int maxClicks = 20;
 
-        while (DateTime.UtcNow < deadline && stableRounds < 5)
+        while (DateTime.UtcNow < deadline
+               && clickCount < maxClicks
+               && missingButtonRounds < 3
+               && noGrowthClicks < 2)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            double height;
-            try
-            {
-                height = await page.EvaluateAsync<double>(
-                    """
-                    () => Math.max(
-                        document.body?.scrollHeight || 0,
-                        document.documentElement?.scrollHeight || 0
-                    )
-                    """);
-            }
-            catch (PlaywrightException)
-            {
-                await Task.Delay(300, cancellationToken);
-                continue;
-            }
+            var beforeHeight = await ReadDocumentHeightAsync(page);
 
             try
             {
@@ -70,42 +56,191 @@ public sealed class MaerskBrowserAutomation
                 continue;
             }
 
-            // Give Maersk's intersection observers and product batch requests
-            // time to append the next block before measuring again.
-            await Task.Delay(1_000, cancellationToken);
+            // Maersk places "Search more sailing options" at the bottom of the
+            // currently loaded result set. Scrolling alone does not request the
+            // next batch; the button must be clicked.
+            await Task.Delay(600, cancellationToken);
 
-            double nextHeight;
+            var clicked = await TryClickSearchMoreSailingOptionsAsync(
+                page,
+                cancellationToken,
+                timeoutMs: 2_500);
+
+            if (!clicked)
+            {
+                missingButtonRounds++;
+                await Task.Delay(750, cancellationToken);
+                continue;
+            }
+
+            clickCount++;
+            missingButtonRounds = 0;
+
+            // Wait for the newly requested sailing batch to render. The button
+            // can temporarily remain in the DOM while Maersk is loading, so do
+            // not click it again immediately.
+            var grew = false;
+            var growthDeadline = DateTime.UtcNow.AddSeconds(8);
+
+            while (DateTime.UtcNow < growthDeadline
+                   && DateTime.UtcNow < deadline)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(400, cancellationToken);
+
+                var currentHeight = await ReadDocumentHeightAsync(page);
+
+                if (currentHeight > beforeHeight + 1)
+                {
+                    grew = true;
+                    break;
+                }
+            }
+
+            if (grew)
+                noGrowthClicks = 0;
+            else
+                noGrowthClicks++;
+
+            // Move to the new bottom before checking for the next "Search more"
+            // button. This is what exposes the following Maersk page of sailings.
             try
             {
-                nextHeight = await page.EvaluateAsync<double>(
+                await page.EvaluateAsync(
                     """
-                    () => Math.max(
-                        document.body?.scrollHeight || 0,
-                        document.documentElement?.scrollHeight || 0
+                    () => window.scrollTo(
+                        0,
+                        Math.max(
+                            document.body?.scrollHeight || 0,
+                            document.documentElement?.scrollHeight || 0
+                        )
                     )
                     """);
             }
             catch (PlaywrightException)
             {
-                stableRounds = 0;
-                continue;
+                // The next loop will retry after the SPA settles.
             }
 
-            if (Math.Abs(nextHeight - height) <= 1
-                && Math.Abs(nextHeight - previousHeight) <= 1)
-            {
-                stableRounds++;
-            }
-            else
-            {
-                stableRounds = 0;
-            }
-
-            previousHeight = nextHeight;
+            await Task.Delay(900, cancellationToken);
         }
 
-        // One final wait lets late PRICE_BREAKDOWN/departures batches finish.
-        await Task.Delay(1_500, cancellationToken);
+        // Allow any late PRICE_BREAKDOWN/departures requests caused by the final
+        // click to complete before the caller releases the network capture.
+        await Task.Delay(2_000, cancellationToken);
+    }
+
+    private static async Task<double> ReadDocumentHeightAsync(IPage page)
+    {
+        try
+        {
+            return await page.EvaluateAsync<double>(
+                """
+                () => Math.max(
+                    document.body?.scrollHeight || 0,
+                    document.documentElement?.scrollHeight || 0
+                )
+                """);
+        }
+        catch (PlaywrightException)
+        {
+            return 0;
+        }
+    }
+
+    private static async Task<bool> TryClickSearchMoreSailingOptionsAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                foreach (var selector in new[]
+                         {
+                             "button",
+                             "mc-button",
+                             "[role='button']"
+                         })
+                {
+                    ILocator matches;
+
+                    try
+                    {
+                        matches = frame.Locator(selector);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        continue;
+                    }
+
+                    int count;
+                    try
+                    {
+                        count = await matches.CountAsync();
+                    }
+                    catch (PlaywrightException)
+                    {
+                        continue;
+                    }
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        var candidate = matches.Nth(index);
+
+                        try
+                        {
+                            if (!await candidate.IsVisibleAsync()
+                                || !await candidate.IsEnabledAsync())
+                                continue;
+
+                            var text = (await candidate.InnerTextAsync()).Trim();
+
+                            if (!text.Equals(
+                                    "Search more sailing options",
+                                    StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            await candidate.ScrollIntoViewIfNeededAsync();
+
+                            try
+                            {
+                                await candidate.ClickAsync(
+                                    new LocatorClickOptions
+                                    {
+                                        Timeout = 2_000
+                                    });
+                            }
+                            catch (PlaywrightException)
+                            {
+                                await candidate.ClickAsync(
+                                    new LocatorClickOptions
+                                    {
+                                        Timeout = 2_000,
+                                        Force = true
+                                    });
+                            }
+
+                            return true;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Maersk may re-render the button while the next batch
+                            // is being requested. Retry until the short deadline.
+                        }
+                    }
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
     }
 
     public async Task FillSearchAsync(
