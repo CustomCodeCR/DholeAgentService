@@ -5,245 +5,33 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
 
 public sealed class MaerskBrowserAutomation
 {
-    public async Task LoadAllSailingsAsync(
+    public async Task<bool> TryLoadNextSailingBatchAsync(
         IPage page,
         CancellationToken cancellationToken,
-        int timeoutMs = 90_000)
+        int timeoutMs = 3_000)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        // ExecuteSearchAsync already confirmed the first departures/offers
-        // response. Maersk's SPA does not always expose /book/sailings in the
-        // address bar, so traverse the rendered result page regardless of URL.
-        await Task.Delay(500, cancellationToken);
-
-        var missingButtonRounds = 0;
-        var noResponseClicks = 0;
-        var clickCount = 0;
-        const int maxClicks = 20;
-
-        while (DateTime.UtcNow < deadline
-               && clickCount < maxClicks
-               && missingButtonRounds < 3
-               && noResponseClicks < 2)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                await page.EvaluateAsync(
-                    """
-                    () => window.scrollTo(
-                        0,
-                        Math.max(
-                            document.body?.scrollHeight || 0,
-                            document.documentElement?.scrollHeight || 0
-                        )
+            await page.EvaluateAsync(
+                """
+                () => window.scrollTo(
+                    0,
+                    Math.max(
+                        document.body?.scrollHeight || 0,
+                        document.documentElement?.scrollHeight || 0
                     )
-                    """);
-            }
-            catch (PlaywrightException)
-            {
-                await Task.Delay(200, cancellationToken);
-                continue;
-            }
-
-            await Task.Delay(250, cancellationToken);
-
-            var responseArrived = new TaskCompletionSource<bool>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-
-            EventHandler<IResponse>? responseHandler = null;
-            responseHandler = (_, response) =>
-            {
-                if (response.Url.Contains(
-                        "/v2/departures/offers",
-                        StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(
-                        response.Request.Method,
-                        "POST",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    responseArrived.TrySetResult(true);
-                }
-            };
-
-            page.Response += responseHandler;
-
-            try
-            {
-                var clicked = await TryClickSearchMoreSailingOptionsAsync(
-                    page,
-                    cancellationToken,
-                    timeoutMs: 2_500);
-
-                if (!clicked)
-                {
-                    missingButtonRounds++;
-                    await Task.Delay(350, cancellationToken);
-                    continue;
-                }
-
-                clickCount++;
-                missingButtonRounds = 0;
-
-                try
-                {
-                    await responseArrived.Task.WaitAsync(
-                        TimeSpan.FromSeconds(6),
-                        cancellationToken);
-
-                    noResponseClicks = 0;
-                }
-                catch (TimeoutException)
-                {
-                    noResponseClicks++;
-                }
-            }
-            finally
-            {
-                page.Response -= responseHandler;
-            }
-
-            // Let the SPA render the newly returned sailing cards before looking
-            // for the next "Search more sailing options" control.
-            await Task.Delay(400, cancellationToken);
+                )
+                """);
+        }
+        catch (PlaywrightException)
+        {
+            // Continue: the button may already be visible even if scrolling raced a re-render.
         }
 
-        // The interceptor separately waits for its quiet period. This short settle
-        // only allows a final response body/render already in flight to finish.
-        await Task.Delay(500, cancellationToken);
-    }
+        await Task.Delay(350, cancellationToken);
 
-    public async Task<bool> RetrySubmitSearchAsync(
-        IPage page,
-        CancellationToken cancellationToken,
-        int timeoutMs = 6_000)
-    {
-        var labels = new[]
-        {
-            "Continue",
-            "Continue to book",
-            "Search",
-            "Get prices",
-            "Find prices",
-            "Show prices"
-        };
-
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-
-        while (DateTime.UtcNow < deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            foreach (var frame in page.Frames)
-            {
-                foreach (var selector in new[]
-                         {
-                             "button",
-                             "mc-button",
-                             "[role='button']",
-                             "input[type='submit']"
-                         })
-                {
-                    ILocator matches;
-
-                    try
-                    {
-                        matches = frame.Locator(selector);
-                    }
-                    catch (PlaywrightException)
-                    {
-                        continue;
-                    }
-
-                    int count;
-                    try
-                    {
-                        count = await matches.CountAsync();
-                    }
-                    catch (PlaywrightException)
-                    {
-                        continue;
-                    }
-
-                    for (var index = 0; index < count; index++)
-                    {
-                        var candidate = matches.Nth(index);
-
-                        try
-                        {
-                            if (!await candidate.IsVisibleAsync()
-                                || !await candidate.IsEnabledAsync())
-                                continue;
-
-                            var text = (await candidate.InnerTextAsync()).Trim();
-                            if (string.IsNullOrWhiteSpace(text))
-                            {
-                                text = (await candidate.GetAttributeAsync("aria-label")
-                                        ?? await candidate.GetAttributeAsync("value")
-                                        ?? string.Empty).Trim();
-                            }
-
-                            if (!labels.Any(label =>
-                                    text.Equals(label, StringComparison.OrdinalIgnoreCase)
-                                    || text.Contains(label, StringComparison.OrdinalIgnoreCase)))
-                                continue;
-
-                            await candidate.ScrollIntoViewIfNeededAsync();
-
-                            try
-                            {
-                                await candidate.ClickAsync(
-                                    new LocatorClickOptions
-                                    {
-                                        Timeout = 2_000
-                                    });
-                            }
-                            catch (PlaywrightException)
-                            {
-                                await candidate.ClickAsync(
-                                    new LocatorClickOptions
-                                    {
-                                        Timeout = 2_000,
-                                        Force = true
-                                    });
-                            }
-
-                            return true;
-                        }
-                        catch (PlaywrightException)
-                        {
-                            // Maersk can re-render the custom button while the SPA
-                            // validates the form. Keep searching until the deadline.
-                        }
-                    }
-                }
-            }
-
-            await Task.Delay(200, cancellationToken);
-        }
-
-        // Keep the existing Shadow DOM click as a last-resort fallback. The real
-        // Playwright click above is preferred because it reproduces an operator
-        // click more faithfully on Maersk's custom components.
-        return await MaerskShadowDom.ClickByTextAsync(
-                   page,
-                   labels,
-                   cancellationToken,
-                   timeoutMs: 2_000)
-               || await MaerskShadowDom.ClickFirstAsync(
-                   page,
-                   ["button[type='submit']", "input[type='submit']"],
-                   cancellationToken,
-                   timeoutMs: 1_500);
-    }
-
-    private static async Task<bool> TryClickSearchMoreSailingOptionsAsync(
-        IPage page,
-        CancellationToken cancellationToken,
-        int timeoutMs)
-    {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
         while (DateTime.UtcNow < deadline)
@@ -321,8 +109,7 @@ public sealed class MaerskBrowserAutomation
                         }
                         catch (PlaywrightException)
                         {
-                            // Maersk may re-render the button while the next batch
-                            // is being requested. Retry until the short deadline.
+                            // Maersk can replace the button while a sailing batch is loading.
                         }
                     }
                 }

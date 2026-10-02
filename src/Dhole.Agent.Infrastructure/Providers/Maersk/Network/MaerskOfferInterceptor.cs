@@ -7,7 +7,7 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 
 public sealed class MaerskOfferInterceptor
 {
-    private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     public async Task<CapturedMaerskOfferResponse> WaitForOfferAsync(
@@ -138,7 +138,7 @@ public sealed class MaerskOfferInterceptor
                "POST",
                StringComparison.OrdinalIgnoreCase);
 
-    private static CapturedMaerskOfferResponse MergeCaptures(
+    public static CapturedMaerskOfferResponse MergeCaptures(
         IReadOnlyCollection<CapturedMaerskOfferResponse> captures)
     {
         var distinct = captures
