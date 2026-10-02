@@ -11,8 +11,10 @@ public sealed class MaerskBrowserAutomation
         int timeoutMs = 90_000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        var sailingsDeadline = DateTime.UtcNow.AddSeconds(
+            Math.Min(30, Math.Max(5, timeoutMs / 1000)));
 
-        while (DateTime.UtcNow < deadline
+        while (DateTime.UtcNow < sailingsDeadline
                && !page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -20,7 +22,8 @@ public sealed class MaerskBrowserAutomation
         }
 
         if (!page.Url.Contains("/book/sailings", StringComparison.OrdinalIgnoreCase))
-            return;
+            throw new TimeoutException(
+                $"Maersk search submission did not reach /book/sailings within 30 seconds. Final URL='{page.Url.Split('?', 2)[0]}'.");
 
         var missingButtonRounds = 0;
         var noResponseClicks = 0;
