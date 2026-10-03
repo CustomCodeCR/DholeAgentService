@@ -65,6 +65,19 @@ public sealed class MaerskAgentProvider(
                 "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
         }
 
+        // A profile that has never authenticated, expired, or was explicitly
+        // marked for re-authentication must be completed interactively. Automated
+        // credential submission is much more likely to be rejected by Maersk's
+        // edge protection, while the resulting persistent session can be reused
+        // by later scheduled executions.
+        var preferInteractiveAuthentication =
+            browserProfile is null
+            || browserProfile.Status is BrowserProfileStatus.Unknown
+                or BrowserProfileStatus.Ready
+                or BrowserProfileStatus.LoginRequired
+                or BrowserProfileStatus.Expired
+                or BrowserProfileStatus.Error;
+
         // Maersk authentication relies on a persistent Chromium profile.
         // Never destroy that profile automatically for LoginRequired/Error:
         // cookies, local storage and the OIDC session are precisely what allow
@@ -76,6 +89,7 @@ public sealed class MaerskAgentProvider(
 
         if (browserProfile is not null
             && browserProfile.Status is BrowserProfileStatus.LoginRequired
+                or BrowserProfileStatus.Expired
                 or BrowserProfileStatus.Error)
         {
             browserProfile.SetStatus(BrowserProfileStatus.Authenticating);
@@ -111,7 +125,8 @@ public sealed class MaerskAgentProvider(
                 cancellationToken,
                 plan.LoginUrl,
                 plan.AuthenticationSuccessUrl,
-                plan.SearchUrl);
+                plan.SearchUrl,
+                preferInteractiveAuthentication);
 
             await NavigateToSearchStartAsync(
                 page,
