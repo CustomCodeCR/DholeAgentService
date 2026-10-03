@@ -38,7 +38,8 @@ public sealed class MaerskLoginService
         CancellationToken cancellationToken,
         string? configuredLoginUrl = null,
         string? authenticationSuccessUrl = null,
-        string? configuredSearchUrl = null)
+        string? configuredSearchUrl = null,
+        bool preferInteractiveAuthentication = false)
     {
         if (string.IsNullOrWhiteSpace(username))
             throw new ArgumentException("Maersk username is required.", nameof(username));
@@ -83,6 +84,26 @@ public sealed class MaerskLoginService
                     network);
 
             await DismissCookieBannerAsync(page, cancellationToken);
+
+            if (preferInteractiveAuthentication)
+            {
+                var interactiveAuthenticated =
+                    await WaitForInteractiveAuthenticationAsync(
+                        page,
+                        configuredSearchUrl,
+                        authenticationSuccessUrl,
+                        TimeSpan.FromMinutes(10),
+                        cancellationToken);
+
+                if (interactiveAuthenticated)
+                    return;
+
+                throw new MaerskAuthenticationException(
+                    "maersk_authentication_verification_required",
+                    "Maersk requires the persistent browser profile to be authenticated interactively. " +
+                    "The browser was kept open for 10 minutes without completing authentication. " +
+                    "Open the worker noVNC console through the SSH tunnel, sign in to Maersk manually, then run the schedule again.");
+            }
 
             var usernameFilled =
                 await MaerskShadowDom.FillAsync(
@@ -314,6 +335,71 @@ public sealed class MaerskLoginService
             }
 
             await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitForInteractiveAuthenticationAsync(
+        IPage page,
+        string? configuredSearchUrl,
+        string? authenticationSuccessUrl,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        var searchUrl = ResolveSearchUrl(configuredSearchUrl);
+        var stableSearchPolls = 0;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await CompleteAuthenticatedContinueAsync(page, cancellationToken);
+            }
+            catch (MaerskAuthenticationException ex)
+                when (ex.ErrorCode is "maersk_authentication_continue_not_clickable"
+                    or "maersk_authentication_callback_timeout")
+            {
+                // The operator may still be typing credentials, solving an
+                // interactive check, or waiting for the accounts SPA to finish.
+            }
+
+            var currentUrl = page.Url;
+
+            if (MatchesConfiguredUrl(currentUrl, authenticationSuccessUrl))
+            {
+                stableSearchPolls = 0;
+                await Task.Delay(500, cancellationToken);
+                continue;
+            }
+
+            var onAccounts =
+                currentUrl.Contains("accounts.maersk.com", StringComparison.OrdinalIgnoreCase);
+            var onPortalLogin =
+                currentUrl.Contains("/portaluser/login", StringComparison.OrdinalIgnoreCase);
+
+            if (!onAccounts
+                && !onPortalLogin
+                && MatchesConfiguredUrlOrChild(currentUrl, searchUrl))
+            {
+                stableSearchPolls++;
+                if (stableSearchPolls >= 6)
+                    return true;
+            }
+            else
+            {
+                stableSearchPolls = 0;
+            }
+
+            if (await IsAuthenticatedAsync(page, authenticationSuccessUrl)
+                && !onAccounts
+                && !onPortalLogin)
+                return true;
+
+            await Task.Delay(500, cancellationToken);
         }
 
         return false;
@@ -706,7 +792,11 @@ public sealed class MaerskLoginService
             return detail.Contains("access denied")
                 || detail.Contains("edgesuite.net")
                 || detail.Contains("you don't have permission to access")
-                || detail.Contains("reason=unauthorized");
+                || detail.Contains("reason=unauthorized")
+                || (detail.Contains("denied")
+                    && (detail.Contains("permission")
+                        || detail.Contains("permi")
+                        || detail.Contains("edge")));
         }
 
         private static bool IsAuthenticationEndpoint(HttpFailure failure)
