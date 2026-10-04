@@ -65,18 +65,13 @@ public sealed class MaerskAgentProvider(
                 "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
         }
 
-        // A profile that has never authenticated, expired, or was explicitly
-        // marked for re-authentication must be completed interactively. Automated
-        // credential submission is much more likely to be rejected by Maersk's
-        // edge protection, while the resulting persistent session can be reused
-        // by later scheduled executions.
+        // Scheduled rate searches must remain unattended. Always let the login
+        // service try the existing persistent session first and then the stored
+        // credentials. Reserve the 10-minute noVNC wait for an explicit
+        // Authenticate action; otherwise a fresh/expired profile would stall every
+        // scheduled extraction before credentials are even submitted.
         var preferInteractiveAuthentication =
-            browserProfile is null
-            || browserProfile.Status is BrowserProfileStatus.Unknown
-                or BrowserProfileStatus.Ready
-                or BrowserProfileStatus.LoginRequired
-                or BrowserProfileStatus.Expired
-                or BrowserProfileStatus.Error;
+            context.Definition.ActionType == AgentActionType.Authenticate;
 
         // Maersk authentication relies on a persistent Chromium profile.
         // Never destroy that profile automatically for LoginRequired/Error:
