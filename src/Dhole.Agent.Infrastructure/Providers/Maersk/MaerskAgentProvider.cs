@@ -172,7 +172,7 @@ public sealed class MaerskAgentProvider(
 
             try
             {
-                var captured = await ExecuteSearchAsync(
+                var captured = await ExecuteSearchWithUiRecoveryAsync(
                     page,
                     search.Input,
                     plan.SearchUrl,
@@ -238,6 +238,9 @@ public sealed class MaerskAgentProvider(
             {
                 failed++;
                 var errorCode = ex is TimeoutException
+                    && ex.Message.Contains(
+                        "departures/offers",
+                        StringComparison.OrdinalIgnoreCase)
                     ? "maersk_offer_timeout"
                     : "maersk_search_failed";
 
@@ -308,6 +311,91 @@ public sealed class MaerskAgentProvider(
                 "OceanFreightRates",
                 "3.0",
                 outputJson);
+    }
+
+    private async Task<CapturedMaerskOfferResponse> ExecuteSearchWithUiRecoveryAsync(
+        Microsoft.Playwright.IPage page,
+        MaerskSearchInput input,
+        string? configuredSearchUrl,
+        string? authenticationSuccessUrl,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastUiError = null;
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                return await ExecuteSearchAsync(
+                    page,
+                    input,
+                    configuredSearchUrl,
+                    authenticationSuccessUrl,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+                when (attempt == 1 && IsRecoverableMaerskUiException(ex))
+            {
+                lastUiError = ex;
+
+                // The booking SPA occasionally keeps a visually populated but
+                // internally uncommitted MDS component, or replaces a locator
+                // while Playwright is interacting with it. A fresh /book render
+                // is safe here because these failures happen before a usable
+                // departures/offers response exists.
+                await Task.Delay(750, cancellationToken);
+            }
+        }
+
+        throw lastUiError
+              ?? new InvalidOperationException(
+                  "Maersk UI recovery exhausted without a captured offer response.");
+    }
+
+    private static bool IsRecoverableMaerskUiException(Exception exception)
+    {
+        var message = exception.Message;
+
+        if (string.IsNullOrWhiteSpace(message))
+            return false;
+
+        // Never automatically repeat provider verification/challenge failures or
+        // a real offer-response timeout; those retries increase bot pressure.
+        if (message.Contains(
+                "departures/offers response was not captured",
+                StringComparison.OrdinalIgnoreCase)
+            || message.Contains(
+                "hcaptcha",
+                StringComparison.OrdinalIgnoreCase)
+            || message.Contains(
+                "verification",
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return message.Contains(
+                   "could not be committed as Container Yard",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "commodity field did not become enabled",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "Continue/Search action did not become enabled",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "price owner option",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "container type",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "waiting for Locator(",
+                   StringComparison.OrdinalIgnoreCase)
+               || message.Contains(
+                   "Timeout",
+                   StringComparison.OrdinalIgnoreCase)
+                  && message.Contains(
+                      "Locator",
+                      StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<CapturedMaerskOfferResponse> ExecuteSearchAsync(
