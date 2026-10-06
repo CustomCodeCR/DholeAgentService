@@ -2433,11 +2433,16 @@ internal static class MaerskShadowDom
                     {
                         var candidate = candidates.Nth(index);
 
-                        if (!await candidate.IsVisibleAsync())
+                        if (!await candidate.IsVisibleAsync(
+                                new LocatorIsVisibleOptions { Timeout = 500 }))
                             continue;
 
-                        var ariaDisabled = await candidate.GetAttributeAsync("aria-disabled");
-                        var disabled = await candidate.GetAttributeAsync("disabled");
+                        var ariaDisabled = await candidate.GetAttributeAsync(
+                            "aria-disabled",
+                            new LocatorGetAttributeOptions { Timeout = 500 });
+                        var disabled = await candidate.GetAttributeAsync(
+                            "disabled",
+                            new LocatorGetAttributeOptions { Timeout = 500 });
 
                         if (disabled is not null
                             || string.Equals(
@@ -2450,7 +2455,8 @@ internal static class MaerskShadowDom
 
                         try
                         {
-                            text = Normalize(await candidate.InnerTextAsync());
+                            text = Normalize(await candidate.InnerTextAsync(
+                                new LocatorInnerTextOptions { Timeout = 500 }));
                         }
                         catch (PlaywrightException)
                         {
@@ -2460,8 +2466,12 @@ internal static class MaerskShadowDom
                         if (text.Length == 0)
                         {
                             text = Normalize(
-                                await candidate.GetAttributeAsync("aria-label")
-                                ?? await candidate.GetAttributeAsync("value"));
+                                await candidate.GetAttributeAsync(
+                                    "aria-label",
+                                    new LocatorGetAttributeOptions { Timeout = 500 })
+                                ?? await candidate.GetAttributeAsync(
+                                    "value",
+                                    new LocatorGetAttributeOptions { Timeout = 500 }));
                         }
 
                         if (text.Length == 0)
