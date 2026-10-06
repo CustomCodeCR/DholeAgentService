@@ -532,8 +532,55 @@ internal static class MaerskShadowDom
                 .trim()
                 .toLowerCase();
 
-            const compact = value => normalize(value)
-                .replace(/[^a-z0-9]+/g, '');
+            const tokens = value => normalize(value)
+                .split(/[^a-z0-9]+/g)
+                .filter(token => token.length > 1);
+
+            const distance = (left, right) => {
+                if (left === right) return 0;
+                if (!left) return right.length;
+                if (!right) return left.length;
+
+                const previous = Array.from(
+                    { length: right.length + 1 },
+                    (_, index) => index);
+
+                for (let i = 1; i <= left.length; i++) {
+                    const current = [i];
+
+                    for (let j = 1; j <= right.length; j++) {
+                        const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+                        current[j] = Math.min(
+                            current[j - 1] + 1,
+                            previous[j] + 1,
+                            previous[j - 1] + cost);
+                    }
+
+                    for (let j = 0; j < current.length; j++)
+                        previous[j] = current[j];
+                }
+
+                return previous[right.length];
+            };
+
+            const threshold = token =>
+                token.length <= 4 ? 0 : token.length <= 8 ? 1 : 2;
+
+            const fuzzyTokensMatch = (expected, actual) => {
+                if (expected.length === 0 || actual.length === 0)
+                    return false;
+
+                return expected.every(expectedToken => {
+                    if (actual.includes(expectedToken))
+                        return true;
+
+                    let best = Number.MAX_SAFE_INTEGER;
+                    for (const actualToken of actual)
+                        best = Math.min(best, distance(expectedToken, actualToken));
+
+                    return best <= threshold(expectedToken);
+                });
+            };
 
             const inputId = args.componentId === 'origin'
                 ? 'mc-input-origin'
@@ -544,53 +591,6 @@ internal static class MaerskShadowDom
             if (!inputId)
                 return false;
 
-            let input = document.getElementById(inputId);
-
-            if (!input) {
-                const visit = root => {
-                    for (const element of root.querySelectorAll?.('*') || []) {
-                        if (element.id === inputId)
-                            return element;
-
-                        if (element.shadowRoot) {
-                            const nested = visit(element.shadowRoot);
-                            if (nested)
-                                return nested;
-                        }
-                    }
-
-                    return null;
-                };
-
-                input = visit(document);
-            }
-
-            if (!input)
-                return false;
-
-            const currentText = normalize(input.value);
-            const rawQuery = normalize(args.searchTerm);
-
-            if (!currentText)
-                return false;
-
-            const expectedTokens = normalize(args.displayValue)
-                .split(/[^a-z0-9]+/g)
-                .filter(token => token.length > 1);
-
-            const valueMatches = expectedTokens.length > 0
-                && expectedTokens.every(token => currentText.includes(token));
-
-            if (!valueMatches)
-                return false;
-
-            if (currentText !== rawQuery)
-                return true;
-
-            // The committed Maersk label can be identical to what was typed
-            // (for example "Puerto Caldera, Costa Rica"). Hidden validation/live
-            // region text remains in the shadow DOM even after a valid selection,
-            // so determine settlement from actual visible mc-option elements.
             const roots = [];
             const seen = new Set();
 
@@ -608,6 +608,25 @@ internal static class MaerskShadowDom
             };
 
             collectRoots(document);
+
+            let input = document.getElementById(inputId);
+            if (!input) {
+                for (const root of roots) {
+                    const candidate = root.querySelector?.('#' + inputId);
+                    if (candidate) {
+                        input = candidate;
+                        break;
+                    }
+                }
+            }
+
+            if (!input || !normalize(input.value))
+                return false;
+
+            if (!fuzzyTokensMatch(
+                    tokens(args.displayValue),
+                    tokens(input.value)))
+                return false;
 
             let component = null;
             for (const root of roots) {
@@ -627,6 +646,26 @@ internal static class MaerskShadowDom
             if (!component)
                 return false;
 
+            const text = normalize([
+                component.innerText,
+                component.textContent,
+                component.shadowRoot?.textContent
+            ].filter(Boolean).join(' '));
+
+            if (text.includes('cannot be left blank')
+                || text.includes('no location matching')
+                || text.includes('no matching location found')
+                || text.includes('suggestions available')
+                || text.includes('first:')) {
+                return false;
+            }
+
+            // We only search ocean CY/CY rates. A typed value, a stale label, or
+            // a Store Door selection must never be accepted as committed.
+            const serviceMode = normalize(component.getAttribute('servicemode'));
+            if (serviceMode !== 'cy')
+                return false;
+
             const isVisible = element => {
                 if (!(element instanceof Element))
                     return false;
@@ -638,27 +677,7 @@ internal static class MaerskShadowDom
                     && element.getClientRects().length > 0;
             };
 
-            const componentRoots = [];
-            const componentSeen = new Set();
-
-            const collectComponentRoots = root => {
-                if (!root || componentSeen.has(root))
-                    return;
-
-                componentSeen.add(root);
-                componentRoots.push(root);
-
-                for (const element of root.querySelectorAll?.('*') || []) {
-                    if (element.shadowRoot)
-                        collectComponentRoots(element.shadowRoot);
-                }
-            };
-
-            collectComponentRoots(component);
-            if (component.shadowRoot)
-                collectComponentRoots(component.shadowRoot);
-
-            for (const root of componentRoots) {
+            for (const root of roots) {
                 for (const option of root.querySelectorAll?.('mc-option') || []) {
                     if (isVisible(option))
                         return false;
@@ -666,7 +685,6 @@ internal static class MaerskShadowDom
             }
 
             return true;
-
         }
         """;
 
@@ -1602,13 +1620,81 @@ internal static class MaerskShadowDom
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
 
+        static int Distance(string left, string right)
+        {
+            if (string.Equals(left, right, StringComparison.Ordinal))
+                return 0;
+
+            if (left.Length == 0)
+                return right.Length;
+
+            if (right.Length == 0)
+                return left.Length;
+
+            var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+
+            for (var i = 1; i <= left.Length; i++)
+            {
+                var current = new int[right.Length + 1];
+                current[0] = i;
+
+                for (var j = 1; j <= right.Length; j++)
+                {
+                    var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                    current[j] = Math.Min(
+                        Math.Min(
+                            current[j - 1] + 1,
+                            previous[j] + 1),
+                        previous[j - 1] + cost);
+                }
+
+                previous = current;
+            }
+
+            return previous[right.Length];
+        }
+
+        static int Threshold(string token)
+            => token.Length <= 4
+                ? 0
+                : token.Length <= 8
+                    ? 1
+                    : 2;
+
+        static int MatchScore(
+            IReadOnlyCollection<string> expected,
+            IReadOnlyCollection<string> actual)
+        {
+            if (expected.Count == 0 || actual.Count == 0)
+                return -1;
+
+            var totalDistance = 0;
+
+            foreach (var expectedToken in expected)
+            {
+                if (actual.Contains(expectedToken, StringComparer.Ordinal))
+                    continue;
+
+                var best = actual.Min(actualToken =>
+                    Distance(expectedToken, actualToken));
+
+                if (best > Threshold(expectedToken))
+                    return -1;
+
+                totalDistance += best;
+            }
+
+            return 100 - (totalDistance * 10);
+        }
+
         var expectedTokens = Tokens(displayValue);
         if (expectedTokens.Length == 0)
             return false;
 
-        var desiredSuffix = string.IsNullOrWhiteSpace(serviceMode)
+        var desiredMode = serviceMode.Trim().ToUpperInvariant();
+        var desiredSuffix = desiredMode.Length == 0
             ? string.Empty
-            : $"-{serviceMode.Trim().ToUpperInvariant()}";
+            : $"-{desiredMode}";
 
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
@@ -1623,15 +1709,11 @@ internal static class MaerskShadowDom
 
                 try
                 {
-                    // Scope to the requested origin/destination component first.
-                    // Playwright's CSS engine pierces open shadow roots used by MDS.
                     matches = frame.Locator(
                         $"mc-c-location-servicemode#{componentId} mc-option");
 
                     count = await matches.CountAsync();
 
-                    // Fall back to visible page options only if Maersk moves the
-                    // popup outside the component's shadow tree in a future build.
                     if (count == 0)
                     {
                         matches = frame.Locator("mc-option");
@@ -1643,7 +1725,7 @@ internal static class MaerskShadowDom
                     continue;
                 }
 
-                var candidates = new List<(ILocator Locator, bool DesiredMode, int LabelLength)>();
+                var candidates = new List<(ILocator Locator, int Score, int LabelLength)>();
 
                 for (var index = 0; index < count; index++)
                 {
@@ -1651,22 +1733,46 @@ internal static class MaerskShadowDom
 
                     try
                     {
-                        if (!await candidate.IsVisibleAsync()
-                            || !await candidate.IsEnabledAsync())
+                        if (!await candidate.IsVisibleAsync(
+                                new LocatorIsVisibleOptions { Timeout = 750 })
+                            || !await candidate.IsEnabledAsync(
+                                new LocatorIsEnabledOptions { Timeout = 750 }))
                             continue;
 
-                        var text = (await candidate.InnerTextAsync()).Trim();
-                        var value = (await candidate.GetAttributeAsync("value") ?? string.Empty).Trim();
+                        var text = (await candidate.InnerTextAsync(
+                            new LocatorInnerTextOptions { Timeout = 750 })).Trim();
+
+                        var value = (await candidate.GetAttributeAsync(
+                            "value",
+                            new LocatorGetAttributeOptions { Timeout = 750 }) ?? string.Empty).Trim();
+
                         var normalizedText = text.ToUpperInvariant();
+                        var normalizedValue = value.ToUpperInvariant();
 
-                        if (!expectedTokens.All(token =>
-                                normalizedText.Contains(token, StringComparison.Ordinal)))
+                        var isDesiredMode = desiredMode.Length == 0
+                            || normalizedValue.EndsWith(
+                                desiredSuffix,
+                                StringComparison.OrdinalIgnoreCase)
+                            || (desiredMode == "CY"
+                                && normalizedText.Contains(
+                                    "CONTAINER YARD",
+                                    StringComparison.OrdinalIgnoreCase));
+
+                        // Never silently choose Store Door when CY was requested.
+                        if (!isDesiredMode)
                             continue;
 
-                        var isDesiredMode = desiredSuffix.Length == 0
-                            || value.EndsWith(desiredSuffix, StringComparison.OrdinalIgnoreCase);
+                        var score = MatchScore(
+                            expectedTokens,
+                            Tokens($"{text} {value}"));
 
-                        candidates.Add((candidate, isDesiredMode, text.Length));
+                        if (score < 0)
+                            continue;
+
+                        candidates.Add((
+                            candidate,
+                            score,
+                            text.Length));
                     }
                     catch (PlaywrightException)
                     {
@@ -1675,7 +1781,7 @@ internal static class MaerskShadowDom
                 }
 
                 foreach (var candidate in candidates
-                             .OrderByDescending(x => x.DesiredMode)
+                             .OrderByDescending(x => x.Score)
                              .ThenBy(x => x.LabelLength))
                 {
                     try
@@ -1711,6 +1817,7 @@ internal static class MaerskShadowDom
 
         return false;
     }
+
 
     public static async Task<bool> ClickVisibleOptionMatchingAsync(
         IPage page,
