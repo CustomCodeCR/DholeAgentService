@@ -134,6 +134,13 @@ public sealed class MaerskOfferParser
                 "displayName",
                 "description");
 
+            var chargeApplication = GetFirstString(
+                node,
+                "chargeApplicationCode",
+                "chargeApplication",
+                "application",
+                "applicationCode");
+
             if (!string.IsNullOrWhiteSpace(chargeType)
                 || !string.IsNullOrWhiteSpace(chargeName))
             {
@@ -150,7 +157,8 @@ public sealed class MaerskOfferParser
                         chargeType ?? "UNKNOWN",
                         chargeName,
                         chargeMoney.Currency,
-                        chargeMoney.Amount));
+                        chargeMoney.Amount,
+                        chargeApplication));
 
                     if (oceanFreight is null
                         && string.Equals(
@@ -244,6 +252,41 @@ public sealed class MaerskOfferParser
             }
         });
 
+        var distinctCharges = charges
+            .Distinct()
+            .ToArray();
+
+        // Maersk's PRICE_BREAKDOWN can split the international freight across
+        // multiple charge codes (for example BAS + EBS + PCC). The business
+        // meaning is carried by chargeApplicationCode="Freight", so aggregate
+        // every Freight charge into OceanFreight instead of keeping only BAS.
+        var freightCharges = distinctCharges
+            .Where(x => string.Equals(
+                x.Application,
+                "Freight",
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (freightCharges.Length > 0)
+        {
+            var targetCurrency = oceanFreight?.Currency
+                ?? freightCharges[0].Currency;
+
+            var sameCurrencyFreight = freightCharges
+                .Where(x => string.Equals(
+                    x.Currency,
+                    targetCurrency,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            if (sameCurrencyFreight.Length > 0)
+            {
+                oceanFreight = new NormalizedMoney(
+                    targetCurrency,
+                    sameCurrencyFreight.Sum(x => x.Amount));
+            }
+        }
+
         var etd = legs
             .Where(x => x.Departure.HasValue)
             .Select(x => x.Departure)
@@ -282,7 +325,7 @@ public sealed class MaerskOfferParser
             voyage,
             oceanFreight,
             allIn,
-            charges.Distinct().ToArray(),
+            distinctCharges,
             legs.Distinct().ToArray(),
             products.ToArray(),
             cargoCutoff);
