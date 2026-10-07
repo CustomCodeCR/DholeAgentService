@@ -23,7 +23,7 @@
                 },
                 {
                   "chargeTypeCode": "DHC",
-                  "chargeApplicationCode": "Freight",
+                  "chargeApplicationCode": "Destination",
                   "chargeName": "Destination Handling",
                   "currencyCode": "USD",
                   "amount": 600.00
