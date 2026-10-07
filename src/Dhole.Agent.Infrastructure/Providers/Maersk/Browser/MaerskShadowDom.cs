@@ -666,24 +666,14 @@ internal static class MaerskShadowDom
             if (serviceMode !== 'cy')
                 return false;
 
-            const isVisible = element => {
-                if (!(element instanceof Element))
-                    return false;
-
-                const style = getComputedStyle(element);
-                return style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && style.opacity !== '0'
-                    && element.getClientRects().length > 0;
-            };
-
-            for (const root of roots) {
-                for (const option of root.querySelectorAll?.('mc-option') || []) {
-                    if (isVisible(option))
-                        return false;
-                }
-            }
-
+            // The booking page contains other mc-option elements outside the
+            // origin/destination control. Treating any visible option anywhere
+            // on the page as "location still open" caused valid selections such
+            // as Shanghai (Shanghai), China and Dalian (Liaoning), China to be
+            // rejected even though MDS had already committed servicemode="CY".
+            // At this point the selected input matches the requested location,
+            // the component has no validation error, and Maersk itself reports
+            // CY, which is the authoritative committed state.
             return true;
         }
         """;
