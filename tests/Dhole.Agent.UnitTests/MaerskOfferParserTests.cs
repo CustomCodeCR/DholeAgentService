@@ -299,6 +299,88 @@ public sealed class MaerskOfferParserTests
     }
 
     [TestMethod]
+    public void Parse_ShouldAggregateEveryFreightApplicationCharge()
+    {
+        const string json = """
+        [
+          {
+            "routeId": "FREIGHT-SPLIT-001",
+            "status": "OFFERED",
+            "availabilityFlag": true,
+            "productDataCollection": [
+              {
+                "productReference": "MaerskSpot",
+                "dataBundle": [
+                  {
+                    "dataType": "PRICE_BREAKDOWN",
+                    "data": {
+                      "charges": [
+                        {
+                          "chargeApplicationCode": "Freight",
+                          "chargeTypeCode": "BAS",
+                          "chargeTypeName": "Basic Ocean Freight",
+                          "amount": { "unit": "USD", "value": 2725.0 }
+                        },
+                        {
+                          "chargeApplicationCode": "Freight",
+                          "chargeTypeCode": "EBS",
+                          "chargeTypeName": "Emergency Bunker Surcharge",
+                          "amount": { "unit": "USD", "value": 200.0 }
+                        },
+                        {
+                          "chargeApplicationCode": "Freight",
+                          "chargeTypeCode": "PCC",
+                          "chargeTypeName": "Panama Canal Charge",
+                          "amount": { "unit": "USD", "value": 305.0 }
+                        },
+                        {
+                          "chargeApplicationCode": "Origin",
+                          "chargeTypeCode": "OHC",
+                          "chargeTypeName": "Terminal Handling Service - Origin",
+                          "amount": { "unit": "USD", "value": 409.0 }
+                        },
+                        {
+                          "chargeApplicationCode": "Destination",
+                          "chargeTypeCode": "DHC",
+                          "chargeTypeName": "Terminal Handling Service - Destination",
+                          "amount": { "unit": "USD", "value": 260.0 }
+                        }
+                      ],
+                      "totalAmount": { "unit": "USD", "value": 3899.0 },
+                      "totalBasicFreightAmount": { "unit": "USD", "value": 2725.0 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+        """;
+
+        var offer = new MaerskOfferParser().Parse(json).Offers.Single();
+
+        Assert.IsNotNull(offer.OceanFreight);
+        Assert.AreEqual("USD", offer.OceanFreight.Currency);
+        Assert.AreEqual(3230m, offer.OceanFreight.Amount);
+
+        Assert.AreEqual(
+            "Freight",
+            offer.Charges.Single(x => x.Code == "BAS").Application);
+        Assert.AreEqual(
+            "Freight",
+            offer.Charges.Single(x => x.Code == "EBS").Application);
+        Assert.AreEqual(
+            "Freight",
+            offer.Charges.Single(x => x.Code == "PCC").Application);
+        Assert.AreEqual(
+            "Origin",
+            offer.Charges.Single(x => x.Code == "OHC").Application);
+        Assert.AreEqual(
+            "Destination",
+            offer.Charges.Single(x => x.Code == "DHC").Application);
+    }
+
+    [TestMethod]
     public void Parse_ShouldSupportAlternativeMaerskFieldNames()
     {
         const string json = """
