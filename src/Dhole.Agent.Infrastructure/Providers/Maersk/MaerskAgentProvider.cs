@@ -605,21 +605,29 @@ public sealed class MaerskAgentProvider(
                 {
                     var code = TryGetString(item, "code");
                     var quantity = TryGetInt(item, "quantity") ?? 1;
-                    var weightKg = TryGetDecimal(item, "defaultWeightKg");
+                    var configuredWeightKg = TryGetDecimal(item, "defaultWeightKg");
 
-                    if (string.IsNullOrWhiteSpace(code) || !weightKg.HasValue || weightKg <= 0)
+                    if (string.IsNullOrWhiteSpace(code))
                     {
                         return PlanResolution.Fail(
                             "invalid_profile_equipment",
-                            "Every Maersk extraction equipment must define code and a positive defaultWeightKg.");
+                            "Every Maersk extraction equipment must define a code.");
                     }
+
+                    // Some existing profiles were created while 0 kg was allowed.
+                    // A missing/zero weight must not abort the whole scheduled batch:
+                    // Maersk still requires a positive cargo weight, so use the
+                    // operational default used by these searches.
+                    var weightKg = configuredWeightKg is > 0m
+                        ? configuredWeightKg.Value
+                        : 15_000m;
 
                     var input = new MaerskSearchInput(
                         locations.Normalize(pol, polCode),
                         locations.Normalize(destination, destinationCode),
                         equipment.Normalize(code),
                         Math.Max(1, quantity),
-                        weightKg.Value,
+                        weightKg,
                         commodity,
                         cargoReadyDate,
                         polCode,
