@@ -42,7 +42,7 @@ public sealed class AgentExtractionEquipment : SoftDeletableAggregateRoot<Guid>
         Code = Required(code).ToUpperInvariant();
         Name = Required(name);
         Quantity = quantity > 0 ? quantity : throw new ArgumentOutOfRangeException(nameof(quantity));
-        DefaultWeightKg = defaultWeightKg >= 0 ? defaultWeightKg : throw new ArgumentOutOfRangeException(nameof(defaultWeightKg));
+        DefaultWeightKg = defaultWeightKg > 0 ? defaultWeightKg : throw new ArgumentOutOfRangeException(nameof(defaultWeightKg));
         IsActive = isActive;
         SortOrder = Math.Max(0, sortOrder);
     }
