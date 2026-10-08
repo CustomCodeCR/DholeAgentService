@@ -646,22 +646,18 @@ internal static class MaerskShadowDom
             if (!component)
                 return false;
 
-            const text = normalize([
-                component.innerText,
-                component.textContent,
-                component.shadowRoot?.textContent
-            ].filter(Boolean).join(' '));
-
-            if (text.includes('cannot be left blank')
-                || text.includes('no location matching')
-                || text.includes('no matching location found')
-                || text.includes('suggestions available')
-                || text.includes('first:')) {
-                return false;
-            }
-
-            // We only search ocean CY/CY rates. A typed value, a stale label, or
-            // a Store Door selection must never be accepted as committed.
+            // Maersk keeps stale typeahead/live-region messages in the
+            // component shadow DOM even after a location has been selected.
+            // Examples observed in production include "No matching location
+            // found" and "N suggestions available" while the native input is
+            // already canonicalized (e.g. "Xiamen (Fujian), China") and the
+            // component reports servicemode="CY". Do not use that stale text as
+            // the committed-state signal.
+            //
+            // A location is committed for our CY/CY search when:
+            //   1) the native input has been canonicalized and fuzzy-matches the
+            //      requested location (validated above), and
+            //   2) Maersk's location component itself reports CY.
             const serviceMode = normalize(component.getAttribute('servicemode'));
             if (serviceMode !== 'cy')
                 return false;
@@ -873,26 +869,11 @@ internal static class MaerskShadowDom
             if (!component)
                 return false;
 
-            const text = normalize([
-                component.innerText,
-                component.textContent,
-                component.shadowRoot?.textContent
-            ].filter(Boolean).join(' '));
-
-            if (text.includes('cannot be left blank')
-                || text.includes('no location matching')
-                || text.includes('no matching location found')) {
-                return false;
-            }
-
-            // When the list is still open Maersk announces the available
-            // suggestions through its live region. A committed selection closes
-            // that state and leaves the CY/SD badge.
-            if (text.includes('suggestions available')
-                || text.includes('first:')) {
-                return false;
-            }
-
+            // Do not inspect shadow-root error/live-region text here.
+            // Maersk does not reliably clear it after committing the selected
+            // location. WaitForResolvedLocationValueAsync already verifies the
+            // canonical input value before this method is called; the component
+            // service mode is therefore the authoritative settled-state signal.
             const serviceMode = normalize(component.getAttribute('servicemode'));
             return serviceMode === 'cy' || serviceMode === 'sd';
         }
