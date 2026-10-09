@@ -129,8 +129,7 @@ public sealed class AgentExecutionRepository(ServiceDbContext dbContext)
         => dbContext.AgentExecutions.AnyAsync(
             x => x.ScheduleId == scheduleId &&
                 (x.Status == AgentExecutionStatus.Queued ||
-                 x.Status == AgentExecutionStatus.Running ||
-                 x.Status == AgentExecutionStatus.WaitingForAuthentication),
+                 x.Status == AgentExecutionStatus.Running),
             cancellationToken);
 }
 
