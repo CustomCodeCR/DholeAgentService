@@ -345,21 +345,20 @@ public sealed class MaerskBrowserAutomation
 
                 if (!string.IsNullOrWhiteSpace(captchaChallenge))
                 {
-                    // Keep the same persistent Chromium session alive so an
-                    // operator can solve hCaptcha through the localhost-only
-                    // noVNC console. Do not refresh or rebuild the form while the
-                    // challenge is active.
+                    // Unattended rate searches must not tie up the queue for
+                    // ten minutes on a provider-side interactive challenge.
+                    // Preserve the browser profile for later manual verification.
                     var cleared =
                         await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
                             page,
-                            TimeSpan.FromMinutes(10),
+                            TimeSpan.FromSeconds(15),
                             cancellationToken);
 
                     if (!cleared)
                     {
                         throw new MaerskAuthenticationException(
                             "maersk_hcaptcha_required",
-                            "Maersk presented an interactive hCaptcha challenge and it was not completed within 10 minutes. " +
+                            "Maersk presented an interactive hCaptcha challenge and it was not completed within 15 seconds. " +
                             "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
                             $"Challenge='{captchaChallenge}'");
                     }
@@ -421,14 +420,14 @@ public sealed class MaerskBrowserAutomation
                         var cleared =
                             await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
                                 page,
-                                TimeSpan.FromMinutes(10),
+                                TimeSpan.FromSeconds(15),
                                 cancellationToken);
 
                         if (!cleared)
                         {
                             throw new MaerskAuthenticationException(
                                 "maersk_hcaptcha_required",
-                                "Maersk presented an interactive hCaptcha challenge and it was not completed within 10 minutes. " +
+                                "Maersk presented an interactive hCaptcha challenge and it was not completed within 15 seconds. " +
                                 "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
                                 $"Challenge='{captchaChallenge}'");
                         }
