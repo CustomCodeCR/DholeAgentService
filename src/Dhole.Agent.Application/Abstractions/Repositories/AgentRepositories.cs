@@ -38,6 +38,8 @@ public interface IAgentExecutionRepository : IRepository<AgentExecution, Guid>
 {
     Task<IReadOnlyCollection<AgentExecution>> GetRecentAsync(int take, AgentExecutionStatus? status = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<AgentExecution>> GetQueuedOlderThanAsync(DateTime utcCutoff, int take, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<AgentExecution>> GetQueuedByProviderAsync(Guid providerId, int take, CancellationToken cancellationToken = default);
+    Task<bool> HasOutstandingForScheduleAsync(Guid scheduleId, CancellationToken cancellationToken = default);
 }
 
 public interface IAgentResultRepository : IRepository<AgentResult, Guid>
