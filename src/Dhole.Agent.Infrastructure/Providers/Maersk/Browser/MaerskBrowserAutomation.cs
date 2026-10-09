@@ -11,7 +11,8 @@ public sealed class MaerskBrowserAutomation
         MaerskSearchInput input,
         CancellationToken cancellationToken,
         string? searchUrl = null,
-        bool navigateToSearchUrl = true)
+        bool navigateToSearchUrl = true,
+        bool allowInteractiveCaptcha = false)
     {
         if (string.IsNullOrWhiteSpace(searchUrl))
             throw new InvalidOperationException(
@@ -341,6 +342,12 @@ public sealed class MaerskBrowserAutomation
                 cancellationToken);
         }
 
+        // Operator-assisted challenges are opt-in for manual executions only.
+        // Scheduled runs give up quickly so they do not block the worker queue.
+        var captchaGracePeriod = allowInteractiveCaptcha
+            ? TimeSpan.FromMinutes(5)
+            : TimeSpan.FromSeconds(15);
+
         var offerRequestStarted = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -409,21 +416,20 @@ public sealed class MaerskBrowserAutomation
 
                 if (!string.IsNullOrWhiteSpace(captchaChallenge))
                 {
-                    // Unattended rate searches must not tie up the queue for
-                    // ten minutes on a provider-side interactive challenge.
-                    // Preserve the browser profile for later manual verification.
+                    // Only manual runs keep the browser open for an operator
+                    // to complete the provider's real interactive verification.
                     var cleared =
                         await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
                             page,
-                            TimeSpan.FromSeconds(15),
+                            captchaGracePeriod,
                             cancellationToken);
 
                     if (!cleared)
                     {
                         throw new MaerskAuthenticationException(
                             "maersk_hcaptcha_required",
-                            "Maersk presented an interactive hCaptcha challenge and it was not completed within 15 seconds. " +
-                            "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
+                            $"Maersk presented an interactive hCaptcha challenge and it was not completed within {captchaGracePeriod.TotalSeconds:0} seconds. " +
+                            "The browser profile was preserved. Open noVNC through the SSH tunnel BEFORE starting a manual run to solve the challenge in the visible browser. If the challenge remains, request browser-profile authentication and retry manually. " +
                             $"Challenge='{captchaChallenge}'");
                     }
 
@@ -484,15 +490,15 @@ public sealed class MaerskBrowserAutomation
                         var cleared =
                             await MaerskShadowDom.WaitForInteractiveHcaptchaToClearAsync(
                                 page,
-                                TimeSpan.FromSeconds(15),
+                                captchaGracePeriod,
                                 cancellationToken);
 
                         if (!cleared)
                         {
                             throw new MaerskAuthenticationException(
                                 "maersk_hcaptcha_required",
-                                "Maersk presented an interactive hCaptcha challenge and it was not completed within 15 seconds. " +
-                                "The persistent browser profile was preserved. Open the worker noVNC console through the SSH tunnel, complete the verification, then request browser-profile authentication and run the schedule again. " +
+                                $"Maersk presented an interactive hCaptcha challenge and it was not completed within {captchaGracePeriod.TotalSeconds:0} seconds. " +
+                                "The browser profile was preserved. Open noVNC through the SSH tunnel BEFORE starting a manual run to solve the challenge in the visible browser. If the challenge remains, request browser-profile authentication and retry manually. " +
                                 $"Challenge='{captchaChallenge}'");
                         }
 
