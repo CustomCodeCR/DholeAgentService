@@ -12,6 +12,7 @@ public static class AgentErrors
     public static readonly Error CredentialPasswordRequired = new("Agent.CredentialPasswordRequired","A password is required when migrating a legacy credential.");
     public static readonly Error CredentialVerificationFailed = new("Agent.CredentialVerificationFailed","The stored credential could not be decrypted or resolved.");
     public static readonly Error BrowserProfileNotFound = new("Agent.BrowserProfileNotFound","Browser profile not found.");
+    public static readonly Error BrowserProfileRepairNotAllowed = new("Agent.BrowserProfileRepairNotAllowed","Session repair is available only for expired or errored profiles; provider verification must be completed normally.");
     public static readonly Error ScheduleNotFound = new("Agent.ScheduleNotFound","Agent schedule not found.");
     public static readonly Error ExecutionNotFound = new("Agent.ExecutionNotFound","Agent execution not found.");
     public static readonly Error ExecutionResultNotFound = new("Agent.ExecutionResultNotFound","Agent execution result not found.");
