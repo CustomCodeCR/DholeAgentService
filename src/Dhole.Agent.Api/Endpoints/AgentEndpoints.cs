@@ -97,6 +97,8 @@ public static class AgentEndpoints
         executions.MapPost("/",async(CreateAgentExecutionRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateAgentExecutionCommand(r.AgentDefinitionId,r.ProviderId,r.CredentialId,r.Priority,r.InputJson,r.MaxAttempts,r.CorrelationId,r.TraceId,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExecutionsCreate);
         executions.MapPost("/{id:guid}/cancel",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CancelAgentExecutionCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExecutionsCancel);
 
+        executions.MapPost("/cancel-queued",async(Guid providerId,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CancelQueuedProviderExecutionsCommand(providerId,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExecutionsCancel);
+
         return app;
     }
 
