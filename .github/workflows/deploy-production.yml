@@ -48,12 +48,12 @@ jobs:
 
           AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
           # Prior successful Agent builds needed considerably less than 1 GiB
-          # of additional root space. Keep a conservative 7 GiB free-space
+          # of additional root space. Keep a conservative 5 GiB free-space
           # floor without ever pruning named Docker volumes or application data.
-          MIN_REQUIRED_KB=$((7 * 1024 * 1024))
+          MIN_REQUIRED_KB=$((5 * 1024 * 1024))
           echo "Root filesystem available: ${AVAILABLE_KB} KiB (minimum: ${MIN_REQUIRED_KB} KiB)"
           if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
-            echo "Insufficient free disk space for Agent Docker build. Need at least 7 GiB free." >&2
+            echo "Insufficient free disk space for Agent Docker build. Need at least 5 GiB free." >&2
             exit 1
           fi
 
