@@ -14,6 +14,7 @@ public sealed class MaerskAuthenticationFailureStateTests
     [DataRow("maersk_authentication_continue_not_clickable")]
     [DataRow("maersk_authentication_callback_timeout")]
     [DataRow("maersk_post_auth_navigation_failed")]
+    [DataRow("maersk_hcaptcha_required")]
     public void AuthenticationFailures_ShouldWaitForAuthentication(string code)
     {
         var method = typeof(AgentExecutionOrchestrator).GetMethod(
