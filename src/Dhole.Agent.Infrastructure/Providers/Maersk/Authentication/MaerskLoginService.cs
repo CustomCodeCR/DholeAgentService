@@ -671,8 +671,20 @@ public sealed class MaerskLoginService
     {
         if (Uri.TryCreate(configuredLoginUrl, UriKind.Absolute, out var configured)
             && (configured.Scheme == Uri.UriSchemeHttp || configured.Scheme == Uri.UriSchemeHttps)
-            && configured.Host.EndsWith("maersk.com", StringComparison.OrdinalIgnoreCase))
+            && (configured.Host.Equals("maersk.com", StringComparison.OrdinalIgnoreCase)
+                || configured.Host.EndsWith(".maersk.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Persisted OIDC URLs embed a one-time nonce and PKCE challenge.
+            // Reusing those URLs on a scheduled run can break the callback.
+            // Start at Maersk's stable login entry point instead.
+            if (configured.AbsolutePath.Contains("/auth/login", StringComparison.OrdinalIgnoreCase)
+                && (configured.Query.Contains("code_challenge=", StringComparison.OrdinalIgnoreCase)
+                    || configured.Query.Contains("nonce=", StringComparison.OrdinalIgnoreCase)
+                    || configured.Query.Contains("state=", StringComparison.OrdinalIgnoreCase)))
+                return LoginUrl;
+
             return configured.ToString();
+        }
 
         return LoginUrl;
     }
