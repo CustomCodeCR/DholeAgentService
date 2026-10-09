@@ -22,6 +22,20 @@ public sealed class MaerskAuthenticationPolicyTests
         Assert.IsFalse(result);
     }
 
+    [DataTestMethod]
+    [DataRow("https://accounts.maersk.com/ocean-maeu/auth/login?nonce=expired&code_challenge=expired")]
+    [DataRow("https://accounts.maersk.com/ocean-maeu/auth/login?state=old")]
+    public void ExpiredOidcLoginUrl_ShouldUseStableEntryPoint(string configuredLoginUrl)
+    {
+        var method = typeof(MaerskLoginService).GetMethod(
+            "ResolveLoginUrl",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.IsNotNull(method);
+        var resolved = (string)method!.Invoke(null, [configuredLoginUrl])!;
+        Assert.AreEqual("https://www.maersk.com/portaluser/login", resolved);
+    }
+
     [TestMethod]
     public void ExplicitWrongPassword_ShouldRemainTerminal()
     {
