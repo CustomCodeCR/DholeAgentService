@@ -65,6 +65,37 @@ public sealed class MaerskAgentProvider(
                 "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
         }
 
+        // Repair is an explicit operator action for expired or damaged local
+        // Chromium state; never run it as a response to provider verification.
+        if (browserProfile?.Status == BrowserProfileStatus.ResetRequested)
+        {
+            if (context.Execution.ExecutionType != AgentExecutionType.Manual)
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_browser_profile_repair_requires_manual_run",
+                    "This browser profile needs an operator-initiated run to complete local session repair.");
+
+            try
+            {
+                // Keep a timestamped backup of the old profile and create a
+                // clean directory before Chromium starts.
+                profiles.ResetStoragePath(ProviderCode, context.Credential.Id);
+                browserProfile.SetStatus(BrowserProfileStatus.LoginRequired);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (IOException ex)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "browser_profile_repair_failed",
+                    $"Could not archive the damaged browser profile: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "browser_profile_repair_failed",
+                    $"Browser profile directory is not writable: {ex.Message}");
+            }
+        }
+
         // Scheduled rate searches must remain unattended. Always let the login
         // service try the existing persistent session first and then the stored
         // credentials. Reserve the 10-minute noVNC wait for an explicit
