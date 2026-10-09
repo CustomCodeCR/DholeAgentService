@@ -123,11 +123,7 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
-            await NavigateToSearchStartAsync(
-                page,
-                plan.SearchUrl,
-                plan.AuthenticationSuccessUrl,
-                cancellationToken);
+            // First search will navigate to /book. Avoid duplicate reload.
 
             if (browserProfile is not null)
             {

@@ -315,7 +315,8 @@ public sealed class AgentExecutionOrchestrator(
            || errorCode.Equals("maersk_authentication_rate_limited", StringComparison.OrdinalIgnoreCase)
            || errorCode.Equals("maersk_authentication_continue_not_clickable", StringComparison.OrdinalIgnoreCase)
            || errorCode.Equals("maersk_authentication_callback_timeout", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_post_auth_navigation_failed", StringComparison.OrdinalIgnoreCase);
+           || errorCode.Equals("maersk_post_auth_navigation_failed", StringComparison.OrdinalIgnoreCase)
+           || errorCode.Equals("maersk_hcaptcha_required", StringComparison.OrdinalIgnoreCase);
 
     private static string? NormalizePersistedJson(string? json)
     {

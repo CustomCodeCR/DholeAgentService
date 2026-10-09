@@ -105,9 +105,32 @@ public sealed class AgentExecutionRepository(ServiceDbContext dbContext)
         => await dbContext.AgentExecutions
             .AsNoTracking()
             .Where(x => x.Status == AgentExecutionStatus.Queued && x.CreatedAtUtc <= utcCutoff)
-            .OrderBy(x => x.CreatedAtUtc)
+            // Explicit user-triggered executions go first, then configured priority.
+            // Automated Maersk backlogs must not starve new manual work.
+            .OrderByDescending(x => x.ExecutionType == AgentExecutionType.Manual)
+            .ThenByDescending(x => x.Priority)
+            .ThenBy(x => x.CreatedAtUtc)
             .Take(Math.Max(1, take))
             .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyCollection<AgentExecution>> GetQueuedByProviderAsync(
+        Guid providerId,
+        int take,
+        CancellationToken cancellationToken = default)
+        => await dbContext.AgentExecutions
+            .Where(x => x.ProviderId == providerId && x.Status == AgentExecutionStatus.Queued)
+            .OrderBy(x => x.CreatedAtUtc)
+            .Take(Math.Clamp(take, 1, 2000))
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> HasOutstandingForScheduleAsync(
+        Guid scheduleId,
+        CancellationToken cancellationToken = default)
+        => dbContext.AgentExecutions.AnyAsync(
+            x => x.ScheduleId == scheduleId &&
+                (x.Status == AgentExecutionStatus.Queued ||
+                 x.Status == AgentExecutionStatus.Running),
+            cancellationToken);
 }
 
 public sealed class AgentResultRepository(ServiceDbContext dbContext)
