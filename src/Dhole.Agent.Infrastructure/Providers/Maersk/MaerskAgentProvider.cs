@@ -175,6 +175,7 @@ public sealed class MaerskAgentProvider(
                     search.Input,
                     plan.SearchUrl,
                     plan.AuthenticationSuccessUrl,
+                    context.Execution.ExecutionType == AgentExecutionType.Manual,
                     cancellationToken);
 
                 if (captured.Status is < 200 or >= 300)
@@ -316,6 +317,7 @@ public sealed class MaerskAgentProvider(
         MaerskSearchInput input,
         string? configuredSearchUrl,
         string? authenticationSuccessUrl,
+        bool allowInteractiveCaptcha,
         CancellationToken cancellationToken)
     {
         Exception? lastUiError = null;
@@ -329,6 +331,7 @@ public sealed class MaerskAgentProvider(
                     input,
                     configuredSearchUrl,
                     authenticationSuccessUrl,
+                    allowInteractiveCaptcha,
                     cancellationToken);
             }
             catch (Exception ex)
@@ -401,6 +404,7 @@ public sealed class MaerskAgentProvider(
         MaerskSearchInput input,
         string? configuredSearchUrl,
         string? authenticationSuccessUrl,
+        bool allowInteractiveCaptcha,
         CancellationToken cancellationToken)
     {
         var searchUrl = ResolveBrowserSearchUrl(configuredSearchUrl);
@@ -432,7 +436,8 @@ public sealed class MaerskAgentProvider(
                 input,
                 cancellationToken,
                 searchUrl,
-                navigateToSearchUrl: false);
+                navigateToSearchUrl: false,
+                allowInteractiveCaptcha: allowInteractiveCaptcha);
 
             var postSubmitTimeout = Task.Delay(
                 TimeSpan.FromSeconds(90),
