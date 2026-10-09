@@ -26,37 +26,6 @@ jobs:
       - name: Checkout Agent
         uses: actions/checkout@v4
 
-      - name: Free runner disk space before Docker builds
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Disk usage before cleanup:"
-          df -h /
-          docker system df || true
-
-          # Safe cleanup only: build cache, stopped containers and unused images.
-          # Named volumes are intentionally never pruned because they contain
-          # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
-          docker builder prune -af || true
-          docker container prune -f --filter "until=24h" || true
-          docker image prune -af --filter "until=168h" || true
-
-          echo "Disk usage after cleanup:"
-          df -h /
-          docker system df || true
-
-          AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
-          # Prior successful Agent builds needed considerably less than 1 GiB
-          # of additional root space. Keep a conservative 5 GiB free-space
-          # floor without ever pruning named Docker volumes or application data.
-          MIN_REQUIRED_KB=$((5 * 1024 * 1024))
-          echo "Root filesystem available: ${AVAILABLE_KB} KiB (minimum: ${MIN_REQUIRED_KB} KiB)"
-          if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
-            echo "Insufficient free disk space for Agent Docker build. Need at least 5 GiB free." >&2
-            exit 1
-          fi
-
       - name: Load Dhole production infrastructure
         shell: bash
         run: |
@@ -195,6 +164,37 @@ jobs:
           SQL
           touch "$SENTINEL"
           echo "Maersk queue recovery completed; execution history preserved."
+
+      - name: Free runner disk space before Docker builds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Disk usage before cleanup:"
+          df -h /
+          docker system df || true
+
+          # Safe cleanup only: build cache, stopped containers and unused images.
+          # Named volumes are intentionally never pruned because they contain
+          # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
+          docker builder prune -af || true
+          docker container prune -f --filter "until=24h" || true
+          docker image prune -af --filter "until=168h" || true
+
+          echo "Disk usage after cleanup:"
+          df -h /
+          docker system df || true
+
+          AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
+          # Prior successful Agent builds needed considerably less than 1 GiB
+          # of additional root space. Keep a conservative 5 GiB free-space
+          # floor without ever pruning named Docker volumes or application data.
+          MIN_REQUIRED_KB=$((5 * 1024 * 1024))
+          echo "Root filesystem available: ${AVAILABLE_KB} KiB (minimum: ${MIN_REQUIRED_KB} KiB)"
+          if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
+            echo "Insufficient free disk space for Agent Docker build. Need at least 5 GiB free." >&2
+            exit 1
+          fi
 
       - name: Ensure local Ollama and production Hermes
         shell: bash
