@@ -47,9 +47,13 @@ jobs:
           docker system df || true
 
           AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
-          MIN_REQUIRED_KB=$((8 * 1024 * 1024))
+          # Prior successful Agent builds needed considerably less than 1 GiB
+          # of additional root space. Keep a conservative 7 GiB free-space
+          # floor without ever pruning named Docker volumes or application data.
+          MIN_REQUIRED_KB=$((7 * 1024 * 1024))
+          echo "Root filesystem available: ${AVAILABLE_KB} KiB (minimum: ${MIN_REQUIRED_KB} KiB)"
           if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
-            echo "Insufficient free disk space for Agent Docker build. Need at least 8 GiB free." >&2
+            echo "Insufficient free disk space for Agent Docker build. Need at least 7 GiB free." >&2
             exit 1
           fi
 
@@ -214,7 +218,21 @@ jobs:
           set -euo pipefail
           SHA_TAG="${GITHUB_SHA::12}"
 
+          # Stop before subsequent image builds if the first build consumed
+          # unexpectedly high space. Protect running services and their data.
+          check_build_headroom() {
+            local available
+            available="$(df -Pk / | awk 'NR==2 {print $4}')"
+            if [ "$available" -lt $((2 * 1024 * 1024)) ]; then
+              echo "Stopping Agent build: less than 2 GiB of root headroom remains." >&2
+              exit 1
+            fi
+          }
+          check_build_headroom
+
           docker build --pull             --target api-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-api:latest             -t "dhole/agent-api:$SHA_TAG"             .
+
+          check_build_headroom
 
           docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
 

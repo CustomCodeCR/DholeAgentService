@@ -24,7 +24,7 @@ public sealed class MaerskEquipmentResolver
 
         return normalized switch
         {
-            "22G1" or "20DV" or "20STD" or "20DRY" or "20DRYSTANDARD"
+            "22G1" or "22DV" or "20DV" or "20STD" or "20DRY" or "20DRYSTANDARD"
                 => TwentyDryStandard,
 
             "42G1" or "40DV" or "40STD" or "40DRY" or "40DRYSTANDARD"
