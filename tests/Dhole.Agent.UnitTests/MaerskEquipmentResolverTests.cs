@@ -1,4 +1,6 @@
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
+using Dhole.Agent.Infrastructure.Providers.Maersk.Browser;
+using System.Reflection;
 
 namespace Dhole.Agent.UnitTests;
 
@@ -7,8 +9,23 @@ public sealed class MaerskEquipmentResolverTests
 {
     private readonly MaerskEquipmentResolver _sut = new();
 
+    [TestMethod]
+    public void Legacy22Dv_ShouldSelectTheMaersk20DvDropdownOption()
+    {
+        var labelMethod = typeof(MaerskBrowserAutomation).GetMethod(
+            "GetEquipmentDisplayLabel", BindingFlags.Static | BindingFlags.NonPublic);
+        var codeMethod = typeof(MaerskBrowserAutomation).GetMethod(
+            "GetEquipmentSearchTerm", BindingFlags.Static | BindingFlags.NonPublic);
+
+        Assert.IsNotNull(labelMethod);
+        Assert.IsNotNull(codeMethod);
+        Assert.AreEqual("20 Dry Standard", labelMethod!.Invoke(null, ["22DV"]));
+        Assert.AreEqual("22G1", codeMethod!.Invoke(null, ["22DV"]));
+    }
+
     [DataTestMethod]
     [DataRow("22G1", MaerskEquipmentResolver.TwentyDryStandard)]
+    [DataRow("22DV", MaerskEquipmentResolver.TwentyDryStandard)]
     [DataRow("20DV", MaerskEquipmentResolver.TwentyDryStandard)]
     [DataRow("20STD", MaerskEquipmentResolver.TwentyDryStandard)]
     [DataRow("42G1", MaerskEquipmentResolver.FortyDryStandard)]
