@@ -159,6 +159,10 @@ public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepo
         var e=await repo.GetByIdAsync(c.Id,ct);
         if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);
 
+        // An authentication request must not discard an explicit pending repair.
+        if(e.Status == BrowserProfileStatus.ResetRequested)
+            return Result.Success();
+
         // Request authentication without discarding a valid persistent session.
         e.SetStatus(BrowserProfileStatus.LoginRequired,c.ActorId);
         await uow.SaveChangesAsync(ct);
