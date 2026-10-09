@@ -65,6 +65,40 @@ public sealed class MaerskAgentProvider(
                 "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
         }
 
+        // An explicit operator reset archives the existing Chromium profile.
+        // Never perform the reset in an unattended scheduled run: a background
+        // execution must not consume the one-time fresh-login request.
+        if (browserProfile?.Status == BrowserProfileStatus.ResetRequested)
+        {
+            if (context.Execution.ExecutionType != AgentExecutionType.Manual)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_browser_profile_reset_requires_manual_run",
+                    "A clean Maersk browser session was requested. Run a manual authentication or search to initialize it; scheduled searches are paused for this profile.");
+            }
+
+            try
+            {
+                // ResetStoragePath moves the existing profile into a timestamped
+                // .stale-* backup before creating the new empty directory.
+                profiles.ResetStoragePath(ProviderCode, context.Credential.Id);
+                browserProfile.SetStatus(BrowserProfileStatus.LoginRequired);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (IOException ex)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_browser_profile_reset_failed",
+                    $"Maersk browser profile could not be archived safely: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_browser_profile_reset_failed",
+                    $"Maersk browser profile reset lacks filesystem permissions: {ex.Message}");
+            }
+        }
+
         // Scheduled rate searches must remain unattended. Always let the login
         // service try the existing persistent session first and then the stored
         // credentials. Reserve the 10-minute noVNC wait for an explicit
