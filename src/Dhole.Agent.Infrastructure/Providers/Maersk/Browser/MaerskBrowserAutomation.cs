@@ -109,12 +109,25 @@ public sealed class MaerskBrowserAutomation
                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
         }
 
-        var commoditySelected = await MaerskShadowDom.SelectTypeaheadOptionAsync(
+        // Prefer a trusted pointer click: synthetic custom-element clicks can
+        // report success before Maersk commits the commodity selection.
+        var commoditySelected = await MaerskShadowDom.ClickVisibleOptionMatchingAsync(
             page,
+            ["mc-c-commodity mc-option", "mc-option", "[role='option']"],
             [input.Commodity],
             cancellationToken,
-            timeoutMs: 4_000,
+            timeoutMs: 6_000,
             exactOnly: true);
+
+        if (!commoditySelected)
+        {
+            commoditySelected = await MaerskShadowDom.SelectTypeaheadOptionAsync(
+                page,
+                [input.Commodity],
+                cancellationToken,
+                timeoutMs: 4_000,
+                exactOnly: true);
+        }
 
         if (!commoditySelected)
         {
@@ -152,14 +165,65 @@ public sealed class MaerskBrowserAutomation
         var equipmentDisplayLabel = GetEquipmentDisplayLabel(input.ContainerType);
         var equipmentCode = GetEquipmentSearchTerm(input.ContainerType);
 
-        // The current Maersk UI renders this as a custom dropdown. The visible
-        // labels are "20 Dry Standard", "40 Dry Standard", "40 Dry High", etc.,
-        // while the committed native value is 20DV/40DV/40HC.
-        await MaerskShadowDom.ClickFirstAsync(
+        // The current Maersk UI renders this as a custom dropdown. It remains
+        // disabled while Maersk resolves the preceding commodity/location fields.
+        // Never click a disabled duplicate input or assume a synthetic commodity
+        // click means the booking form has advanced.
+        var equipmentReady = await MaerskShadowDom.WaitForEnabledAsync(
             page,
             equipmentInputSelectors,
             cancellationToken,
-            timeoutMs: 3_000);
+            timeoutMs: 18_000);
+
+        if (!equipmentReady)
+        {
+            // Recover a commodity typeahead that was visible but not committed.
+            var moved = await MaerskShadowDom.PressFirstAsync(
+                page,
+                commoditySelectors,
+                "ArrowDown",
+                cancellationToken,
+                timeoutMs: 2_000);
+
+            if (moved)
+            {
+                await MaerskShadowDom.PressFirstAsync(
+                    page,
+                    commoditySelectors,
+                    "Enter",
+                    cancellationToken,
+                    timeoutMs: 2_000);
+            }
+
+            equipmentReady = await MaerskShadowDom.WaitForEnabledAsync(
+                page,
+                equipmentInputSelectors,
+                cancellationToken,
+                timeoutMs: 8_000);
+        }
+
+        if (!equipmentReady)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk container selector remained disabled after selecting commodity '{input.Commodity}'. " +
+                $"Verify that origin, destination, CY/CY and commodity are committed. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
+
+        var equipmentOpened = await MaerskShadowDom.ClickFirstAsync(
+            page,
+            equipmentInputSelectors,
+            cancellationToken,
+            timeoutMs: 6_000);
+
+        if (!equipmentOpened)
+        {
+            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
+            throw new InvalidOperationException(
+                $"Maersk container selector became enabled but could not be opened. " +
+                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+        }
 
         var equipmentChosen = await MaerskShadowDom.SelectContainerTypeAsync(
             page,
