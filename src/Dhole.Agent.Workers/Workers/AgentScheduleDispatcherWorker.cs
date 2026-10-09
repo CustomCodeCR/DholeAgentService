@@ -14,6 +14,7 @@ public sealed class AgentScheduleDispatcherWorker(
     IAgentScheduleRepository schedules,
     IAgentExecutionRepository executions,
     IAgentProviderRepository providers,
+    IBrowserProfileRepository browserProfiles,
     IAgentExtractionProfileRepository extractionProfiles,
     IAgentExtractionRouteRepository extractionRoutes,
     IAgentExtractionEquipmentRepository extractionEquipment,
@@ -74,6 +75,27 @@ public sealed class AgentScheduleDispatcherWorker(
             if(effectiveDue.Value>now)continue;
 
             var provider=await GetProviderAsync(schedule.ProviderId,cancellationToken);
+
+            if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+            {
+                var profile = schedule.CredentialId is Guid credentialId
+                    ? await browserProfiles.GetByProviderCredentialAsync(
+                        schedule.ProviderId, credentialId, cancellationToken)
+                    : null;
+                var blocked = profile?.Status == BrowserProfileStatus.Blocked;
+                var outstanding = await executions.HasOutstandingForScheduleAsync(
+                    schedule.Id, cancellationToken);
+                if (blocked || outstanding)
+                {
+                    schedule.MarkDispatched(now, calculator.GetNext(schedule, now));
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    logger.LogWarning(
+                        "MAERSK_SCHEDULE_SKIPPED schedule={ScheduleId} blocked={Blocked} outstanding={Outstanding}",
+                        schedule.Id, blocked, outstanding);
+                    continue;
+                }
+            }
+
             var executionInputJson=provider.Code.Equals("MAERSK",StringComparison.OrdinalIgnoreCase)
                 ? MaerskExecutionDefaults.NormalizeInputJson(schedule.InputJson)
                 : schedule.InputJson;
