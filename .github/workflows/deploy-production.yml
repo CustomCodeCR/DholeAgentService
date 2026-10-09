@@ -143,6 +143,59 @@ jobs:
             echo "Agent database already exists: $DB_NAME"
           fi
 
+      # One-time operational cleanup requested on the tagged hotfix merge.
+      # Preserve every execution record; do not delete rows, profiles or volumes.
+      - name: Release blocked Maersk queue once before builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          SENTINEL="$HOME/.dhole-maersk-queue-released-20261009"
+          if [ -f "$SENTINEL" ]; then
+            echo "Maersk queue cleanup was already completed on this runner."
+            exit 0
+          fi
+          AGENT_CONNECTION="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
+          test -n "$AGENT_CONNECTION"
+
+          connection_value() {
+            printf '%s' "$AGENT_CONNECTION" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
+          }
+
+          DB_HOST="$(connection_value Host)"
+          DB_PORT="$(connection_value Port)"
+          DB_NAME="$(connection_value Database)"
+          DB_USER="$(connection_value Username)"
+          DB_PASSWORD="$(connection_value Password)"
+          DB_HOST="${DB_HOST:-postgres}"
+          DB_PORT="${DB_PORT:-5432}"
+          test -n "$DB_NAME" && test -n "$DB_USER" && test -n "$DB_PASSWORD"
+
+          # Terminate only the Agent worker browser process before closing
+          # orphaned Running rows; do not touch databases or other services.
+          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" \
+            stop -t 30 dhole-agent-workers
+          trap 'docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" up -d --no-deps --pull never dhole-agent-workers || true' EXIT
+
+          docker run --rm -i --network "$DHOLE_NETWORK" -e PGPASSWORD="$DB_PASSWORD" postgres:16-alpine \
+            psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" <<'SQL'
+          BEGIN;
+          UPDATE agent."AgentExecutions"
+          SET status = 'Cancelled', completed_at = NOW()
+          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
+            AND status = 'Queued';
+
+          UPDATE agent."AgentExecutions"
+          SET status = 'Failed',
+              completed_at = NOW(),
+              error_code = 'agent_worker_restarted',
+              error_message = 'Interrupted during controlled Maersk queue recovery; re-run manually.'
+          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
+            AND status = 'Running';
+          COMMIT;
+          SQL
+          touch "$SENTINEL"
+          echo "Maersk queue recovery completed; execution history preserved."
+
       - name: Ensure local Ollama and production Hermes
         shell: bash
         run: |
@@ -265,54 +318,6 @@ jobs:
             fi
             sleep 2
           done
-
-      # One-time operational cleanup requested on the tagged hotfix merge.
-      # Preserve every execution record; do not delete rows, profiles or volumes.
-      - name: Release old Maersk queue on recovery hotfix
-        if: contains(github.event.head_commit.message, '[clear-agent-queue]')
-        shell: bash
-        run: |
-          set -euo pipefail
-          AGENT_CONNECTION="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
-          test -n "$AGENT_CONNECTION"
-
-          connection_value() {
-            printf '%s' "$AGENT_CONNECTION" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
-          }
-
-          DB_HOST="$(connection_value Host)"
-          DB_PORT="$(connection_value Port)"
-          DB_NAME="$(connection_value Database)"
-          DB_USER="$(connection_value Username)"
-          DB_PASSWORD="$(connection_value Password)"
-          DB_HOST="${DB_HOST:-postgres}"
-          DB_PORT="${DB_PORT:-5432}"
-          test -n "$DB_NAME" && test -n "$DB_USER" && test -n "$DB_PASSWORD"
-
-          # Terminate only the Agent worker browser process before closing
-          # orphaned Running rows; do not touch databases or other services.
-          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" \
-            stop -t 30 dhole-agent-workers
-          trap 'docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" up -d --no-deps --pull never dhole-agent-workers || true' EXIT
-
-          docker run --rm -i --network "$DHOLE_NETWORK" -e PGPASSWORD="$DB_PASSWORD" postgres:16-alpine \
-            psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" <<'SQL'
-          BEGIN;
-          UPDATE agent."AgentExecutions"
-          SET status = 'Cancelled', completed_at = NOW()
-          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
-            AND status = 'Queued';
-
-          UPDATE agent."AgentExecutions"
-          SET status = 'Failed',
-              completed_at = NOW(),
-              error_code = 'agent_worker_restarted',
-              error_message = 'Interrupted during controlled Maersk queue recovery; re-run manually.'
-          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
-            AND status = 'Running';
-          COMMIT;
-          SQL
-          echo "Maersk queue recovery completed; execution history preserved."
 
       - name: Deploy Agent workers production
         shell: bash
