@@ -553,16 +553,21 @@ public sealed class MaerskBrowserAutomation
                     timeoutMs: 1_500);
             }
 
-            if (!selected)
-                continue;
-
+            // Maersk can commit the chosen location and close the typeahead
+            // before Playwright sees an option. The input is then canonical
+            // (e.g. "Xiamen (Fujian), China") and the service mode is CY.
+            // Do not discard this valid state just because the click/Enter
+            // fallback did not report success. In that case require the
+            // native input to differ from what we typed, to avoid accepting
+            // an uncommitted value while CY happens to be the default.
             var resolved = await MaerskShadowDom.WaitForResolvedLocationValueAsync(
                 page,
                 componentId,
                 searchTerm,
                 displayValue,
                 cancellationToken,
-                timeoutMs: 5_000);
+                timeoutMs: selected ? 5_000 : 2_500,
+                requireCanonicalized: !selected);
 
             var settled = resolved
                 && await MaerskShadowDom.IsLocationSelectionSettledAsync(
