@@ -159,8 +159,7 @@ public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepo
         var e=await repo.GetByIdAsync(c.Id,ct);
         if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);
 
-        // Request a completely fresh persistent browser session. The worker owns
-        // the browser-profile volume and performs the actual reset on the next run.
+        // Request authentication without discarding a valid persistent session.
         e.SetStatus(BrowserProfileStatus.LoginRequired,c.ActorId);
         await uow.SaveChangesAsync(ct);
         return Result.Success();
