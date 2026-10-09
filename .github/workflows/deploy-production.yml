@@ -165,6 +165,30 @@ jobs:
           touch "$SENTINEL"
           echo "Maersk queue recovery completed; execution history preserved."
 
+      - name: Diagnose Agent execution statuses
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONN="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
+          test -n "$CONN"
+          connection_value() {
+            printf '%s' "$CONN" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
+          }
+          DB_HOST="$(connection_value Host)"
+          DB_PORT="$(connection_value Port)"
+          DB_NAME="$(connection_value Database)"
+          DB_USER="$(connection_value Username)"
+          DB_PASSWORD="$(connection_value Password)"
+          test -n "$DB_NAME" && test -n "$DB_USER" && test -n "$DB_PASSWORD"
+
+          docker run --rm --network "$DHOLE_NETWORK" -e PGPASSWORD="$DB_PASSWORD" postgres:16-alpine \
+            psql -v ON_ERROR_STOP=1 -h "${DB_HOST:-postgres}" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
+            -c 'SELECT p.code AS provider, e.status, COUNT(*) AS executions
+                FROM agent."AgentExecutions" e
+                JOIN agent."AgentProviders" p ON p.id=e.provider_id
+                GROUP BY p.code,e.status
+                ORDER BY p.code,e.status;'
+
       - name: Free runner disk space before Docker builds
         shell: bash
         run: |
