@@ -78,11 +78,11 @@ public sealed class AgentScheduleDispatcherWorker(
 
             if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
             {
-                var profile = schedule.CredentialId is Guid credentialId
+                var browserProfile = schedule.CredentialId is Guid credentialId
                     ? await browserProfiles.GetByProviderCredentialAsync(
                         schedule.ProviderId, credentialId, cancellationToken)
                     : null;
-                var blocked = profile?.Status == BrowserProfileStatus.Blocked;
+                var blocked = browserProfile?.Status == BrowserProfileStatus.Blocked;
                 var outstanding = await executions.HasOutstandingForScheduleAsync(
                     schedule.Id, cancellationToken);
                 if (blocked || outstanding)
