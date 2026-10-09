@@ -285,8 +285,9 @@ public sealed class RunAgentScheduleCommandHandler(
             s.ProviderId,
             s.Id,
             s.CredentialId,
-            AgentExecutionType.Scheduled,
-            0,
+            // A user pressing Run must jump ahead of scheduled backlog.
+            AgentExecutionType.Manual,
+            100,
             inputJson,
             s.MaxRetries+1,
             Guid.NewGuid().ToString("N"),
@@ -337,4 +338,37 @@ public sealed record CancelAgentExecutionCommand(Guid Id,Guid? ActorId):ICommand
 public sealed class CancelAgentExecutionCommandHandler(IAgentExecutionRepository repo,IUnitOfWork uow):ICommandHandler<CancelAgentExecutionCommand,Result>
 {
     public async Task<Result> HandleAsync(CancelAgentExecutionCommand c,CancellationToken ct=default){var e=await repo.GetByIdAsync(c.Id,ct);if(e is null)return Result.Failure(AgentErrors.ExecutionNotFound);e.Cancel(DateTime.UtcNow,c.ActorId);await uow.SaveChangesAsync(ct);return Result.Success();}
+}
+
+public sealed record CancelQueuedProviderExecutionsCommand(Guid ProviderId, Guid? ActorId)
+    : ICommand<Result<int>>;
+
+public sealed class CancelQueuedProviderExecutionsCommandHandler(
+    IAgentExecutionRepository executions,
+    IAgentProviderRepository providers,
+    IUnitOfWork unitOfWork)
+    : ICommandHandler<CancelQueuedProviderExecutionsCommand, Result<int>>
+{
+    public async Task<Result<int>> HandleAsync(
+        CancelQueuedProviderExecutionsCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var provider = await providers.GetByIdAsync(command.ProviderId, cancellationToken);
+        if (provider is null || provider.IsDeleted)
+            return Result.Failure<int>(AgentErrors.ProviderNotFound);
+
+        // Cancel only work that has NOT started. Historical results, failed work,
+        // active browser sessions, and in-flight executions remain untouched.
+        var queued = await executions.GetQueuedByProviderAsync(
+            command.ProviderId, 2000, cancellationToken);
+
+        var cancelledAt = DateTime.UtcNow;
+        foreach (var execution in queued)
+            execution.Cancel(cancelledAt, command.ActorId);
+
+        if (queued.Count > 0)
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result.Success(queued.Count);
+    }
 }
