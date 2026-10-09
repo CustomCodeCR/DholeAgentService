@@ -203,7 +203,8 @@ jobs:
           # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
           docker builder prune -af || true
           docker container prune -f --filter "until=24h" || true
-          docker image prune -af --filter "until=168h" || true
+          # Only unused images are removed; running containers and all named volumes remain intact.
+          docker image prune -af || true
 
           echo "Disk usage after cleanup:"
           df -h /
