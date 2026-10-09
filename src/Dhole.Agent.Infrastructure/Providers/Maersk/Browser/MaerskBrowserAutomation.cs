@@ -746,7 +746,7 @@ public sealed class MaerskBrowserAutomation
 
         return key switch
         {
-            "20DRYSTANDARD20DV" or "22G1" => "20 Dry Standard",
+            "20DRYSTANDARD20DV" or "22G1" or "22DV" or "20DV" => "20 Dry Standard",
             "40DRYSTANDARD40DV" or "42G1" => "40 Dry Standard",
             "40DRYHIGH40HC" or "45G1" => "40 Dry High",
             "45DRYHIGH45HC" or "L5G1" => "45 Dry High",
@@ -771,7 +771,7 @@ public sealed class MaerskBrowserAutomation
 
         return key switch
         {
-            "20DRYSTANDARD20DV" or "22G1" => "22G1",
+            "20DRYSTANDARD20DV" or "22G1" or "22DV" or "20DV" => "22G1",
             "40DRYSTANDARD40DV" or "42G1" => "42G1",
             "40DRYHIGH40HC" or "45G1" => "45G1",
             "45DRYHIGH45HC" or "L5G1" => "L5G1",
