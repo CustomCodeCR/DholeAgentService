@@ -159,28 +159,9 @@ public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepo
         var e=await repo.GetByIdAsync(c.Id,ct);
         if(e is null||e.IsDeleted)return Result.Failure(AgentErrors.BrowserProfileNotFound);
 
-        // Regular re-authentication preserves existing cookies and OIDC data.
-        // A separate explicit reset-session action archives the persisted session.
+        // Request a completely fresh persistent browser session. The worker owns
+        // the browser-profile volume and performs the actual reset on the next run.
         e.SetStatus(BrowserProfileStatus.LoginRequired,c.ActorId);
-        await uow.SaveChangesAsync(ct);
-        return Result.Success();
-    }
-}
-
-public sealed record ResetBrowserProfileSessionCommand(Guid Id,Guid? ActorId):ICommand<Result>;
-public sealed class ResetBrowserProfileSessionCommandHandler(
-    IBrowserProfileRepository repo,
-    IUnitOfWork uow) : ICommandHandler<ResetBrowserProfileSessionCommand,Result>
-{
-    public async Task<Result> HandleAsync(ResetBrowserProfileSessionCommand command,CancellationToken ct=default)
-    {
-        var profile=await repo.GetByIdAsync(command.Id,ct);
-        if(profile is null || profile.IsDeleted)
-            return Result.Failure(AgentErrors.BrowserProfileNotFound);
-
-        // The API does not mount the worker's Chromium volume. Persist intent;
-        // the worker archives the profile only when a new manual run begins.
-        profile.SetStatus(BrowserProfileStatus.ResetRequested,command.ActorId);
         await uow.SaveChangesAsync(ct);
         return Result.Success();
     }
