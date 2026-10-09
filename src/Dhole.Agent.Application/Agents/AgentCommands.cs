@@ -166,6 +166,29 @@ public sealed class AuthenticateBrowserProfileCommandHandler(IBrowserProfileRepo
     }
 }
 
+// An administrator can request repair only for a genuinely expired or broken
+// local browser profile. Interactive provider challenges are not reset here.
+public sealed record RepairBrowserProfileSessionCommand(Guid Id,Guid? ActorId):ICommand<Result>;
+public sealed class RepairBrowserProfileSessionCommandHandler(
+    IBrowserProfileRepository profiles,
+    IUnitOfWork unitOfWork) : ICommandHandler<RepairBrowserProfileSessionCommand,Result>
+{
+    public async Task<Result> HandleAsync(RepairBrowserProfileSessionCommand command,CancellationToken ct=default)
+    {
+        var profile=await profiles.GetByIdAsync(command.Id,ct);
+        if(profile is null || profile.IsDeleted)
+            return Result.Failure(AgentErrors.BrowserProfileNotFound);
+        if(profile.Status is not (BrowserProfileStatus.Expired or BrowserProfileStatus.Error))
+            return Result.Failure(AgentErrors.BrowserProfileRepairNotAllowed);
+
+        // API and worker have different volumes. The worker will archive the
+        // old profile on the next operator-initiated execution.
+        profile.SetStatus(BrowserProfileStatus.ResetRequested,command.ActorId);
+        await unitOfWork.SaveChangesAsync(ct);
+        return Result.Success();
+    }
+}
+
 public sealed record CreateAgentScheduleCommand(string Name,Guid AgentDefinitionId,Guid ProviderId,Guid? CredentialId,Guid? ExtractionProfileId,AgentScheduleType ScheduleType,string? CronExpression,int? IntervalMinutes,DateTime? ExecuteAt,string Timezone,string InputJson,int MaxRetries,int TimeoutSeconds,Guid? ActorId):ICommand<Result<Guid>>;
 public sealed class CreateAgentScheduleCommandHandler(
     IAgentScheduleRepository repo,
