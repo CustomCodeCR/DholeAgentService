@@ -454,10 +454,18 @@ public sealed class MaerskBrowserAutomation
 
                         if (postCaptchaSignal != offerRequestStarted.Task)
                         {
+                            var remainingChallenge = await MaerskShadowDom.ReadInteractiveHcaptchaChallengeAsync(
+                                page,
+                                cancellationToken);
                             var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-                            throw new MaerskAuthenticationException(
-                                "maersk_hcaptcha_required",
-                                $"Maersk did not confirm the hCaptcha verification: Continue did not issue POST /v2/departures/offers. Keep the persistent profile and inspect the challenge via noVNC. " +
+                            if (!string.IsNullOrWhiteSpace(remainingChallenge))
+                            {
+                                throw new MaerskAuthenticationException(
+                                    "maersk_hcaptcha_required",
+                                    $"Maersk still requires interactive hCaptcha verification. URL='{page.Url}'. Challenge='{remainingChallenge}'.");
+                            }
+                            throw new InvalidOperationException(
+                                $"Maersk verification cleared but Continue did not issue POST /v2/departures/offers. " +
                                 $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
                         }
                     }
@@ -521,10 +529,18 @@ public sealed class MaerskBrowserAutomation
 
                             if (postCaptchaSignal != offerRequestStarted.Task)
                             {
+                                var remainingChallenge = await MaerskShadowDom.ReadInteractiveHcaptchaChallengeAsync(
+                                    page,
+                                    cancellationToken);
                                 var postCaptchaDiagnostics = await MaerskShadowDom.DescribeAsync(page);
-                                throw new MaerskAuthenticationException(
-                                    "maersk_hcaptcha_required",
-                                    $"Maersk did not confirm the hCaptcha verification: Continue did not issue POST /v2/departures/offers. Keep the persistent profile and inspect the challenge via noVNC. " +
+                                if (!string.IsNullOrWhiteSpace(remainingChallenge))
+                                {
+                                    throw new MaerskAuthenticationException(
+                                        "maersk_hcaptcha_required",
+                                        $"Maersk still requires interactive hCaptcha verification. URL='{page.Url}'. Challenge='{remainingChallenge}'.");
+                                }
+                                throw new InvalidOperationException(
+                                    $"Maersk verification cleared but Continue did not issue POST /v2/departures/offers. " +
                                     $"URL='{page.Url}'. ShadowDOM diagnostics={postCaptchaDiagnostics}");
                             }
                         }
