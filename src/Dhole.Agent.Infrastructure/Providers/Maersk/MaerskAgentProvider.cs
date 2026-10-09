@@ -123,11 +123,9 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
-            await NavigateToSearchStartAsync(
-                page,
-                plan.SearchUrl,
-                plan.AuthenticationSuccessUrl,
-                cancellationToken);
+            // ExecuteSearchAsync navigates to the booking page before the first
+            // search. Do not reload /book a second time during authentication:
+            // repeated navigation increases session churn and can invalidate UI state.
 
             if (browserProfile is not null)
             {
