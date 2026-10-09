@@ -623,6 +623,13 @@ internal static class MaerskShadowDom
             if (!input || !normalize(input.value))
                 return false;
 
+            // CY is often the default even before a location is selected.
+            // Only recover a missing click/Enter acknowledgement if Maersk
+            // changed the native value into its selected canonical label.
+            if (args.requireCanonicalized
+                && normalize(input.value) === normalize(args.searchTerm))
+                return false;
+
             if (!fuzzyTokensMatch(
                     tokens(args.displayValue),
                     tokens(input.value)))
@@ -2084,7 +2091,8 @@ internal static class MaerskShadowDom
         string searchTerm,
         string displayValue,
         CancellationToken cancellationToken,
-        int timeoutMs = 3_000)
+        int timeoutMs = 3_000,
+        bool requireCanonicalized = false)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
@@ -2102,7 +2110,8 @@ internal static class MaerskShadowDom
                             {
                                 componentId,
                                 searchTerm,
-                                displayValue
+                                displayValue,
+                                requireCanonicalized
                             }))
                         return true;
                 }
