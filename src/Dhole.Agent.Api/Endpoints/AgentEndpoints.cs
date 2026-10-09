@@ -80,7 +80,6 @@ public static class AgentEndpoints
         profiles.MapGet("/{id:guid}",async(Guid id,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetBrowserProfileByIdQuery(id),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesView);
         profiles.MapPost("/",async(CreateBrowserProfileRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateBrowserProfileCommand(r.ProviderId,r.CredentialId,r.Name,r.ProfileKey,r.StoragePath,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
         profiles.MapPost("/{id:guid}/authenticate",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new AuthenticateBrowserProfileCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
-        profiles.MapPost("/{id:guid}/reset-session",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new ResetBrowserProfileSessionCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
         var schedules=root.MapGroup("/schedules");
         schedules.MapGet("/",async(IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<AgentScheduleDto>>.Ok(await d.DispatchAsync(new GetAgentSchedulesQuery(),ct)))).RequireScope(AgentScopeNames.SchedulesView);
