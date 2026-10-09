@@ -1331,7 +1331,8 @@ internal static class MaerskShadowDom
 
                 try
                 {
-                    if (!await candidate.IsVisibleAsync())
+                    if (!await candidate.IsVisibleAsync()
+                        || !await candidate.IsEnabledAsync())
                         continue;
 
                     await action(candidate);
@@ -1394,6 +1395,50 @@ internal static class MaerskShadowDom
                     // Re-resolve on the next polling pass.
                 }
             }
+        }
+
+        return false;
+    }
+
+    public static async Task<bool> WaitForEnabledAsync(
+        IPage page,
+        IReadOnlyCollection<string> selectors,
+        CancellationToken cancellationToken,
+        int timeoutMs = 15_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var frame in page.Frames)
+            {
+                foreach (var selector in selectors)
+                {
+                    try
+                    {
+                        var matches = frame.Locator(selector);
+                        var count = await matches.CountAsync();
+
+                        for (var index = 0; index < count; index++)
+                        {
+                            var candidate = matches.Nth(index);
+                            if (await candidate.IsVisibleAsync()
+                                && await candidate.IsEnabledAsync()
+                                && await candidate.IsEditableAsync())
+                                return true;
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                        // The booking SPA can replace inputs as their enabled
+                        // state changes. Re-query rather than clicking stale nodes.
+                    }
+                }
+            }
+
+            await Task.Delay(200, cancellationToken);
         }
 
         return false;
@@ -1687,6 +1732,12 @@ internal static class MaerskShadowDom
 
                 try
                 {
+                    // A visible Maersk loading card intercepts pointer input even
+                    // when the location option itself is visible and enabled.
+                    // Wait for the overlay to leave instead of force-clicking it.
+                    if (await frame.Locator("mc-card.mc-card--loading:visible").CountAsync() > 0)
+                        continue;
+
                     matches = frame.Locator(
                         $"mc-c-location-servicemode#{componentId} mc-option");
 
@@ -1765,27 +1816,15 @@ internal static class MaerskShadowDom
                     try
                     {
                         await candidate.Locator.ClickAsync(
-                            new LocatorClickOptions { Timeout = 1_750 });
+                            new LocatorClickOptions { Timeout = 2_500 });
 
                         return true;
                     }
                     catch (PlaywrightException)
                     {
-                        try
-                        {
-                            await candidate.Locator.ClickAsync(
-                                new LocatorClickOptions
-                                {
-                                    Timeout = 1_750,
-                                    Force = true
-                                });
-
-                            return true;
-                        }
-                        catch (PlaywrightException)
-                        {
-                            // Try the next matching option.
-                        }
+                        // Maersk may display another loading card after the
+                        // visibility check. Retry once it is actually clickable;
+                        // force-clicking can acknowledge an uncommitted location.
                     }
                 }
             }
