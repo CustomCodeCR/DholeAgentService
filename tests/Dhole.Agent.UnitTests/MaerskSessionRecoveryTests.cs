@@ -84,7 +84,7 @@ public sealed class MaerskSessionRecoveryTests
             var archives = Directory.GetDirectories(
                 Path.GetDirectoryName(after)!,
                 Path.GetFileName(after) + ".stale-*");
-            Assert.HasCount(1, archives);
+            Assert.AreEqual(1, archives.Length);
             Assert.AreEqual("old", File.ReadAllText(Path.Combine(archives[0], "PreviousSessionMarker.txt")));
         }
         finally
@@ -118,7 +118,7 @@ public sealed class MaerskSessionRecoveryTests
             var backups = Directory.GetDirectories(
                 Path.GetDirectoryName(path)!,
                 Path.GetFileName(path) + ".stale-*");
-            Assert.HasCount(1, backups);
+            Assert.AreEqual(1, backups.Length);
             Assert.AreEqual("original", File.ReadAllText(Path.Combine(backups[0], "first")));
         }
         finally
@@ -184,7 +184,7 @@ public sealed class MaerskSessionRecoveryTests
 
     private static MaerskSessionRecoveryOrchestrator CreateRecovery()
         => new(new ImmediateLock(), new BrowserProfileManager(
-            Options.Create(new BrowserOptions { ProfilesPath = TempRoot() })));
+            Options.Create(new BrowserOptions { ProfilesPath = Path.GetTempPath() })));
 
     private static string TempRoot()
     {
