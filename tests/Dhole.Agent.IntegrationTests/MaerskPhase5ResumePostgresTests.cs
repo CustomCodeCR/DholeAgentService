@@ -137,7 +137,7 @@ public sealed class MaerskPhase5ResumePostgresTests
     }
 
     [TestMethod]
-    public async Task ExhaustedAttemptsRemainWaitingAfterVerifiedRecovery()
+    public async Task ExhaustedAttemptsReceiveOneOperatorApprovedAttempt()
     {
         var conn = Connection();
         if (conn is null) return;
@@ -151,12 +151,14 @@ public sealed class MaerskPhase5ResumePostgresTests
             await db.SaveChangesAsync();
             Assert.IsTrue(await Circuit(db).ResetByOperatorAsync(
                 seed.ProviderId, actor, "Verified original browser session after challenge", true));
-            Assert.AreEqual(MaerskResumeOutcome.AttemptsExhausted,
+            Assert.AreEqual(MaerskResumeOutcome.Resumed,
                 await Resume(db).ResumeAsync(seed.ExecutionId, actor,
-                    "Manual operator review requested after verification", true));
-            Assert.AreEqual(AgentExecutionStatus.WaitingForAuthentication,
-                (await db.AgentExecutions.AsNoTracking()
-                    .SingleAsync(x => x.Id == seed.ExecutionId)).Status);
+                    "Human operator granted one attempt after legitimate verification", true));
+            var resumed = await db.AgentExecutions.AsNoTracking()
+                .SingleAsync(x => x.Id == seed.ExecutionId);
+            Assert.AreEqual(AgentExecutionStatus.Queued, resumed.Status);
+            Assert.AreEqual(1, resumed.Attempt);
+            Assert.AreEqual(2, resumed.MaxAttempts);
         }
         finally { await db.Database.EnsureDeletedAsync(); }
     }
