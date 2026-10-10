@@ -1,0 +1,124 @@
+name: Maersk Phase 2 — Guarded Staging Release
+
+on:
+  push:
+    branches:
+      - ops/maersk-phase2-staging-guarded-release-20261010
+    paths:
+      - '.github/workflows/maersk-phase2-staging-guarded.yml'
+      - 'scripts/maersk-phase2-staging-orchestrate.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maersk-phase2-staging-orchestrator-20261010
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 50
+    outputs:
+      backup_dir: ${{ steps.snapshot.outputs.backup_dir }}
+    steps:
+      - name: Checkout DholeAgentService phase 2 sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout corresponding DholeSystem config
+        uses: actions/checkout@v4
+        with:
+          repository: CustomCodeCR/DholeSystem
+          ref: develop
+          path: .dhole-system
+          persist-credentials: false
+      - name: Prepare runtime environment, never echo secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/maersk-phase2-staging-env" >/dev/null
+          test -r "$RUNNER_TEMP/maersk-phase2-staging-env/.env.staging"
+          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/maersk-phase2-staging-env/.env.staging" >> "$GITHUB_ENV"
+      - name: Make durable private staging backup directory without modifying databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image inspect postgres:16-alpine >/dev/null
+          free="$(df -Pk /home | awk 'NR==2 {print $4}')"
+          [[ "$free" =~ ^[0-9]+$ && "$free" -gt 20971520 ]] || { echo 'Less than 20 GB free in /home, backup refused'; exit 1; }
+          docker run --rm --network none --user 0:0 \
+            --mount type=bind,src=/home,dst=/host-home \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            --entrypoint /bin/sh postgres:16-alpine -ec '
+              set -eu
+              target=/host-home/dhole-agent-phase2-backups
+              mkdir -p "$target"
+              chown "$HOST_UID:$HOST_GID" "$target"
+              chmod 0700 "$target"
+            '
+          test -w /home/dhole-agent-phase2-backups
+      - name: Snapshot staging PostgreSQL and persistent browser/key volumes
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          project=dhole-staging
+          ids="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=dhole-agent-workers)"
+          [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -le 1 ]] || { echo 'Multiple staging workers; refuse snapshot'; exit 1; }
+          restarted=0
+          cleanup() {
+            if [[ "$restarted" = 1 && -n "$ids" ]]; then
+              docker start "$ids" >/dev/null || echo 'WARNING: staging worker restart failed' >&2
+            fi
+          }
+          trap cleanup EXIT
+          if [[ -n "$ids" ]]; then
+            docker stop --time 60 "$ids" >/dev/null
+            restarted=1
+          fi
+          bash scripts/maersk-phase8-backup.sh staging /home/dhole-agent-phase2-backups
+      - name: Verify backup checksum, metadata and protected first-rollout flags
+        shell: bash
+        env:
+          BACKUP_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-preflight.sh staging "$BACKUP_DIR" "$DHOLE_ENV_FILE"
+      - name: Isolated PostgreSQL restore drill, never target live database
+        shell: bash
+        env:
+          BACKUP_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-restore-drill.sh "$BACKUP_DIR"
+      - name: Backup evidence
+        shell: bash
+        env:
+          BACKUP_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          echo "PHASE2_VERIFIED_STAGING_BACKUP=$BACKUP_DIR"
+          echo 'PHASE2_BACKUP_AND_ISOLATED_RESTORE=PASS'
+  deploy_and_activate:
+    needs: [snapshot]
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout guarded workflow orchestrator
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Dispatch and await existing protected staging deploy, then protected activation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE2_BACKUP_DIR: ${{ needs.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/maersk-phase2-staging-orchestrate.py
+          python3 scripts/maersk-phase2-staging-orchestrate.py
+
+# Retry only after CI-validated PostgreSQL 17 backup fix.
