@@ -211,13 +211,13 @@ jobs:
           df -h /
           docker system df || true
 
-          # Safe cleanup only: build cache, stopped containers and unused images.
+          # Safe cleanup only: build cache, stopped containers and dangling image layers.
           # Named volumes are intentionally never pruned because they contain
           # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
           docker builder prune -af || true
           docker container prune -f --filter "until=24h" || true
-          # Only unused images are removed; running containers and all named volumes remain intact.
-          docker image prune -af || true
+          # Preserve *tagged* rollback images; remove only dangling build layers.
+          docker image prune -f || true
 
           echo "Disk usage after cleanup:"
           df -h /
@@ -301,6 +301,13 @@ jobs:
 
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" config -q
 
+      - name: Protect previous Agent images for rollback
+        id: capture_images
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-image-rollback.sh capture production
+
       - name: Build Agent images
         shell: bash
         env:
@@ -326,6 +333,10 @@ jobs:
           check_build_headroom
 
           docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
+
+      - name: Mark phase 8 deployment started
+        shell: bash
+        run: bash scripts/maersk-phase8-image-rollback.sh mark-deploy production
 
       - name: Deploy Agent API production
         shell: bash
@@ -390,6 +401,11 @@ jobs:
           echo "Agent worker is running but queue pump did not start." >&2
           docker logs --tail 300 "$CONTAINER_ID" || true
           exit 1
+
+      - name: Restore previous Agent images on failed deployment
+        if: ${{ failure() && steps.capture_images.outcome == 'success' }}
+        shell: bash
+        run: bash scripts/maersk-phase8-image-rollback.sh restore production
 
       - name: Cleanup Docker build cache
         if: always()
