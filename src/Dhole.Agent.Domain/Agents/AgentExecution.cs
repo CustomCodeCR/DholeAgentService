@@ -43,6 +43,7 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
     public long? DurationMs { get; private set; }
     public int Attempt { get; private set; }
     public int MaxAttempts { get; private set; }
+    public DateTime? NextAttemptAtUtc { get; private set; }
     public string? ErrorCode { get; private set; }
     public string? ErrorMessage { get; private set; }
     public string CorrelationId { get; private set; } = string.Empty;
@@ -84,13 +85,37 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
     {
         if (Status is not (AgentExecutionStatus.Pending or AgentExecutionStatus.Queued or AgentExecutionStatus.WaitingForAuthentication))
             throw new InvalidOperationException($"Execution cannot start from {Status}.");
+        // Human-authorized resumption after verification is distinct from an
+        // automated technical retry. The dispatcher never polls WaitingForAuthentication.
+        if (Status != AgentExecutionStatus.WaitingForAuthentication && Attempt >= MaxAttempts)
+            throw new InvalidOperationException("Execution has exhausted MaxAttempts.");
         Status = AgentExecutionStatus.Running;
         StartedAt = startedAt;
+        NextAttemptAtUtc = null;
         Attempt++;
         ErrorCode = null;
         ErrorMessage = null;
         MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
         AddDomainEvent(new AgentExecutionStartedDomainEvent(Id, ProviderId, startedAt, Attempt));
+    }
+
+    /// <summary>
+    /// Reuse the exact execution id, input and correlation for bounded technical
+    /// retry. Provider verification, rate limits and business errors must never
+    /// call this method.
+    /// </summary>
+    public void QueueTransientRetry(string errorCode, string errorMessage, DateTime retryAtUtc)
+    {
+        if (Status != AgentExecutionStatus.Running || Attempt >= MaxAttempts)
+            throw new InvalidOperationException("Execution is not eligible for a bounded retry.");
+        if (retryAtUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Retry time must be UTC.", nameof(retryAtUtc));
+
+        Status = AgentExecutionStatus.Queued;
+        NextAttemptAtUtc = retryAtUtc;
+        ErrorCode = Required(errorCode);
+        ErrorMessage = Required(errorMessage);
+        MarkAsUpdated(DateTime.UtcNow, null);
     }
 
     public void WaitForAuthentication(
