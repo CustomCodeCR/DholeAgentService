@@ -17,6 +17,10 @@ El circuito detiene nuevas ejecuciones cuando el proveedor presenta CAPTCHA, MFA
 
 Un `Open` por CAPTCHA o una restricción del proveedor **permanece abierto aunque `open_until_utc` haya pasado**. Una ejecución exitosa anterior o ajena al probe no puede cerrar un `Open` con `requires_operator=true`.
 
+### Cronogramas suspendidos
+
+Si Maersk está bloqueado por CAPTCHA/403/429, un cron o un trabajo anterior en `Queued`, `Running` o `WaitingForAuthentication` no crea otra ejecución. El despachador **no llama a `MarkDispatched`** al omitirla: conserva `NextExecutionAt`, `LastExecutionAt` y el estado activo de las programaciones `Once`. Cuando se reanuda un acceso legítimo, se despacha **una sola** ejecución pendiente por programación; no se reconstruyen todos los intervalos omitidos. El resultado ya en espera permanece intacto, sin reset de perfil ni cambio de ambiente.
+
 ### Persistencia y auditoría
 Migración `20261010020000_AddMaerskCircuitBreaker`:
 - `agent.maersk_circuits`: una fila por `provider_id`, con estado, motivo estructurado, contador, cooldown, bloqueo por operador e identificador de probe.
@@ -34,7 +38,7 @@ Estos endpoints usan autorización existente:
   "verifiedWithProvider": true
 }
 ```
-Solo un usuario autenticado puede resetear, y queda un evento auditado. La confirmación explícita implica que el operador realmente verificó el acceso legítimo en el navegador original, por ejemplo a través de noVNC. El API no resuelve CAPTCHA ni intenta evitarlo; la confirmación del operador no se puede sustituir por cron o cooldown.
+Solo un usuario autenticado puede resetear, y queda un evento auditado. La confirmación explícita implica que el operador realmente verificó el acceso legítimo en el navegador original, por ejemplo a través de noVNC. **La simple declaración no basta:** cuando `requires_operator=true`, el backend exige que un perfil activo del mismo proveedor tenga `Status=Authenticated` y `LastLoginAt` posterior a la apertura del circuito, sin expiración, y que no quede ningún perfil activo en `Blocked`, `Expired` o `ResetRequested`. No se permite reset mientras haya ejecuciones `Running`, incluso antiguas sin lease. Si el estado del perfil no refleja aún el login verificado, se debe completar primero el flujo de autenticación autorizado, **no** alterar manualmente fechas ni estados. El API no resuelve CAPTCHA ni intenta evitarlo; la confirmación del operador no se puede sustituir por cron o cooldown. La evidencia de perfil es una comprobación de estado registrado, no una consulta en vivo al proveedor; confirmar que el navegador es realmente utilizable sigue siendo responsabilidad del flujo legítimo de verificación.
 
 Si el `BrowserProfile` aún está `Blocked`, también se debe corregir legítimamente ese estado mediante el flujo normal de autenticación antes de ejecutar búsquedas. Resetear el circuito **no** borra ni modifica el perfil. No reanudar sin una verificación real.
 
