@@ -37,3 +37,10 @@ public sealed record MaerskOperationsDto(
     IReadOnlyCollection<MaerskOperationExecutionDto> Executions,
     IReadOnlyCollection<MaerskOperationEventDto> Events,
     MaerskHealthSnapshotDto Monitoring);
+
+public sealed record MaerskProfileHealthDto(
+    string Environment, Guid ProviderId, Guid ProfileId, string ProfileName,
+    string ProfileStatus, bool IsActive, string CircuitState, bool RequiresOperator,
+    string? ErrorCode, DateTime? LastLoginAt, DateTime? LastUsedAt,
+    DateTime? SessionExpiresAt, DateTime? LastSuccessAtUtc,
+    int Queued, int Running, int WaitingForAuthentication, string NextAction);
