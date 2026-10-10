@@ -1,0 +1,66 @@
+name: Diagnose Maersk Phase 2 Isolated Restore
+
+on:
+  push:
+    branches:
+      - ops/maersk-phase2-staging-guarded-release-20261010
+    paths:
+      - '.github/workflows/maersk-phase2-restore-diagnostic.yml'
+
+permissions:
+  contents: read
+jobs:
+  isolate:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - name: Restore existing snapshot in disposable network-isolated PostgreSQL 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          backup=/home/dhole-agent-phase2-backups/staging/20261010T154831Z
+          test -r "$backup/agent.dump"
+          name="maersk-restore-diagnostic-$GITHUB_RUN_ID"
+          log="$(mktemp)"
+          chmod 600 "$log"
+          cleanup() { docker rm -f -v "$name" >/dev/null 2>&1 || true; rm -f "$log"; }
+          trap cleanup EXIT
+          password="$(openssl rand -hex 24)"
+          docker run -d --name "$name" --network none \
+            --mount "type=bind,src=$backup,dst=/backup,readonly" \
+            -e POSTGRES_PASSWORD="$password" postgres:17-alpine >/dev/null
+          ready=false
+          for attempt in $(seq 1 50); do
+            if docker exec "$name" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=true; break; fi
+            sleep 1
+          done
+          [[ "$ready" == true ]] || { echo 'RESTORE_DIAG=POSTGRES_START_FAILED'; exit 1; }
+          if docker exec "$name" pg_restore --no-owner --no-acl \
+              --exit-on-error --single-transaction -U postgres -d postgres \
+              /backup/agent.dump > "$log" 2>&1; then
+            echo 'ISOLATED_RESTORE_RESULT=SUCCESS'
+            exit 0
+          fi
+          python3 - "$log" <<'PY'
+          import pathlib,re,sys
+          data=pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          rules=[
+            ("EXTENSION_NOT_INSTALLED",r"extension .*not available|extension control file"),
+            ("MISSING_ROLE",r"role .*does not exist"),
+            ("SCHEMA_ALREADY_EXISTS",r"already exists"),
+            ("PERMISSION_ERROR",r"permission denied|must be owner"),
+            ("UNSUPPORTED_SQL",r"unrecognized configuration parameter|syntax error"),
+            ("MISSING_DEPENDENCY",r"does not exist|undefined"),
+            ("DUPLICATE_OBJECT",r"duplicate key|unique constraint"),
+            ("DATABASE_CONNECTION",r"connection.*(lost|refused|failure)"),
+            ("RESTORE_CONFLICT",r"could not execute query"),
+            ("UNCLASSIFIED",r"."),
+          ]
+          category=next(name for name,pattern in rules if re.search(pattern,data,re.I|re.S))
+          print("ISOLATED_RESTORE_RESULT=FAILED")
+          print("ISOLATED_RESTORE_CATEGORY="+category)
+          print("ISOLATED_RESTORE_HAS_SQL_ERROR="+str("ERROR:" in data).lower())
+          print("ISOLATED_RESTORE_HAS_FATAL_ERROR="+str("FATAL:" in data).lower())
+          PY
+          exit 1
