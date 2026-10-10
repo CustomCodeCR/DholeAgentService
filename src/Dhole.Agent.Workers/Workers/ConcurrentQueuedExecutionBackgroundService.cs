@@ -175,8 +175,22 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
                 try
                 {
                     using var releaseScope = scopes.CreateScope();
-                    await releaseScope.ServiceProvider.GetRequiredService<IAgentQueueLeaseStore>()
-                        .ReleaseAsync(scopeKey, executionId, ownerId, CancellationToken.None);
+                    var repository = releaseScope.ServiceProvider.GetRequiredService<IAgentExecutionRepository>();
+                    var state = await repository.GetByIdAsync(executionId, CancellationToken.None);
+                    // Cancellation or timeout can leave a Running row after the
+                    // orchestration stops. Keep its lease for expiration-based
+                    // reconciliation, never erase the ownership evidence here.
+                    if (state?.Status != AgentExecutionStatus.Running)
+                    {
+                        await releaseScope.ServiceProvider.GetRequiredService<IAgentQueueLeaseStore>()
+                            .ReleaseAsync(scopeKey, executionId, ownerId, CancellationToken.None);
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "AGENT_QUEUE_INTERRUPTED_AWAITING_LEASE_EXPIRY execution={ExecutionId}",
+                            executionId);
+                    }
                 }
                 catch (Exception ex)
                 {
