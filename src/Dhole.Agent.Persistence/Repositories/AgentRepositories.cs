@@ -115,6 +115,72 @@ public sealed class AgentExecutionRepository(ServiceDbContext dbContext)
             .Take(Math.Max(1, take))
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyCollection<AgentExecution>> GetDispatchCandidatesAsync(
+        DateTime utcCutoff, int take, CancellationToken cancellationToken = default)
+    {
+        var size = Math.Clamp(take, 4, 250);
+        var ready = dbContext.AgentExecutions.AsNoTracking()
+            .Where(x => x.Status == AgentExecutionStatus.Queued
+                && x.Attempt < x.MaxAttempts
+                && x.CreatedAtUtc <= utcCutoff
+                && (x.NextAttemptAtUtc == null || x.NextAttemptAtUtc <= utcCutoff));
+
+        // Separate independent subqueries ensure a large Maersk backlog or
+        // continuous manual submissions cannot hide other providers/cron.
+        var manual = await ready
+            .Where(x => x.ExecutionType == AgentExecutionType.Manual)
+            .OrderByDescending(x => x.Priority).ThenBy(x => x.CreatedAtUtc)
+            .Take(size).ToListAsync(cancellationToken);
+
+        var scheduled = await ready
+            .Where(x => x.ExecutionType != AgentExecutionType.Manual)
+            .OrderByDescending(x => x.Priority).ThenBy(x => x.CreatedAtUtc)
+            .Take(size).ToListAsync(cancellationToken);
+
+        var otherProviders = await ready
+            .Where(x => dbContext.AgentProviders.Any(p =>
+                p.Id == x.ProviderId && p.Code != "MAERSK"))
+            .OrderByDescending(x => x.Priority).ThenBy(x => x.CreatedAtUtc)
+            .Take(size).ToListAsync(cancellationToken);
+
+        var seen = new HashSet<Guid>();
+        var result = new List<AgentExecution>(size);
+        var index = 0;
+        while (result.Count < size && (index < manual.Count || index < scheduled.Count))
+        {
+            // Three user-driven executions followed by one non-manual task:
+            // preference without starvation.
+            for (var i = 0; i < 3 && result.Count < size && index * 3 + i < manual.Count; i++)
+            {
+                var item = manual[index * 3 + i];
+                if (seen.Add(item.Id)) result.Add(item);
+            }
+            if (index < scheduled.Count && result.Count < size)
+            {
+                var item = scheduled[index];
+                if (seen.Add(item.Id)) result.Add(item);
+            }
+            index++;
+        }
+
+        // Reserve visibility for providers unrelated to Maersk even when all
+        // first-page candidates happen to use a blocked Maersk profile.
+        foreach (var item in otherProviders)
+        {
+            if (seen.Contains(item.Id)) continue;
+            if (result.Count >= size)
+            {
+                var replaceIndex = result.FindLastIndex(x => !otherProviders.Any(o => o.Id == x.Id));
+                if (replaceIndex < 0) break;
+                seen.Remove(result[replaceIndex].Id);
+                result.RemoveAt(replaceIndex);
+            }
+            if (seen.Add(item.Id)) result.Add(item);
+            if (result.Count >= size) break;
+        }
+        return result;
+    }
+
     public async Task<IReadOnlyCollection<AgentExecution>> GetQueuedByProviderAsync(
         Guid providerId,
         int take,
