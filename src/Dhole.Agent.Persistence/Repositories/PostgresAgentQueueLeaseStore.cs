@@ -114,7 +114,7 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
                 completed_at = NOW(),
                 updated_at_utc = NOW()
             WHERE e.status = 'Running'
-              AND e.started_at < NOW() - INTERVAL '12 hours'
+              AND COALESCE(e.started_at, e.created_at_utc) < NOW() - INTERVAL '12 hours'
               AND NOT EXISTS (
                   SELECT 1 FROM agent.execution_leases l WHERE l.execution_id = e.id
               )
