@@ -10,6 +10,16 @@ La fase 5 expone información útil de la cola y del circuito de fases 3/4 en Dh
 - El endpoint preexistente de fase 4 `POST /api/agents/maersk-circuit/{providerId}/reset` permanece protegido por `agent.browser-profiles.authenticate`. Requiere `reason` de 12–1000 caracteres, `verifiedWithProvider=true`, usuario autenticado, proveedor MAERSK y ausencia de ejecuciones activas incompatibles. La auditoría identifica al actor.
 - No se agrega una API para borrar perfiles o forzar eludir una restricción. La reparación técnica legítima continúa por el flujo ya existente `/api/agents/browser-profiles/{id}/repair-session`.
 
+
+### Perfil individual y cola recuperable
+
+- `GET /api/agents/maersk/profiles/{profileId}/health` requiere ambos scopes de lectura. Responde solo con ambiente, código estructurado de error, estado de circuito y perfil, último éxito, sesiones en cola/ejecución/espera y una **acción siguiente segura**. No consulta Maersk, no lee `storagePath` y no acredita por sí mismo que la web del proveedor esté accesible.
+- `GET /api/agents/maersk/executions/waiting?take=50` requiere ambos scopes de lectura, se limita a MAERSK y a 100 filas por consulta, y devuelve datos redactados sin `inputJson`, prompts ni credenciales.
+- `POST /api/agents/maersk/executions/{executionId}/resume` requiere **ambos** `agent.browser-profiles.authenticate` y `agent.executions.create`, razón entre 12 y 500 caracteres y `verifiedWithProvider=true`. Solo acepta `WaitingForAuthentication`, circuito persistido `Closed`, sesión `Authenticated` del **mismo credentialId** con login posterior al último evento `Opened`, sin perfil bloqueado/expirado y sin otra ejecución Maersk en `Queued` o `Running`.
+- El endpoint registra `OperatorResume` con actor, fecha, ID original e incidente; reencola la misma ejecución sin crear `AgentExecution` nuevo. No hay alternancia de IP/sesión, ni reseteo de cookies, ni solución automática de CAPTCHA. Una segunda pulsación sobre el mismo trabajo en `Queued` responde `alreadyQueued=true` y no añade auditoría. Si el límite de intentos estaba agotado, únicamente este acto humano concede **un intento adicional** al mismo ID.
+- El bloqueo de fila del circuito serializa los permisos de reanudación para no liberar masivamente la cola. La cola duradera del Worker sigue siendo responsable de reclamar y ejecutar tareas; ningún endpoint arranca Playwright.
+- La ventana de noVNC/SSH debe seguir siendo **interna**, sin publicar una URL ni secretos en esta API o DholeWeb; el operador debe validar legítimamente al proveedor y pasar por el procedimiento de autenticación ya existente. `Authenticated` es una **evidencia registrada** y no una verificación de red en tiempo real.
+
 ### DholeWeb
 - Ruta `/agents/maersk`: estados Closed/Open/HalfOpen, cola (Queued/Running/WaitingForAuthentication/Completed/Failed), perfiles, incidentes, ejecuciones recientes y acceso a sus pantallas de detalle.
 - Navegación desde Monitorización y Configuración avanzada de Agents.

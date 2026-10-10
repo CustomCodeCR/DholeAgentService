@@ -137,6 +137,7 @@ public static class AgentEndpoints
         executions.MapPost("/cancel-queued",async(Guid providerId,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CancelQueuedProviderExecutionsCommand(providerId,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.ExecutionsCancel);
 
         root.MapMaerskOperationsEndpoints();
+        root.MapMaerskRecoveryEndpoints();
 
         return app;
     }

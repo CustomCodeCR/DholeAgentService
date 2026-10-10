@@ -157,6 +157,25 @@ jobs:
             }
           done
 
+      - name: Phase 5 verified recovery and idempotent resume acceptance
+        env:
+          AGENT_QUEUE_POSTGRES_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres"
+        run: |
+          set -euo pipefail
+          dotnet test tests/Dhole.Agent.IntegrationTests/Dhole.Agent.IntegrationTests.csproj \
+            --configuration Release --no-build --no-restore \
+            --filter "FullyQualifiedName~MaerskPhase5ResumePostgresTests" \
+            --logger "console;verbosity=normal" | tee /tmp/maersk-phase5-acceptance.log
+          for scenario in \
+            ResumeRejectsAttestationWithoutFreshSessionAndOpenCircuit \
+            ResumeIsIdempotentAuditedAndPreservesOriginalIdentifiers \
+            ExhaustedAttemptsReceiveOneOperatorApprovedAttempt; do
+            grep -F "Passed ${scenario}" /tmp/maersk-phase5-acceptance.log || {
+              echo "Phase 5 mandatory PostgreSQL scenario missing, failed or skipped: $scenario" >&2
+              exit 1
+            }
+          done
+
       - name: Phase 8 guarded rollout regression tests
         run: |
           set -euo pipefail
