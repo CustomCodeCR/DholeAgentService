@@ -106,4 +106,22 @@ jobs:
             fi
           done < <(find /opt/dhole /home/Argos /var/backups -maxdepth 7 -type f -name SHA256SUMS -print 2>/dev/null || true)
           echo "RECENT_BACKUP_MANIFEST_COUNT=$backup_count"
+          # Collect only type names, never raw logs, URLs, cookies or exception text.
+          worker_id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers" | head -n1)"
+          if [[ -n "$worker_id" ]]; then
+            docker inspect --format '{{.State.ExitCode}}' "$worker_id" | sed 's/^/WORKER_LAST_EXIT_CODE=/'
+            docker logs --tail 350 "$worker_id" 2>&1 | python3 -c '
+import re,sys
+data=sys.stdin.read()
+types=re.findall(r"\\b(?:System|Microsoft|Npgsql|Dhole|Autofac)\\.[A-Za-z0-9_.]*(?:Exception|Error)\\b",data)
+for t in list(dict.fromkeys(types))[-12:]:
+ print("WORKER_EXCEPTION_TYPE="+t)
+print("WORKER_LOG_SAMPLED=true")
+'
+          fi
+          for path in /home/Argos /opt/dhole; do
+            df -Pk "$path" | awk -v label="$path" 'NR==2 {print "DISK_FREE_KB_" label "=" $4}'
+          done
+          docker volume inspect dhole-staging_agent-browser-profiles >/dev/null 2>&1 && echo PROFILE_VOLUME_EXISTS=true || echo PROFILE_VOLUME_EXISTS=false
+          docker volume inspect dhole-staging_agent-data-protection-keys >/dev/null 2>&1 && echo KEYS_VOLUME_EXISTS=true || echo KEYS_VOLUME_EXISTS=false
           echo 'PHASE2_STAGING_PREFLIGHT_READONLY_COMPLETE'
