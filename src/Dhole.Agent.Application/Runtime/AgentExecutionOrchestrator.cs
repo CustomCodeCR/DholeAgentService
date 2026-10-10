@@ -6,6 +6,7 @@ using Dhole.Agent.Application.Agents;
 using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Dhole.Agent.Application.Runtime;
 
@@ -24,6 +25,7 @@ public sealed class AgentExecutionOrchestrator(
     IAgentResultRepository results,
     IAgentProviderResolver providerResolver,
     IUnitOfWork unitOfWork,
+    IOptions<AgentQueueOptions> queueOptions,
     ILogger<AgentExecutionOrchestrator> logger):IAgentExecutionOrchestrator
 {
     public async Task ExecuteAsync(Guid executionId,CancellationToken cancellationToken=default)
@@ -187,6 +189,32 @@ public sealed class AgentExecutionOrchestrator(
                     return;
                 }
 
+                // Only bounded, explicitly classified technical failures
+                // can return to PostgreSQL's queue with the same execution id.
+                // CAPTCHA, 403, 429, UI timeouts and aggregate failures never
+                // cause automated profile/session changes or blind replay.
+                if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
+                    && queueOptions.Value.ConcurrentDispatcherEnabled)
+                {
+                    var policy = MaerskFailureClassifier.Classify(failureCode);
+                    var transientRetryLimit = Math.Min(
+                        execution.MaxAttempts - 1, queueOptions.Value.MaxTransientRetries);
+
+                    if (policy.CanRetry && !policy.RequiresOperator
+                        && execution.Attempt <= transientRetryLimit)
+                    {
+                        var delay = queueOptions.Value.RetryDelayForAttempt(execution.Attempt);
+                        execution.QueueTransientRetry(
+                            policy.CanonicalErrorCode, failureMessage,
+                            DateTime.UtcNow.AddSeconds(delay));
+                        await unitOfWork.SaveChangesAsync(cancellationToken);
+                        logger.LogWarning(
+                            "AGENT_QUEUE_TRANSIENT_BACKOFF execution={ExecutionId} attempt={Attempt} delaySeconds={Delay} code={Code}",
+                            execution.Id, execution.Attempt, delay, policy.CanonicalErrorCode);
+                        return;
+                    }
+                }
+
                 execution.Fail(
                     failureCode,
                     failureMessage,
@@ -222,6 +250,13 @@ public sealed class AgentExecutionOrchestrator(
                 result.PartiallyCompleted);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Do not write a stale completion when the lease has been lost.
+            // PostgreSQL recovery will mark an abandoned Running job as
+            // interrupted without replaying external side effects.
+            throw;
         }
         catch(Exception ex) when(execution.Status is not AgentExecutionStatus.Completed and not AgentExecutionStatus.Cancelled)
         {
