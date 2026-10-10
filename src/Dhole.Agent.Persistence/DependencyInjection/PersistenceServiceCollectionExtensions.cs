@@ -26,6 +26,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IBrowserProfileRepository, BrowserProfileRepository>();
         services.AddScoped<IAgentScheduleRepository, AgentScheduleRepository>();
         services.AddScoped<IAgentExecutionRepository, AgentExecutionRepository>();
+        services.AddScoped<Dhole.Agent.Application.Abstractions.Runtime.IAgentQueueLeaseStore, PostgresAgentQueueLeaseStore>();
         services.AddScoped<IAgentResultRepository, AgentResultRepository>();
 
         return services;
