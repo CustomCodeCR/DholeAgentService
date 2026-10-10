@@ -17,6 +17,10 @@ elif [[ "$1" == inspect && "${*: -1}" == "previous-api-container" ]]; then
   echo sha256:existing-api
 elif [[ "$1" == inspect && "${*: -1}" == "previous-worker-container" ]]; then
   echo sha256:existing-worker
+elif [[ "$1" == container && "$2" == inspect ]]; then
+  [[ "${MOCK_RESTORE_EXISTS:-true}" == true ]] || exit 1
+elif [[ "$1" == exec && "$*" == *" psql -At "* ]]; then
+  echo 3
 fi
 MOCK
 chmod +x "$fixture/bin/docker"
@@ -64,5 +68,21 @@ for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/work
     exit 1
   fi
 done
+
+# A second/overlapping restore run must never delete a container it does
+# not own. Conversely, a newly created drill container must be removed.
+touch "$fixture/agent.dump"
+export MOCK_RESTORE_EXISTS=true
+if bash "$repo/scripts/maersk-phase8-restore-drill.sh" "$fixture" >/dev/null 2>&1; then
+  echo "Restore drill unexpectedly reused an existing container" >&2
+  exit 1
+fi
+if grep -Fq 'rm -f -v dhole-phase8-restore-9876543' "$DOCKER_MOCK_LOG"; then
+  echo "Restore drill removed a container owned by another run" >&2
+  exit 1
+fi
+export MOCK_RESTORE_EXISTS=false
+bash "$repo/scripts/maersk-phase8-restore-drill.sh" "$fixture"
+grep -Fq 'rm -f -v dhole-phase8-restore-9876543' "$DOCKER_MOCK_LOG"
 
 echo "Phase 8 image capture, rollback and guarded workflow regressions passed."
