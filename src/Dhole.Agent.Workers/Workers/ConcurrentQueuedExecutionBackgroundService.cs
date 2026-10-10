@@ -100,9 +100,14 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
             if (isMaersk && _active.Values.Count(x => x.IsMaersk) >= _options.MaxConcurrentMaersk)
                 continue;
 
+            // Shared browser profiles are serialized across all workers.
             var scopeKey = isMaersk
                 ? $"maersk:{execution.ProviderId:N}"
-                : $"execution:{execution.Id:N}";
+                : execution.CredentialId is Guid credentialId
+                    ? $"profile:{execution.ProviderId:N}:{credentialId:N}"
+                    : execution.ExtractionProfileId is Guid profileId
+                        ? $"profile:{execution.ProviderId:N}:{profileId:N}"
+                        : $"execution:{execution.Id:N}";
 
             // Do not await provider/browser work inside this loop.
             _active.Add(execution.Id, new ActiveTask(
