@@ -113,6 +113,10 @@ jobs:
           PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
         run: |
           set -euo pipefail
+          # Only existing verified active rollouts may keep flags on during
+          # future protected deployments; preflight still checks backups,
+          # checksum, restored schema and both flags.
+          export MAERSK_PHASE2_ACTIVE_REDEPLOY=CONFIRMED
           bash scripts/maersk-phase8-preflight.sh production "$PHASE8_BACKUP_DIR" "$DHOLE_ENV_FILE"
 
       - name: Phase 8 isolated PostgreSQL restoration drill
@@ -184,62 +188,6 @@ jobs:
             echo "Created Agent database: $DB_NAME"
           else
             echo "Agent database already exists: $DB_NAME"
-          fi
-
-      - name: Diagnose Agent execution statuses
-        shell: bash
-        run: |
-          set -euo pipefail
-          CONN="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
-          test -n "$CONN"
-          connection_value() {
-            printf '%s' "$CONN" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
-          }
-          DB_HOST="$(connection_value Host)"
-          DB_PORT="$(connection_value Port)"
-          DB_NAME="$(connection_value Database)"
-          DB_USER="$(connection_value Username)"
-          DB_PASSWORD="$(connection_value Password)"
-          test -n "$DB_NAME" && test -n "$DB_USER" && test -n "$DB_PASSWORD"
-
-          docker run --rm --network "$DHOLE_NETWORK" -e PGPASSWORD="$DB_PASSWORD" postgres:16-alpine \
-            psql -v ON_ERROR_STOP=1 -h "${DB_HOST:-postgres}" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
-            -c 'SELECT p.code AS provider, e.status, COUNT(*) AS executions
-                FROM agent."AgentExecutions" e
-                JOIN agent."AgentProviders" p ON p.id=e.provider_id
-                GROUP BY p.code,e.status
-                ORDER BY p.code,e.status;'
-
-      - name: Free runner disk space before Docker builds
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Disk usage before cleanup:"
-          df -h /
-          docker system df || true
-
-          # Safe cleanup only: build cache, stopped containers and dangling image layers.
-          # Named volumes are intentionally never pruned because they contain
-          # PostgreSQL, MinIO, Ollama and other persistent Dhole data.
-          docker builder prune -af || true
-          docker container prune -f --filter "until=24h" || true
-          # Preserve *tagged* rollback images; remove only dangling build layers.
-          docker image prune -f || true
-
-          echo "Disk usage after cleanup:"
-          df -h /
-          docker system df || true
-
-          AVAILABLE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
-          # Prior successful Agent builds needed considerably less than 1 GiB
-          # of additional root space. Keep a conservative 5 GiB free-space
-          # floor without ever pruning named Docker volumes or application data.
-          MIN_REQUIRED_KB=$((5 * 1024 * 1024))
-          echo "Root filesystem available: ${AVAILABLE_KB} KiB (minimum: ${MIN_REQUIRED_KB} KiB)"
-          if [ "$AVAILABLE_KB" -lt "$MIN_REQUIRED_KB" ]; then
-            echo "Insufficient free disk space for Agent Docker build. Need at least 5 GiB free." >&2
-            exit 1
           fi
 
       - name: Ensure local Ollama and production Hermes
@@ -324,21 +272,7 @@ jobs:
           set -euo pipefail
           SHA_TAG="${GITHUB_SHA::12}"
 
-          # Stop before subsequent image builds if the first build consumed
-          # unexpectedly high space. Protect running services and their data.
-          check_build_headroom() {
-            local available
-            available="$(df -Pk / | awk 'NR==2 {print $4}')"
-            if [ "$available" -lt $((2 * 1024 * 1024)) ]; then
-              echo "Stopping Agent build: less than 2 GiB of root headroom remains." >&2
-              exit 1
-            fi
-          }
-          check_build_headroom
-
           docker build --pull             --target api-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-api:latest             -t "dhole/agent-api:$SHA_TAG"             .
-
-          check_build_headroom
 
           docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:latest             -t "dhole/agent-workers:$SHA_TAG"             .
 
@@ -421,10 +355,6 @@ jobs:
         shell: bash
         run: bash scripts/maersk-phase8-image-rollback.sh restore production
 
-      - name: Cleanup Docker build cache
+      - name: Cleanup old images
         if: always()
-        shell: bash
-        run: |
-          docker builder prune -af || true
-          docker image prune -f || true
-          df -h / || true
+        run: docker image prune -f

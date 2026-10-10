@@ -25,6 +25,7 @@ internal static class MaerskOperationsEndpoints
             IAgentProviderRepository providers,
             IMaerskCircuitBreaker breaker,
             IOptions<MaerskCircuitOptions> circuitOptions,
+            IConfiguration configuration,
             IMaerskMonitoring monitoring,
             ServiceDbContext db,
             CancellationToken ct) =>
@@ -33,8 +34,16 @@ internal static class MaerskOperationsEndpoints
             if (provider is null || provider.IsDeleted)
                 return Results.NotFound();
 
-            var circuit = await breaker.GetAsync(provider.Id, ct);
             var enabled = circuitOptions.Value.Enabled;
+            // A disabled circuit is not a healthy Closed circuit.
+            // Keep the last persisted state separate from current protection.
+            var circuit = await breaker.GetAsync(provider.Id, ct);
+            var persisted = await db.MaerskCircuits.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.ProviderId == provider.Id, ct);
+            var effectiveSource = configuration.AsEnumerable()
+                .Any(x => x.Key == "MaerskCircuit:Enabled")
+                    ? "ExplicitConfiguration" : "Default";
+            var reportedState = enabled ? circuit.State : "Disabled";
 
             var query = db.AgentExecutions.AsNoTracking().Where(x => x.ProviderId == provider.Id);
             var counts = await query
@@ -75,10 +84,16 @@ internal static class MaerskOperationsEndpoints
 
             var result = new MaerskOperationsDto(
                 provider.Id, provider.Name, DateTime.UtcNow,
-                new MaerskOperationCircuitDto(enabled, circuit.State,
-                    circuit.RequiresOperator, circuit.ReasonCode,
-                    circuit.OpenUntilUtc, circuit.ConsecutiveFailures,
-                    circuit.ProbeExecutionId),
+                new MaerskOperationCircuitDto(enabled, reportedState,
+                    enabled && circuit.RequiresOperator, enabled ? circuit.ReasonCode : null,
+                    enabled ? circuit.OpenUntilUtc : null,
+                    enabled ? circuit.ConsecutiveFailures : 0,
+                    enabled ? circuit.ProbeExecutionId : null)
+                {
+                    UpdatedAtUtc = persisted?.UpdatedAtUtc,
+                    PersistedState = persisted?.State,
+                    ConfigurationSource = effectiveSource
+                },
                 new MaerskOperationCountersDto(
                     Count(AgentExecutionStatus.Queued),
                     Count(AgentExecutionStatus.Running),

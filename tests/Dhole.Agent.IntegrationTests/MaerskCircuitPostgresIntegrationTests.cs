@@ -61,6 +61,63 @@ public sealed class MaerskCircuitPostgresIntegrationTests
     }
 
     [TestMethod]
+    public async Task DuplicateCaptchaDelivery_OpensOnceAndPersistsAfterNewContext()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var setup = CreateDb(connection);
+        await setup.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(setup);
+            var executionId = Guid.NewGuid();
+            var breaker = CreateCircuit(setup);
+            await breaker.RecordFailureAsync(providerId, executionId, "maersk_hcaptcha_required");
+            await breaker.RecordFailureAsync(providerId, executionId, "maersk_hcaptcha_required");
+            await using var afterRestart = CreateDb(connection);
+            var state = await CreateCircuit(afterRestart).GetAsync(providerId);
+            Assert.AreEqual("Open", state.State);
+            Assert.IsTrue(state.RequiresOperator);
+            Assert.AreEqual("maersk_hcaptcha_required", state.ReasonCode);
+            var opened = await setup.MaerskCircuitEvents.CountAsync(
+                e => e.ProviderId == providerId && e.EventType == "Opened");
+            var observed = await setup.MaerskCircuitEvents.CountAsync(
+                e => e.ProviderId == providerId && e.EventType == "FailureObserved");
+            Assert.AreEqual(1, opened);
+            Assert.AreEqual(1, observed);
+        }
+        finally { await setup.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
+    public async Task TimeoutThenCaptchaOnSameExecution_EscalatesToOperatorOpen()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(db);
+            var executionId = Guid.NewGuid();
+            var circuit = CreateCircuit(db);
+            await circuit.RecordFailureAsync(providerId, executionId, "maersk_offer_timeout");
+            Assert.AreEqual("Closed", (await circuit.GetAsync(providerId)).State);
+            await circuit.RecordFailureAsync(providerId, executionId, "maersk_hcaptcha_required");
+
+            var state = await circuit.GetAsync(providerId);
+            Assert.AreEqual("Open", state.State);
+            Assert.IsTrue(state.RequiresOperator);
+            Assert.AreEqual("maersk_hcaptcha_required", state.ReasonCode);
+            Assert.IsFalse(await circuit.CanScheduleAsync(providerId));
+            var observations = await db.MaerskCircuitEvents.CountAsync(e =>
+                e.ProviderId == providerId && e.EventType == "FailureObserved");
+            Assert.AreEqual(2, observations);
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
     public async Task TechnicalThreshold_AllowsOnlyOneHalfOpenProbeAcrossWorkers()
     {
         var connection = ConnectionOrInconclusive();
