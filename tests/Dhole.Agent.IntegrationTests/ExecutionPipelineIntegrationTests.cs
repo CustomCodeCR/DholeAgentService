@@ -90,6 +90,7 @@ public sealed class ExecutionPipelineIntegrationTests
             new FakeProviderResolver(),
             new TestUnitOfWork(db),
             Options.Create(new AgentQueueOptions()),
+            new NoopCircuitBreaker(),
             NullLogger<AgentExecutionOrchestrator>.Instance);
 
         await orchestrator.ExecuteAsync(execution.Id);
@@ -114,6 +115,18 @@ public sealed class ExecutionPipelineIntegrationTests
             .Options;
 
         return new ServiceDbContext(options);
+    }
+
+    private sealed class NoopCircuitBreaker : IMaerskCircuitBreaker
+    {
+        public Task<MaerskCircuitSnapshot> GetAsync(Guid providerId, CancellationToken ct = default)
+            => Task.FromResult(MaerskCircuitSnapshot.Closed(providerId));
+        public Task<bool> CanScheduleAsync(Guid providerId, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<bool> TryEnterAsync(Guid providerId, Guid executionId, CancellationToken ct = default) => Task.FromResult(true);
+        public Task RecordFailureAsync(Guid providerId, Guid executionId, string errorCode, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RecordSuccessAsync(Guid providerId, Guid executionId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> ResetByOperatorAsync(Guid providerId, Guid actorId, string reason, bool verifiedWithProvider, CancellationToken ct = default)
+            => Task.FromResult(false);
     }
 
     private sealed class TestUnitOfWork(ServiceDbContext dbContext) : IUnitOfWork

@@ -5,6 +5,8 @@ using CustomCodeFramework.Cqrs.Queries;
 using Dhole.Agent.Api.Authorization;
 using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Agents;
+using Dhole.Agent.Application.Abstractions.Repositories;
+using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Contracts.Agents;
 using Dhole.Agent.Contracts.ExtractionProfiles;
@@ -82,6 +84,40 @@ public static class AgentEndpoints
         profiles.MapPost("/{id:guid}/authenticate",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new AuthenticateBrowserProfileCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
         profiles.MapPost("/{id:guid}/repair-session",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new RepairBrowserProfileSessionCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
+        // Operators must attest that provider verification has been completed;
+        // a cooldown alone never clears CAPTCHA, 403 or rate limiting.
+        var circuit=root.MapGroup("/maersk-circuit");
+        circuit.MapGet("/{providerId:guid}", async (Guid providerId,
+            IAgentProviderRepository providers, IMaerskCircuitBreaker breaker,
+            CancellationToken ct) =>
+        {
+            var provider = await providers.GetByIdAsync(providerId, ct);
+            if (provider is null || !provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+                return Results.NotFound();
+            return Results.Ok(await breaker.GetAsync(providerId, ct));
+        }).RequireScope(AgentScopeNames.BrowserProfilesView);
+
+        circuit.MapPost("/{providerId:guid}/reset", async (Guid providerId,
+            ResetMaerskCircuitRequest request, HttpContext context,
+            IAgentProviderRepository providers, IMaerskCircuitBreaker breaker,
+            CancellationToken ct) =>
+        {
+            var actorId = context.GetCurrentUserId();
+            if (actorId is null || actorId.Value == Guid.Empty)
+                return Results.Unauthorized();
+            var provider = await providers.GetByIdAsync(providerId, ct);
+            if (provider is null || !provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+                return Results.NotFound();
+            if (!request.VerifiedWithProvider || string.IsNullOrWhiteSpace(request.Reason)
+                || request.Reason.Trim().Length < 12 || request.Reason.Length > 1000)
+                return Results.BadRequest(new { error = "Explicit verified provider clearance and a reason of 12–1000 characters are required." });
+            var reset = await breaker.ResetByOperatorAsync(
+                providerId, actorId.Value, request.Reason, request.VerifiedWithProvider, ct);
+            return reset
+                ? Results.Ok(new { reset = true, providerId })
+                : Results.Conflict(new { error = "Circuit is not open, is disabled, or the provider still has an active execution." });
+        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
         var schedules=root.MapGroup("/schedules");
         schedules.MapGet("/",async(IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<AgentScheduleDto>>.Ok(await d.DispatchAsync(new GetAgentSchedulesQuery(),ct)))).RequireScope(AgentScopeNames.SchedulesView);
         schedules.MapGet("/{id:guid}",async(Guid id,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetAgentScheduleByIdQuery(id),ct),h)).RequireScope(AgentScopeNames.SchedulesView);
@@ -110,4 +146,5 @@ public static class AgentEndpoints
     }
 
     private sealed record SetActiveRequest(bool IsActive);
+    private sealed record ResetMaerskCircuitRequest(string Reason, bool VerifiedWithProvider);
 }
