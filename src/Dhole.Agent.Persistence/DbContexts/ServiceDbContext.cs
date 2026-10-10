@@ -27,6 +27,7 @@ public sealed class ServiceDbContext(DbContextOptions<ServiceDbContext> options)
     public DbSet<AgentExecution> AgentExecutions => Set<AgentExecution>();
     public DbSet<AgentExecutionLog> AgentExecutionLogs => Set<AgentExecutionLog>();
     public DbSet<AgentResult> AgentResults => Set<AgentResult>();
+    public DbSet<Dhole.Agent.Persistence.Repositories.MaerskCircuitRecord> MaerskCircuits => Set<Dhole.Agent.Persistence.Repositories.MaerskCircuitRecord>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
 
