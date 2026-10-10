@@ -92,3 +92,23 @@ jobs:
         env:
           AGENT_QUEUE_POSTGRES_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres"
         run: dotnet test DholeAgentService.slnx --configuration Release --no-build --verbosity normal
+
+      # A successful test process alone is not proof that PostgreSQL acceptance
+      # tests ran. Require four explicit passing scenario names (not skipped or
+      # inconclusive) before a phase-7 PR can be merged.
+      - name: Phase 7 Maersk acceptance gate (PostgreSQL 16)
+        env:
+          AGENT_QUEUE_POSTGRES_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres"
+        run: |
+          set -euo pipefail
+          dotnet test tests/Dhole.Agent.IntegrationTests/Dhole.Agent.IntegrationTests.csproj \
+            --configuration Release --no-build --no-restore \
+            --filter "FullyQualifiedName~MaerskPhase7AcceptancePostgresTests" \
+            --logger "console;verbosity=normal" | tee /tmp/maersk-phase7-acceptance.log
+          for scenario in \
+            CaptchaPausesOriginalJob_WithoutStarvingOtherProvider \
+            VerifiedResetCannotClearCircuitWhileRunningLeaseIsActive \
+            TechnicalRetryRespectsBackoff_AndPreservesOriginalSnapshotAcrossOwners \
+            DisabledMonitoringCannotAcknowledgeOrMutateExistingIncident; do
+            grep -F "Passed ${scenario}" /tmp/maersk-phase7-acceptance.log
+          done
