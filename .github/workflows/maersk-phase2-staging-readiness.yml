@@ -37,6 +37,8 @@ jobs:
             image="$(docker inspect --format '{{.Image}}' "$cid")"
             echo "RUNNING_IMAGE_$service=$image"
             docker inspect --format '{{.State.Status}}' "$cid" | sed "s/^/STATE_$service=/"
+            docker inspect --format '{{.RestartCount}}' "$cid" | sed "s/^/RESTART_COUNT_$service=/"
+            docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null | sed "s/^/HEALTH_$service=/" || true
             for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled AgentQueue__ConcurrentDispatcherEnabled AgentQueue__MaxConcurrentMaersk; do
               value="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" | sed -n "s/^$key=//p" | tail -n 1 || true)"
               if [[ "$key" == AgentQueue__MaxConcurrentMaersk ]]; then
@@ -65,13 +67,18 @@ jobs:
           host="${host:-postgres}"
           port="${port:-5432}"
 
-          docker run --rm --network "$network" -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
+          docker run --rm -i --network "$network" -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
             postgres:16-alpine psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$user" -d "$db" <<'SQL'
           SELECT 'CIRCUIT_TABLE=' || (to_regclass('agent.maersk_circuits') IS NOT NULL)::text;
           SELECT 'CIRCUIT_EVENT_TABLE=' || (to_regclass('agent.maersk_circuit_events') IS NOT NULL)::text;
           SELECT 'DEDUP_COLUMN=' || EXISTS (
             SELECT 1 FROM information_schema.columns WHERE table_schema='agent'
             AND table_name='maersk_circuit_events' AND column_name='execution_id'
+          );
+          SELECT 'REASON_AWARE_UNIQUE_INDEX=' || EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='agent'
+              AND indexname='ix_maersk_circuit_events_failure_reason'
+              AND indexdef ILIKE '%(provider_id, execution_id, event_type, reason_code)%'
           );
           SELECT 'STAGING_RUNNING=' || count(*) FROM agent."AgentExecutions" WHERE status='Running';
           SELECT 'STAGING_WAITING_AUTH=' || count(*) FROM agent."AgentExecutions"
