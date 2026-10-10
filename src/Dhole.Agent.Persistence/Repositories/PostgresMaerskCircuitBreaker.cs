@@ -189,12 +189,14 @@ public sealed class PostgresMaerskCircuitBreaker(
     }
 
     private async Task EnsureRowAsync(Guid providerId, CancellationToken ct)
-        => await db.Database.ExecuteSqlInterpolatedAsync(
+    {
+        await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             INSERT INTO agent.maersk_circuits(provider_id)
             VALUES ({providerId})
             ON CONFLICT (provider_id) DO NOTHING
             """, ct);
+    }
 
     private async Task AuditAsync(Guid providerId, string eventType, string? reasonCode,
         Guid? actorId, string? operatorReason, CancellationToken ct)
