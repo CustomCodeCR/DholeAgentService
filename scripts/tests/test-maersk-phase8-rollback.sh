@@ -50,6 +50,8 @@ grep -Fq 'up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-ag
 
 # Verify previous tags remain protected and both deployments can revert on failure.
 for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/workflows/deploy-production.yml"; do
+  grep -Fq 'Phase 8 isolated PostgreSQL restoration drill' "$workflow"
+  grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
   grep -Fq 'Protect previous Agent images for rollback' "$workflow"
   grep -Fq 'Mark phase 8 deployment started' "$workflow"
   grep -Fq 'Restore previous Agent images on failed deployment' "$workflow"
