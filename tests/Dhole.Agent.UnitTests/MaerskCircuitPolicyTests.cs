@@ -39,6 +39,16 @@ public sealed class MaerskCircuitPolicyTests
     }
 
     [TestMethod]
+    public void DisabledCircuit_MustNeverBePresentedAsHealthyClosed()
+    {
+        var reported = new Dhole.Agent.Contracts.Agents.MaerskOperationCircuitDto(
+            false, "Disabled", false, null, null, 0, null)
+        { ConfigurationSource = "Default" };
+        Assert.AreEqual("Disabled", reported.State);
+        Assert.IsFalse(reported.FeatureEnabled);
+    }
+
+    [TestMethod]
     public void DisabledByDefaultAndBoundsValidated()
     {
         var options = new MaerskCircuitOptions();
