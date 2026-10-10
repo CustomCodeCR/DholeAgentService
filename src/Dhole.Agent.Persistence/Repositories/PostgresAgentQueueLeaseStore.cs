@@ -38,12 +38,24 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
               AND e.status = 'Queued'
               AND e.attempt < e.max_attempts
               AND (e.next_attempt_at_utc IS NULL OR e.next_attempt_at_utc <= NOW())
-              AND (NOT {maersk} OR NOT EXISTS (
+              -- Old sequential workers may still own Running work without
+              -- a lease while a rolling upgrade begins. Never overlap that
+              -- work on the same browser credential/profile even if its
+              -- lease row is absent or has expired.
+              AND NOT EXISTS (
                     SELECT 1 FROM agent."AgentExecutions" running
                     WHERE running.provider_id = e.provider_id
                       AND running.status = 'Running'
                       AND running.id <> e.id
-                  ))
+                      AND (
+                          {maersk}
+                          OR (e.credential_id IS NOT NULL
+                              AND running.credential_id = e.credential_id)
+                          OR (e.credential_id IS NULL
+                              AND e.extraction_profile_id IS NOT NULL
+                              AND running.extraction_profile_id = e.extraction_profile_id)
+                      )
+                  )
             ON CONFLICT (lease_scope) DO UPDATE SET
                 execution_id = EXCLUDED.execution_id,
                 owner_id = EXCLUDED.owner_id,

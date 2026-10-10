@@ -236,6 +236,53 @@ public sealed class AgentQueuePostgresIntegrationTests
         finally { await db.Database.EnsureDeletedAsync(); }
     }
 
+    [TestMethod]
+    public async Task LegacyRunningCredential_BlocksSameProfileButNotDifferentCredential()
+    {
+        var connection = ConnectionStringOrInconclusive();
+        if (connection is null) return;
+        await using var setup = CreateDb(connection);
+        await setup.Database.MigrateAsync();
+        try
+        {
+            var seed = await SeedQueuedAsync(setup, "OTHER", AgentExecutionType.Scheduled);
+            var sharedCredential = AgentCredential.CreateEncrypted(
+                seed.ProviderId, "shared-browser", "encrypted-user", "encrypted-password");
+            var separateCredential = AgentCredential.CreateEncrypted(
+                seed.ProviderId, "separate-browser", "encrypted-user", "encrypted-password");
+            setup.AgentCredentials.AddRange(sharedCredential, separateCredential);
+            var legacy = AgentExecution.Create(
+                seed.AgentDefinitionId, seed.ProviderId, null, sharedCredential.Id,
+                AgentExecutionType.Scheduled, 0, "{}", 2, Guid.NewGuid().ToString("N"));
+            legacy.Queue();
+            legacy.Start(DateTime.UtcNow);
+            var sameProfile = AgentExecution.Create(
+                seed.AgentDefinitionId, seed.ProviderId, null, sharedCredential.Id,
+                AgentExecutionType.Manual, 10, "{}", 2, Guid.NewGuid().ToString("N"));
+            sameProfile.Queue();
+            var differentProfile = AgentExecution.Create(
+                seed.AgentDefinitionId, seed.ProviderId, null, separateCredential.Id,
+                AgentExecutionType.Manual, 10, "{}", 2, Guid.NewGuid().ToString("N"));
+            differentProfile.Queue();
+            setup.AgentExecutions.AddRange(legacy, sameProfile, differentProfile);
+            await setup.SaveChangesAsync();
+
+            await using var db = CreateDb(connection);
+            var store = new PostgresAgentQueueLeaseStore(db);
+            var sharedScope = $"profile:{seed.ProviderId:N}:{sharedCredential.Id:N}";
+            Assert.IsFalse(await store.TryClaimAsync(
+                sameProfile.Id, sharedScope, Guid.NewGuid(), TimeSpan.FromSeconds(180)),
+                "Legacy Running browser work must block its own credential in mixed rollouts.");
+            var separateScope = $"profile:{seed.ProviderId:N}:{separateCredential.Id:N}";
+            var separateOwner = Guid.NewGuid();
+            Assert.IsTrue(await store.TryClaimAsync(
+                differentProfile.Id, separateScope, separateOwner, TimeSpan.FromSeconds(180)),
+                "An unrelated browser credential must keep progressing.");
+            await store.ReleaseAsync(separateScope, differentProfile.Id, separateOwner);
+        }
+        finally { await setup.Database.EnsureDeletedAsync(); }
+    }
+
     private static string? ConnectionStringOrInconclusive()
     {
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);

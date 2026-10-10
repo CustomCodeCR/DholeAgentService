@@ -3,7 +3,7 @@ name: Maersk Phase 3 Staging Readiness (Read Only)
 on:
   push:
     branches:
-      - fix/maersk-phase3-queue-regression-develop-20261010
+      - fix/maersk-phase3-safe-rollout-20261010
     paths:
       - .github/workflows/maersk-phase3-readiness.yml
 permissions:
@@ -24,14 +24,31 @@ jobs:
           envfile=/opt/dhole/.env.staging
           test -r "$envfile"
           cid="$(docker ps -q --filter label=com.docker.compose.project=dhole-staging --filter label=com.docker.compose.service=dhole-agent-workers)"
-          [[ "$(printf '%s\n' "$cid" | sed '/^$/d' | wc -l)" -eq 1 ]] || { echo 'PHASE3_STAGING_WORKER_COUNT_INVALID'; exit 0; }
-          echo "PHASE3_STAGING_WORKER_STATE=$(docker inspect --format '{{.State.Status}}' "$cid")"
+          [[ "$(printf '%s\n' "$cid" | sed '/^$/d' | wc -l)" -eq 1 ]] || { echo 'PHASE3_STAGING_WORKER_COUNT_INVALID'; exit 1; }
+          state="$(docker inspect --format '{{.State.Status}}' "$cid")"
+          echo "PHASE3_STAGING_WORKER_STATE=$state"
+          [[ "$state" == running ]] || { echo 'PHASE3_NOT_READY_WORKER_UNHEALTHY'; exit 1; }
+          started="$(docker inspect --format '{{.State.StartedAt}}' "$cid")"
+          boot_epoch="$(date -u -d "$started" +%s)"
+          uptime_seconds=$(( $(date -u +%s) - boot_epoch ))
+          echo "PHASE3_STAGING_WORKER_UPTIME_SECONDS=$uptime_seconds"
+          (( uptime_seconds >= 120 )) || { echo 'PHASE3_NOT_READY_WORKER_NOT_STABLE'; exit 1; }
           echo "PHASE3_STAGING_WORKER_RESTARTS=$(docker inspect --format '{{.RestartCount}}' "$cid")"
+          circuit_flag=UNKNOWN
+          monitoring_flag=UNKNOWN
           for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled AgentQueue__ConcurrentDispatcherEnabled; do
             val="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" | sed -n "s/^$key=//p" | tail -n1 || true)"
             case "$val" in true|false|0|1) ;; *) val=UNKNOWN ;; esac
             echo "PHASE3_FLAG_$key=$val"
+            case "$key" in
+              MaerskCircuit__Enabled) circuit_flag="$val" ;;
+              MaerskMonitoring__Enabled) monitoring_flag="$val" ;;
+            esac
           done
+          # Concurrent mode must not bypass the still-pending provider safety
+          # circuit. These flags must be effective inside the running worker.
+          [[ "$circuit_flag" == true && "$monitoring_flag" == true ]] ||
+            { echo 'PHASE3_NOT_READY_PROVIDER_SAFETY_FLAGS_INACTIVE'; exit 1; }
 
           conn="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$envfile" | tail -n1 | tr -d '\r')"
           if [[ -z "$conn" ]]; then
@@ -43,7 +60,7 @@ jobs:
           h="$(value Host)"; p="$(value Port)"; d="$(value Database)"
           u="$(value Username)"; pw="$(value Password)"
           [[ "$d" =~ ^[A-Za-z0-9_]+$ && -n "$u" && -n "$pw" ]] || { echo 'PHASE3_DATABASE_INVALID'; exit 1; }
-          docker run --rm -i --network dhole-staging -e PGPASSWORD="$pw" \
+          report="$(docker run --rm -i --network dhole-staging -e PGPASSWORD="$pw" \
             -e PGOPTIONS='-c default_transaction_read_only=on' postgres:17-alpine \
             psql -X -v ON_ERROR_STOP=1 -At -h "${h:-postgres}" -p "${p:-5432}" -U "$u" -d "$d" <<'SQL'
           SELECT 'PHASE3_LEASE_TABLE_PRESENT=' || (to_regclass('agent.execution_leases') IS NOT NULL)::text;
@@ -57,5 +74,16 @@ jobs:
           SELECT 'PHASE3_RUNNING_EXECUTIONS=' || count(*) FROM agent."AgentExecutions" WHERE status='Running';
           SELECT 'PHASE3_WAITING_EXECUTIONS=' || count(*) FROM agent."AgentExecutions" WHERE status='WaitingForAuthentication';
           SQL
+          )"
+          printf '%s\n' "$report"
+          for required in \
+            'PHASE3_LEASE_TABLE_PRESENT=true' \
+            'PHASE3_QUEUE_RETRY_COLUMN_PRESENT=true' \
+            'PHASE3_CIRCUIT_DEDUP_PRESENT=true' \
+            'PHASE3_RUNNING_EXECUTIONS=0'; do
+            grep -Fxq "$required" <<< "$report" ||
+              { echo "PHASE3_NOT_READY_MISSING_GATE=$required"; exit 1; }
+          done
+          echo 'PHASE3_STAGING_READINESS_PASS=true'
           echo 'PHASE3_READONLY_READINESS_INSPECTION_COMPLETE=true'
           echo 'This diagnostic makes no migration, image, flag, session or database changes.'
