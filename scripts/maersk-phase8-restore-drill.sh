@@ -13,21 +13,27 @@ command -v openssl >/dev/null || die "OpenSSL is required"
 container="dhole-phase8-restore-$GITHUB_RUN_ID"
 # Host bind mount stays read-only and database is created inside a disposable
 # anonymous Docker volume; --network none eliminates external/provider traffic.
-log="$(mktemp)"
-chmod 600 "$log"
-cleanup() {
-  docker rm -f -v "$container" >/dev/null 2>&1 || true
-  rm -f "$log"
-}
-trap cleanup EXIT
+# Do not remove an existing container: its ownership belongs to another run.
+# Register cleanup only after we have successfully started OUR isolated database.
 if docker container inspect "$container" >/dev/null 2>&1; then
   die "Restore container name already exists; refusing to reuse it"
 fi
+log="$(mktemp)"
+chmod 600 "$log"
+created=false
+cleanup() {
+  if [[ "$created" == true ]]; then
+    docker rm -f -v "$container" >/dev/null 2>&1 || true
+  fi
+  rm -f "$log"
+}
+trap cleanup EXIT
 
 password="$(openssl rand -hex 24)"
 docker run -d --name "$container" --network none \
   --mount "type=bind,src=$backup_dir,dst=/backup,readonly" \
   -e POSTGRES_PASSWORD="$password" postgres:16-alpine >/dev/null
+created=true
 
 ready=false
 for attempt in $(seq 1 40); do
