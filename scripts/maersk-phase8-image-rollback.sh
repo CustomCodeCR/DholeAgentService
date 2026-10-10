@@ -64,11 +64,10 @@ case "$mode" in
     : > "$started"
     ;;
   restore)
-    if [[ ! -f "$started" ]]; then
-      echo "PHASE8_ROLLBACK_SKIPPED: deployment was never started"
-      exit 0
-    fi
-    [[ -s "$manifest" ]] || die "Deployment started but previous image manifest is missing"
+    # A build may have already overwritten :latest/:staging even before
+    # Compose recreates a container. Restore those tags on EVERY failure
+    # after capture, but do not restart services unless deployment started.
+    [[ -s "$manifest" ]] || die "Previous image manifest is missing"
     expected_api="dhole/agent-api:$suffix"
     expected_worker="dhole/agent-workers:$suffix"
     grep -Fxq "environment=$environment" "$manifest" || die "Snapshot environment mismatch"
@@ -78,6 +77,10 @@ case "$mode" in
     docker image inspect "$expected_worker" >/dev/null || die "Previous worker image unavailable"
     docker image tag "$expected_api" "dhole/agent-api:$image_suffix"
     docker image tag "$expected_worker" "dhole/agent-workers:$image_suffix"
+    if [[ ! -f "$started" ]]; then
+      echo "PHASE8_IMAGE_TAGS_RESTORED: deployment not started; running services unchanged"
+      exit 0
+    fi
     # Preserve named volumes and ALL execution records. No schema downgrade.
     "${compose[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-agent-workers
     echo "PHASE8_ROLLBACK_APPLIED: $environment previous tagged images restored; verify health/queue"

@@ -14,6 +14,7 @@ case "$environment" in
 esac
 
 [[ "$backup_root" = /* && "$backup_root" != /tmp/* && "$backup_root" != /var/tmp/* ]] || die "Use an absolute durable backup location"
+[[ "$backup_root" != *$'\n'* && "$backup_root" != *$'\r'* ]] || die "Backup root cannot contain line breaks"
 [[ -d "$backup_root" && -w "$backup_root" ]] || die "Pre-create a writable durable backup root"
 [[ -r "${DHOLE_ENV_FILE:-}" ]] || die "DHOLE_ENV_FILE must point to the corresponding environment file"
 command -v docker >/dev/null || die "Docker is required"
@@ -70,4 +71,8 @@ printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\
 # to the self-hosted runner while keeping archives private.
 docker run --rm -v "$output:/backup" alpine:3.20 sh -c \
   "chown $(id -u):$(id -g) /backup/* && chmod 600 /backup/*"
+# GitHub Actions output contains only the operator's host path, never backup bytes.
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  printf 'backup_dir=%s\n' "$output" >> "$GITHUB_OUTPUT"
+fi
 echo "Snapshot created. Run preflight against: $output"

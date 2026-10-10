@@ -1,0 +1,128 @@
+name: Prepare Maersk Phase 8 Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Choose the exact isolated environment to back up"
+        type: choice
+        required: true
+        options:
+          - staging
+          - production
+      confirmation:
+        description: "Type BACKUP_AGENT_STAGING or BACKUP_AGENT_PRODUCTION"
+        type: string
+        required: true
+      backup_root:
+        description: "Pre-created durable absolute host directory (e.g. /opt/dhole/backups)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Serialize backup and deploy on the same environment. Neither can cancel the other.
+concurrency:
+  group: dhole-agent-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Dhole Agent
+        uses: actions/checkout@v4
+
+      - name: Confirm environment and stopped-worker maintenance window
+        shell: bash
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          BACKUP_ROOT: ${{ inputs.backup_root }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENV:$GITHUB_REF_NAME:$CONFIRMATION" in
+            staging:develop:BACKUP_AGENT_STAGING|production:master:BACKUP_AGENT_PRODUCTION) ;;
+            *) echo "Wrong branch or missing exact backup authorization" >&2; exit 1 ;;
+          esac
+          [[ "$BACKUP_ROOT" = /* && "$BACKUP_ROOT" != /tmp/* && "$BACKUP_ROOT" != /var/tmp/* ]] || {
+            echo "A durable absolute path outside /tmp is required" >&2; exit 1;
+          }
+          test -d "$BACKUP_ROOT" && test -w "$BACKUP_ROOT" || {
+            echo "Backup root must exist and be writable on the runner" >&2; exit 1;
+          }
+          echo "This workflow never stops the worker or interrupts running jobs."
+          echo "The snapshot will refuse to run until the operator safely drains/stops the Agent worker."
+
+      - name: Checkout matching DholeSystem infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: CustomCodeCR/DholeSystem
+          ref: ${{ inputs.environment == 'production' && 'master' || 'develop' }}
+          path: .dhole-system
+
+      - name: Prepare environment without logging secrets
+        shell: bash
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dhole-phase8-backup-env"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-phase8-backup-env"
+          if [[ "$TARGET_ENV" == staging ]]; then
+            env_file="$RUNNER_TEMP/dhole-phase8-backup-env/.env.staging"
+          else
+            env_file="$RUNNER_TEMP/dhole-phase8-backup-env/.env.production"
+          fi
+          test -r "$env_file"
+          echo "DHOLE_ENV_FILE=$env_file" >> "$GITHUB_ENV"
+
+      - name: Snapshot PostgreSQL and both persistent volumes
+        id: snapshot
+        shell: bash
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          BACKUP_ROOT: ${{ inputs.backup_root }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-backup.sh "$TARGET_ENV" "$BACKUP_ROOT"
+
+      - name: Verify metadata, digest, environment and flags
+        shell: bash
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          SNAPSHOT_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-preflight.sh "$TARGET_ENV" "$SNAPSHOT_DIR" "$DHOLE_ENV_FILE"
+
+      - name: Verify isolated PostgreSQL restoration
+        shell: bash
+        env:
+          SNAPSHOT_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-restore-drill.sh "$SNAPSHOT_DIR"
+
+      - name: Record operator evidence
+        if: success()
+        shell: bash
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          SNAPSHOT_DIR: ${{ steps.snapshot.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Maersk Phase 8 backup verified"
+            echo ""
+            echo "- Environment: `$TARGET_ENV`"
+            echo "- Snapshot directory (enter as backup_dir for the matching deployment): `$SNAPSHOT_DIR`"
+            echo "- Checksums and metadata: PASS"
+            echo "- Isolated PostgreSQL 16 restore drill: PASS"
+            echo "- Running jobs and browser sessions: not modified by this workflow"
+            echo ""
+            echo "The encrypted credentials, browser profiles and database dump remain on the runner."
+            echo "This is not evidence of a deployed Agent or a successful live Maersk search."
+          } >> "$GITHUB_STEP_SUMMARY"
