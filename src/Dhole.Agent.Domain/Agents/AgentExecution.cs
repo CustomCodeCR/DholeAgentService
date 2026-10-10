@@ -93,8 +93,11 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
             throw new ArgumentException("Operator identity is required.", nameof(actorId));
         if (Status != AgentExecutionStatus.WaitingForAuthentication)
             throw new InvalidOperationException("Only waiting executions may be resumed.");
+        // A provider challenge may exhaust the old retry budget. A human
+        // authorization grants exactly one additional attempt to the SAME
+        // execution, never a new record or an unlimited automatic retry.
         if (Attempt >= MaxAttempts)
-            throw new InvalidOperationException("Execution has exhausted its attempt budget.");
+            MaxAttempts = checked(Attempt + 1);
 
         Status = AgentExecutionStatus.Queued;
         NextAttemptAtUtc = null;
