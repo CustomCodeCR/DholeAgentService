@@ -16,6 +16,13 @@ for workflow in "$staging" "$production"; do
   grep -Fq 'cancel-in-progress: false' "$workflow"
   grep -Fq 'AGENT_QUEUE_PUMP_STARTED' "$workflow"
   grep -Fq 'Verify Agent worker queue pump' "$workflow"
+  grep -Fq 'maersk-phase8-schema-check.sh' "$workflow"
+  start="$(grep -n -m1 'Phase 8 verify migrated schema before workers' "$workflow" | cut -d: -f1)"
+  workers="$(grep -n -m1 'name: Deploy Agent workers' "$workflow" | cut -d: -f1)"
+  [[ "$start" =~ ^[0-9]+$ && "$workers" =~ ^[0-9]+$ && "$start" -lt "$workers" ]] || {
+    echo "Schema check must precede launching the worker: $workflow" >&2
+    exit 1
+  }
   if grep -Eq '^[[:space:]]+push:|^[[:space:]]+schedule:' "$workflow"; then
     echo "Phase 8 release must not deploy on a push or cron event: $workflow" >&2
     exit 1
