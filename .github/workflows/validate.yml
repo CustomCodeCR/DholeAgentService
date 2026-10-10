@@ -122,3 +122,6 @@ jobs:
           bash scripts/tests/test-maersk-phase8-preflight.sh
           bash -n scripts/tests/test-maersk-phase8-workflows.sh
           bash scripts/tests/test-maersk-phase8-workflows.sh
+          bash -n scripts/maersk-phase8-image-rollback.sh
+          bash -n scripts/maersk-phase8-restore-drill.sh
+          bash scripts/tests/test-maersk-phase8-rollback.sh

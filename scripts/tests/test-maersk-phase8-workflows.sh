@@ -11,6 +11,7 @@ for workflow in "$staging" "$production"; do
   grep -Fq 'confirmation:' "$workflow"
   grep -Fq 'backup_dir:' "$workflow"
   grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
+  grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
   grep -Fq 'cancel-in-progress: false' "$workflow"
   grep -Fq 'AGENT_QUEUE_PUMP_STARTED' "$workflow"
   grep -Fq 'Verify Agent worker queue pump' "$workflow"
