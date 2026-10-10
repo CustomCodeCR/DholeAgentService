@@ -104,7 +104,9 @@ public sealed class AgentExecutionRepository(ServiceDbContext dbContext)
         CancellationToken cancellationToken = default)
         => await dbContext.AgentExecutions
             .AsNoTracking()
-            .Where(x => x.Status == AgentExecutionStatus.Queued && x.CreatedAtUtc <= utcCutoff)
+            .Where(x => x.Status == AgentExecutionStatus.Queued && x.CreatedAtUtc <= utcCutoff
+                && (x.NextAttemptAtUtc == null || x.NextAttemptAtUtc <= utcCutoff)
+                && x.Attempt < x.MaxAttempts)
             // Explicit user-triggered executions go first, then configured priority.
             // Automated Maersk backlogs must not starve new manual work.
             .OrderByDescending(x => x.ExecutionType == AgentExecutionType.Manual)
