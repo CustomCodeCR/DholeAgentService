@@ -110,7 +110,7 @@ jobs:
           worker_id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers" | head -n1)"
           if [[ -n "$worker_id" ]]; then
             docker inspect --format '{{.State.ExitCode}}' "$worker_id" | sed 's/^/WORKER_LAST_EXIT_CODE=/'
-            docker logs --tail 350 "$worker_id" 2>&1 | python3 -c 'import re,sys; data=sys.stdin.read(); types=re.findall(r"\\b(?:System|Microsoft|Npgsql|Dhole|Autofac)\\.[A-Za-z0-9_.]*(?:Exception|Error)\\b", data); [print("WORKER_EXCEPTION_TYPE="+t) for t in list(dict.fromkeys(types))[-12:]]; print("WORKER_LOG_SAMPLED=true")'
+            docker logs --tail 350 "$worker_id" 2>&1 | python3 -c 'import re,sys; data=sys.stdin.read(); types=re.findall(r"\\b(?:System|Microsoft|Npgsql|Dhole|Autofac)\\.[A-Za-z0-9_.]*(?:Exception|Error)\\b", data); [print("WORKER_EXCEPTION_TYPE="+t) for t in list(dict.fromkeys(types))[-12:]]; markers=re.findall(r"\\bAGENT_(?:WORKER|QUEUE)_[A-Z0-9_]+\\b",data); [print("WORKER_MARKER="+t) for t in list(dict.fromkeys(markers))[-22:]]; print("WORKER_LOG_SAMPLED=true")'
           fi
           for path in /home/Argos /opt/dhole; do
             df -Pk "$path" | awk -v label="$path" 'NR==2 {print "DISK_FREE_KB_" label "=" $4}'
