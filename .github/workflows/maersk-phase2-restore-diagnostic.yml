@@ -14,6 +14,38 @@ jobs:
     runs-on: [self-hosted, linux, x64, dhole]
     timeout-minutes: 8
     steps:
+      - name: Read-only verify staging credential-provider referential integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          env_file=/opt/dhole/.env.staging
+          conn="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+          if [[ -z "$conn" ]]; then
+            user="$(sed -n 's/^POSTGRES_USER=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+            pass="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+            conn="Host=postgres;Port=5432;Database=dhole_agent;Username=$user;Password=$pass"
+          fi
+          value() { printf '%s' "$conn" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n 1; }
+          dbhost="$(value Host)"
+          dbport="$(value Port)"
+          dbname="$(value Database)"
+          dbuser="$(value Username)"
+          dbpass="$(value Password)"
+          [[ "$dbname" =~ ^[a-zA-Z0-9_]+$ && -n "$dbuser" && -n "$dbpass" ]] || exit 2
+          docker run --rm -i --network dhole-staging \
+            -e PGPASSWORD="$dbpass" -e PGOPTIONS='-c default_transaction_read_only=on' \
+            postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -At \
+            -h "$dbhost" -p "$dbport" -U "$dbuser" -d "$dbname" <<'SQL'
+          SELECT 'LIVE_AGENT_PROVIDERS=' || count(*) FROM agent."AgentProviders";
+          SELECT 'LIVE_AGENT_CREDENTIALS=' || count(*) FROM agent."AgentCredentials";
+          SELECT 'LIVE_ORPHAN_AGENT_CREDENTIALS=' || count(*) FROM agent."AgentCredentials" c
+            LEFT JOIN agent."AgentProviders" p ON p.id=c.provider_id WHERE p.id IS NULL;
+          SELECT 'LIVE_CREDENTIAL_PROVIDER_FK_VALIDATED=' || COALESCE((
+            SELECT convalidated::text FROM pg_constraint
+            WHERE conname='f_k_agent_credentials_agent_providers_provider_id'
+            LIMIT 1), 'NO_CONSTRAINT');
+          SQL
       - name: Restore existing snapshot in disposable network-isolated PostgreSQL 17
         shell: bash
         run: |
