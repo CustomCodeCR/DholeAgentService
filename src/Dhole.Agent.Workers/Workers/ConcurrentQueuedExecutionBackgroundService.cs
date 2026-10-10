@@ -132,6 +132,7 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
                 executionId, scopeKey);
 
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            linked.CancelAfter(TimeSpan.FromSeconds(_options.MaxExecutionSeconds));
             var heartbeat = HeartbeatAsync(scopeKey, executionId, ownerId, lease, linked);
             try
             {
