@@ -64,16 +64,18 @@ public sealed class AgentQueuePolicyTests
     }
 
     [TestMethod]
-    public void MaxAttempts_AreEnforcedEvenWhenResumeIsRequested()
+    public void VerifiedManualResume_RemainsPossibleAfterTechnicalRetryBudget()
     {
         var execution = Create(maxAttempts: 1);
         execution.Queue();
         execution.Start(DateTime.UtcNow);
         execution.WaitForAuthentication("maersk_hcaptcha_required", "verification");
 
-        Assert.ThrowsExactly<InvalidOperationException>(() =>
-            execution.Start(DateTime.UtcNow));
-        Assert.AreEqual(AgentExecutionStatus.WaitingForAuthentication, execution.Status);
+        // Waiting is never dispatched automatically; only an authorized
+        // resume can re-enter the original execution id.
+        execution.Start(DateTime.UtcNow);
+        Assert.AreEqual(AgentExecutionStatus.Running, execution.Status);
+        Assert.AreEqual(2, execution.Attempt);
     }
 
     [TestMethod]
