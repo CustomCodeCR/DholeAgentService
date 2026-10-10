@@ -205,6 +205,13 @@ jobs:
 
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT" config -q
 
+      - name: Protect previous Agent images for rollback
+        id: capture_images
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-image-rollback.sh capture staging
+
       - name: Build Agent images
         shell: bash
         env:
@@ -216,6 +223,10 @@ jobs:
           docker build --pull             --target api-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-api:staging             -t "dhole/agent-api:staging-$SHA_TAG"             .
 
           docker build --pull             --target worker-final             --build-arg GITHUB_ACTOR="$GITHUB_ACTOR"             --secret id=github_token,env=GITHUB_TOKEN             -t dhole/agent-workers:staging             -t "dhole/agent-workers:staging-$SHA_TAG"             .
+
+      - name: Mark phase 8 deployment started
+        shell: bash
+        run: bash scripts/maersk-phase8-image-rollback.sh mark-deploy staging
 
       - name: Deploy Agent API staging
         shell: bash
@@ -280,6 +291,11 @@ jobs:
           echo "Agent worker is running but queue pump did not start." >&2
           docker logs --tail 300 "$CONTAINER_ID" || true
           exit 1
+
+      - name: Restore previous Agent images on failed deployment
+        if: ${{ failure() && steps.capture_images.outcome == 'success' }}
+        shell: bash
+        run: bash scripts/maersk-phase8-image-rollback.sh restore staging
 
       - name: Cleanup old images
         if: always()
