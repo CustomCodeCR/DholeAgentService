@@ -70,6 +70,7 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
         var repository = scope.ServiceProvider.GetRequiredService<IAgentExecutionRepository>();
         var providers = scope.ServiceProvider.GetRequiredService<IAgentProviderRepository>();
         var leaseStore = scope.ServiceProvider.GetRequiredService<IAgentQueueLeaseStore>();
+        var maerskCircuit = scope.ServiceProvider.GetRequiredService<IMaerskCircuitBreaker>();
 
         // Reconciliation never automatically repeats an execution which may
         // have submitted a booking/search or persisted partial results.
@@ -98,6 +99,8 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
                 continue;
             var isMaersk = provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase);
             if (isMaersk && _active.Values.Count(x => x.IsMaersk) >= _options.MaxConcurrentMaersk)
+                continue;
+            if (isMaersk && !await maerskCircuit.CanScheduleAsync(provider.Id, cancellationToken))
                 continue;
 
             // Shared browser profiles are serialized across all workers.
