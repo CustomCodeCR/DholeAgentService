@@ -51,6 +51,9 @@ done
 if ! docker exec "$container" pg_restore --no-owner --no-acl \
     --exit-on-error --single-transaction -U postgres -d postgres \
     /backup/agent.dump >"$log" 2>&1; then
+  if grep -qi 'violates foreign key constraint' "$log"; then
+    die 'PHASE8_RESTORE_REFERENCE_INTEGRITY_FAILED: archive contains orphan references. Source DB and backup are unchanged; do not bypass FK validation or delete credentials.'
+  fi
   die "Restoring backup into isolated PostgreSQL failed (details kept private)"
 fi
 table_count="$(docker exec "$container" psql -At -U postgres -d postgres \
