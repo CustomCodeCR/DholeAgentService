@@ -127,7 +127,8 @@ jobs:
             DuplicateCaptchaDelivery_OpensOnceAndPersistsAfterNewContext \
             TimeoutThenCaptchaOnSameExecution_EscalatesToOperatorOpen \
             TechnicalThreshold_AllowsOnlyOneHalfOpenProbeAcrossWorkers \
-            FailedProbe_ReopensForCooldownWithoutRotatingProviderIdentity; do
+            FailedProbe_ReopensForCooldownWithoutRotatingProviderIdentity \
+            OperatorReset_FailsClosedUntilBlockedProfileIsReauthenticated; do
             grep -F "Passed ${scenario}" /tmp/maersk-phase2-acceptance.log || {
               echo "Phase 2 mandatory PostgreSQL scenario missing, failed or skipped: $scenario" >&2
               exit 1

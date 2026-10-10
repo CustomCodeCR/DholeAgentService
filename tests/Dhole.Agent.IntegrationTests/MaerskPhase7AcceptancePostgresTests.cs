@@ -102,8 +102,23 @@ public sealed class MaerskPhase7AcceptancePostgresTests
             });
             Assert.IsTrue((await breaker.GetAsync(seeded.Provider.Id)).RequiresOperator);
 
+            Assert.IsFalse(await breaker.ResetByOperatorAsync(seeded.Provider.Id,
+                actor, "Attestation alone cannot prove provider session recovery", true));
+
+            var credential = AgentCredential.CreateEncrypted(
+                seeded.Provider.Id, "verified-profile-credential",
+                "encrypted-test-user", "encrypted-test-secret");
+            db.AgentCredentials.Add(credential);
+            var verifiedProfile = BrowserProfile.Create(
+                seeded.Provider.Id, credential.Id, "verified-profile",
+                Guid.NewGuid().ToString("N"), "/tmp/circuit-verification-test-no-browser");
+            db.BrowserProfiles.Add(verifiedProfile);
+            await db.SaveChangesAsync();
+            verifiedProfile.Authenticate(DateTime.UtcNow);
+            await db.SaveChangesAsync();
+
             Assert.IsTrue(await breaker.ResetByOperatorAsync(seeded.Provider.Id,
-                actor, "Legitimate access independently confirmed", true));
+                actor, "Legitimate access independently confirmed and recorded", true));
             Assert.AreEqual("Closed", (await breaker.GetAsync(seeded.Provider.Id)).State);
             Assert.AreEqual(AgentExecutionStatus.WaitingForAuthentication,
                 (await db.AgentExecutions.AsNoTracking().SingleAsync(x => x.Id == seeded.Execution.Id)).Status);

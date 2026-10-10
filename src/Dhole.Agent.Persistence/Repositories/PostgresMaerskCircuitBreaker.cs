@@ -1,5 +1,6 @@
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Runtime;
+using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -184,6 +185,43 @@ public sealed class PostgresMaerskCircuitBreaker(
                 "An authenticated operator, documented reason and verified provider clearance are required.");
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var current = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
+            $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct);
+        if (current is null || current.State is not ("Open" or "HalfOpen"))
+        {
+            await tx.CommitAsync(ct);
+            return false;
+        }
+
+        if (current.RequiresOperator)
+        {
+            // A request body is not proof of provider recovery. Require a
+            // successful authentication recorded AFTER the restriction and
+            // reject blocked/expired active profiles. No Chromium action or
+            // browser profile repair is initiated by this endpoint.
+            var now = DateTime.UtcNow;
+            var latestVerifiedSession = await db.BrowserProfiles.AsNoTracking()
+                .AnyAsync(p => p.ProviderId == providerId
+                    && !p.IsDeleted && p.IsActive
+                    && p.Status == BrowserProfileStatus.Authenticated
+                    && p.LastLoginAt.HasValue
+                    && p.LastLoginAt.Value > current.UpdatedAtUtc
+                    && p.LastLoginAt.Value <= now
+                    && (!p.SessionExpiresAt.HasValue || p.SessionExpiresAt.Value > now), ct);
+            var unsafeProfile = await db.BrowserProfiles.AsNoTracking()
+                .AnyAsync(p => p.ProviderId == providerId
+                    && !p.IsDeleted && p.IsActive
+                    && (p.Status == BrowserProfileStatus.Blocked
+                        || p.Status == BrowserProfileStatus.Expired
+                        || p.Status == BrowserProfileStatus.ResetRequested), ct);
+            if (!latestVerifiedSession || unsafeProfile)
+            {
+                await tx.CommitAsync(ct);
+                return false;
+            }
+        }
+
         var affected = await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE agent.maersk_circuits
@@ -193,12 +231,11 @@ public sealed class PostgresMaerskCircuitBreaker(
                 updated_at_utc = NOW()
             WHERE provider_id = {providerId}
               AND state IN ('Open','HalfOpen')
+              -- Fail closed even for legacy Running jobs without leases.
               AND NOT EXISTS (
-                  SELECT 1 FROM agent.execution_leases l
-                  JOIN agent."AgentExecutions" e ON e.id = l.execution_id
+                  SELECT 1 FROM agent."AgentExecutions" e
                   WHERE e.provider_id = {providerId}
                     AND e.status = 'Running'
-                    AND l.expires_at_utc > NOW()
               )
             """, ct);
         if (affected == 1)
