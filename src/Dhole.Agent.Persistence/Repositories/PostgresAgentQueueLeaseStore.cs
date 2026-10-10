@@ -1,6 +1,7 @@
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Persistence.DbContexts;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Dhole.Agent.Persistence.Repositories;
 
@@ -23,7 +24,10 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
         // The PostgreSQL scope PRIMARY KEY serializes claims, including attempts
         // from other workers. For Maersk, reject a transition while an older
         // (pre-rollout) Running execution is still active on this provider.
-        var written = await db.Database.ExecuteSqlInterpolatedAsync(
+        int written;
+        try
+        {
+            written = await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             INSERT INTO agent.execution_leases
                 (lease_scope, execution_id, owner_id, expires_at_utc, heartbeat_at_utc)
@@ -47,6 +51,17 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
                 heartbeat_at_utc = EXCLUDED.heartbeat_at_utc
             WHERE agent.execution_leases.expires_at_utc < NOW();
             """, cancellationToken);
+        }
+        catch (PostgresException error)
+            when (error.SqlState == PostgresErrorCodes.UniqueViolation
+                  && error.ConstraintName == "ux_agent_execution_leases_execution")
+        {
+            // Concurrent workers can race on the execution_id uniqueness
+            // constraint before the lease_scope UPSERT arbitration completes.
+            // The other worker owns the attempt; never treat it as a fatal
+            // dispatch error or retry concurrently.
+            return false;
+        }
 
         return written == 1;
     }

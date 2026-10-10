@@ -112,8 +112,8 @@ docker run --rm --network none --user 0:0 \
     tmp="$(mktemp /dhole/.maersk-phase2.XXXXXX)"
     grep -Ev "^(MaerskCircuit__Enabled|MaerskMonitoring__Enabled)=" "$env" > "$tmp" || true
     printf "MaerskCircuit__Enabled=true\nMaerskMonitoring__Enabled=true\n" >> "$tmp"
-    chmod --reference="$env" "$tmp"
-    chown --reference="$env" "$tmp"
+    chmod "$(stat -c %a "$env")" "$tmp"
+    chown "$(stat -c %u:%g "$env")" "$tmp"
     mv "$tmp" "$env"
     echo "PRIVATE_ACTIVATION_BACKUP_CREATED=$BACKUP_NAME"
   '
