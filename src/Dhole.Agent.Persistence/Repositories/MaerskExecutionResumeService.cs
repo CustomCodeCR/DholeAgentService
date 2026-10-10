@@ -12,7 +12,6 @@ public enum MaerskResumeOutcome
     AlreadyQueued,
     NotFound,
     NotWaiting,
-    AttemptsExhausted,
     CircuitUnavailable,
     ProviderVerificationRequired,
     ProfileNotVerified,
@@ -63,8 +62,6 @@ public sealed class MaerskExecutionResumeService(
             return MaerskResumeOutcome.AlreadyQueued;
         if (execution.Status != AgentExecutionStatus.WaitingForAuthentication)
             return MaerskResumeOutcome.NotWaiting;
-        if (execution.Attempt >= execution.MaxAttempts)
-            return MaerskResumeOutcome.AttemptsExhausted;
         if (execution.CredentialId is not Guid credentialId)
             return MaerskResumeOutcome.ProfileNotVerified;
 
