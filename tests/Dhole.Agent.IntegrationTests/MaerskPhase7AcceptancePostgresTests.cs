@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
@@ -54,7 +55,8 @@ public sealed class MaerskPhase7AcceptancePostgresTests
                 .SingleAsync(x => x.Id == originalId);
             Assert.AreEqual(AgentExecutionStatus.WaitingForAuthentication, stored.Status);
             Assert.AreEqual(originalId, stored.Id);
-            Assert.AreEqual(originalInput, stored.InputJson);
+            Assert.IsTrue(JsonNode.DeepEquals(JsonNode.Parse(originalInput), JsonNode.Parse(stored.InputJson)),
+                "JSONB normalization must not change the persisted input content.");
             Assert.AreEqual(originalCorrelation, stored.CorrelationId);
             Assert.AreEqual(1, stored.Attempt);
         }
@@ -93,8 +95,11 @@ public sealed class MaerskPhase7AcceptancePostgresTests
             seeded.Execution.WaitForAuthentication("maersk_authentication_rate_limited",
                 "Operator review still required");
             await db.SaveChangesAsync();
-            Assert.IsFalse(await breaker.ResetByOperatorAsync(seeded.Provider.Id,
-                actor, "No real provider verification", false));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
+            {
+                await breaker.ResetByOperatorAsync(seeded.Provider.Id,
+                    actor, "No real provider verification", false);
+            });
             Assert.IsTrue((await breaker.GetAsync(seeded.Provider.Id)).RequiresOperator);
 
             Assert.IsTrue(await breaker.ResetByOperatorAsync(seeded.Provider.Id,
@@ -157,10 +162,14 @@ public sealed class MaerskPhase7AcceptancePostgresTests
             var persisted = await db.AgentExecutions.AsNoTracking().SingleAsync(x => x.Id == originalId);
             Assert.AreEqual(originalId, persisted.Id);
             Assert.AreEqual(correlation, persisted.CorrelationId);
-            Assert.AreEqual(input, persisted.InputJson);
+            Assert.IsTrue(JsonNode.DeepEquals(JsonNode.Parse(input), JsonNode.Parse(persisted.InputJson)),
+                "Original input content must be preserved regardless of JSONB key order.");
             Assert.AreEqual(snapshotId, persisted.ExtractionProfileId);
             Assert.AreEqual("Frozen snapshot for one execution", persisted.PromptSnapshot);
-            Assert.AreEqual("""{"source":"original"}""", persisted.ConfigurationSnapshotJson);
+            Assert.IsTrue(JsonNode.DeepEquals(
+                JsonNode.Parse("""{"source":"original"}"""),
+                JsonNode.Parse(persisted.ConfigurationSnapshotJson)),
+                "Configuration JSON snapshot must keep its values.");
             Assert.AreEqual(1, persisted.Attempt);
         }
         finally { await db.Database.EnsureDeletedAsync(); }
