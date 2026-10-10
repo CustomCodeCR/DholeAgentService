@@ -81,6 +81,9 @@ public sealed class PostgresMaerskCircuitBreaker(
 
         await EnsureRowAsync(providerId, ct);
         var previous = await GetAsync(providerId, ct);
+        // An existing verification restriction remains the authoritative cause
+        // until a human confirms clearance, even if another call later times out.
+        if (previous.RequiresOperator) return;
         if (!requiresOperator && !providerTransient && previous.State != "HalfOpen")
             return;
 
@@ -114,7 +117,7 @@ public sealed class PostgresMaerskCircuitBreaker(
                         THEN NOW() + ({technicalCooldown} * INTERVAL '1 second')
                     ELSE open_until_utc END,
                 probe_execution_id = NULL,
-                reason_code = {normalized},
+                reason_code = CASE WHEN requires_operator THEN reason_code ELSE {normalized} END,
                 updated_at_utc = NOW()
             WHERE provider_id = {providerId}
             """, ct);
@@ -170,7 +173,7 @@ public sealed class PostgresMaerskCircuitBreaker(
                 consecutive_failures = 0, probe_execution_id = NULL,
                 updated_at_utc = NOW()
             WHERE provider_id = {providerId}
-              AND state = 'Open'
+              AND state IN ('Open','HalfOpen')
               AND NOT EXISTS (
                   SELECT 1 FROM agent.execution_leases l
                   JOIN agent."AgentExecutions" e ON e.id = l.execution_id
