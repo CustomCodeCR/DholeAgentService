@@ -14,6 +14,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Models;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Parsers;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
+using Microsoft.Playwright;
 
 namespace Dhole.Agent.Infrastructure.Providers.Maersk;
 
@@ -150,7 +151,37 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id.ToString("N"),
             storagePath);
 
-        await using var session = await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        IBrowserSession openedSession;
+        try
+        {
+            openedSession = await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        }
+        catch (PlaywrightException)
+        {
+            // Browser launch failed locally even after its single bounded retry.
+            // Do not archive the profile without an explicit technical repair.
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(BrowserProfileStatus.Error);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            return AgentProviderExecutionResult.Failed(
+                "maersk_chromium_launch_failed",
+                "Chromium could not open the existing persistent profile. The session files were preserved.");
+        }
+        catch (IOException)
+        {
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(BrowserProfileStatus.Error);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            return AgentProviderExecutionResult.Failed(
+                "maersk_chromium_launch_failed",
+                "Chromium profile storage could not be accessed. The session files were preserved.");
+        }
+
+        await using var session = openedSession;
         if (session is not PlaywrightBrowserSession playwrightSession)
             return AgentProviderExecutionResult.Failed(
                 "browser_session_invalid",
