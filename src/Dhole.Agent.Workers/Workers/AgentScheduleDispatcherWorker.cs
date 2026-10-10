@@ -15,6 +15,7 @@ public sealed class AgentScheduleDispatcherWorker(
     IAgentExecutionRepository executions,
     IAgentProviderRepository providers,
     IBrowserProfileRepository browserProfiles,
+    Dhole.Agent.Application.Abstractions.Runtime.IMaerskCircuitBreaker maerskCircuit,
     IAgentExtractionProfileRepository extractionProfiles,
     IAgentExtractionRouteRepository extractionRoutes,
     IAgentExtractionEquipmentRepository extractionEquipment,
@@ -82,7 +83,8 @@ public sealed class AgentScheduleDispatcherWorker(
                     ? await browserProfiles.GetByProviderCredentialAsync(
                         schedule.ProviderId, credentialId, cancellationToken)
                     : null;
-                var blocked = browserProfile?.Status == BrowserProfileStatus.Blocked;
+                var blocked = browserProfile?.Status == BrowserProfileStatus.Blocked
+                    || !await maerskCircuit.CanScheduleAsync(schedule.ProviderId, cancellationToken);
                 var outstanding = await executions.HasOutstandingForScheduleAsync(
                     schedule.Id, cancellationToken);
                 if (blocked || outstanding)

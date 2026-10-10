@@ -27,6 +27,9 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IAgentScheduleRepository, AgentScheduleRepository>();
         services.AddScoped<IAgentExecutionRepository, AgentExecutionRepository>();
         services.AddScoped<Dhole.Agent.Application.Abstractions.Runtime.IAgentQueueLeaseStore, PostgresAgentQueueLeaseStore>();
+        services.Configure<Dhole.Agent.Application.Runtime.MaerskCircuitOptions>(
+            configuration.GetSection(Dhole.Agent.Application.Runtime.MaerskCircuitOptions.SectionName));
+        services.AddScoped<Dhole.Agent.Application.Abstractions.Runtime.IMaerskCircuitBreaker, PostgresMaerskCircuitBreaker>();
         services.AddScoped<IAgentResultRepository, AgentResultRepository>();
 
         return services;
