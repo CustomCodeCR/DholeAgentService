@@ -27,6 +27,9 @@ public sealed record MaerskCircuitSnapshot(
     int ConsecutiveFailures,
     Guid? ProbeExecutionId)
 {
+    public static MaerskCircuitSnapshot Disabled(Guid providerId)
+        => new(providerId, "Disabled", false, null, null, 0, null);
+
     public static MaerskCircuitSnapshot Closed(Guid providerId)
         => new(providerId, "Closed", false, null, null, 0, null);
 
@@ -34,6 +37,7 @@ public sealed record MaerskCircuitSnapshot(
     // cooldown passes. Technical failures allow precisely one probe.
     public bool CanSchedule(DateTime utcNow) => State switch
     {
+        "Disabled" => true,
         "Closed" => true,
         "Open" when !RequiresOperator && OpenUntilUtc <= utcNow => true,
         _ => false

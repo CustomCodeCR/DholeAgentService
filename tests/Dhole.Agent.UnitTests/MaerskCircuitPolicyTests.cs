@@ -14,6 +14,14 @@ public sealed class MaerskCircuitPolicyTests
     }
 
     [TestMethod]
+    public void DisabledAllowsLegacyScheduleButDoesNotPretendToBeHealthy()
+    {
+        var state = MaerskCircuitSnapshot.Disabled(Guid.NewGuid());
+        Assert.AreEqual("Disabled", state.State);
+        Assert.IsTrue(state.CanSchedule(DateTime.UtcNow));
+    }
+
+    [TestMethod]
     public void ProviderRestriction_DoesNotAutoExpire()
     {
         var state = new MaerskCircuitSnapshot(
