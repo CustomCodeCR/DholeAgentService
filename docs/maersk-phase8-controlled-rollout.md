@@ -64,6 +64,12 @@ quedan únicamente en el host y deben gestionarse según retención segura.
 1. Verificar que las suites `dotnet test`, PostgreSQL 16, la matriz de aceptación de fase 7, CI de Agent y CI de DholeWeb estén verdes en la rama por desplegar.
 2. Registrar SHAs de develop/master, versión del esquema y etiquetas Docker anteriores. Comprobar respaldo y restauración de ensayo ANTES de migrar.
 3. Validar migraciones idempotentes y compatibles: `20261009234500_AddDurableExecutionLeases`, `20261010020000_AddMaerskCircuitBreaker`, `20261010040000_AddMaerskHealthAlerts`. Revisar el estado real de EF migrations; no aplicar manualmente scripts especulativos ni migraciones a producción directamente.
+   Tras iniciar la API y comprobar /health, el workflow comprueba en
+   PostgreSQL `agent.execution_leases`, `agent.maersk_circuits`,
+   `agent.maersk_circuit_events`, `agent.maersk_health_alerts` y
+   `AgentExecutions.next_attempt_at_utc`. Esta verificación es de solo
+   lectura, ocurre **antes de arrancar los workers nuevos** y detiene el
+   despliegue si las tres migraciones todavía no están aplicadas.
 4. En Actions, abrir **Deploy Dhole Agent - Staging** (`develop`) y usar `confirmation=DEPLOY_AGENT_STAGING`, `backup_dir=/ruta/exacta/al/snapshot`. Si el worker fue detenido durante el respaldo, el propio deploy lo levantará después de verificar la API.
 5. Validar salud de API, inicio del queue pump de workers, conteos Queued/Running/WaitingForAuthentication, sesiones sin cambio, acceso de operador y permisos. Simular un bloqueo con datos de prueba; no provocar CAPTCHA real.
 6. Confirmar que un trabajo de otro proveedor completa aun cuando Maersk esté en espera, que no hay reclamos duplicados y que un reintento técnico preserva `executionId`, snapshot y correlación.

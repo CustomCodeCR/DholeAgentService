@@ -376,6 +376,12 @@ jobs:
             sleep 2
           done
 
+      - name: Phase 8 verify migrated schema before workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-schema-check.sh production
+
       - name: Deploy Agent workers production
         shell: bash
         run: |
