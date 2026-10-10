@@ -138,6 +138,104 @@ public sealed class AgentQueuePostgresIntegrationTests
             "A large Maersk backlog must not hide cron tasks from other providers.");
     }
 
+    [TestMethod]
+    public async Task WaitingForAuthentication_IsNotClaimableAndDoesNotHideOtherProviders()
+    {
+        var connection = ConnectionStringOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var waiting = await SeedQueuedAsync(db, "MAERSK", AgentExecutionType.Scheduled);
+            waiting.Start(DateTime.UtcNow);
+            waiting.WaitForAuthentication("maersk_hcaptcha_required", "Provider verification required.");
+            var unrelated = await SeedQueuedAsync(db, "OTHER", AgentExecutionType.Manual);
+            await db.SaveChangesAsync();
+
+            var candidates = await new AgentExecutionRepository(db)
+                .GetDispatchCandidatesAsync(DateTime.UtcNow.AddMinutes(1), 4);
+            Assert.IsFalse(candidates.Any(x => x.Id == waiting.Id),
+                "Provider verification must remove the execution from active polling.");
+            Assert.IsTrue(candidates.Any(x => x.Id == unrelated.Id),
+                "An unrelated queued provider should continue to be visible.");
+
+            var store = new PostgresAgentQueueLeaseStore(db);
+            Assert.IsFalse(await store.TryClaimAsync(waiting.Id,
+                $"maersk:{waiting.ProviderId:N}", Guid.NewGuid(), TimeSpan.FromSeconds(180)));
+            Assert.IsTrue(await store.TryClaimAsync(unrelated.Id,
+                $"execution:{unrelated.Id:N}", Guid.NewGuid(), TimeSpan.FromSeconds(180)));
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
+    public async Task OneMaerskProviderLease_DoesNotBlockUnrelatedProviderOnAnotherWorker()
+    {
+        var connection = ConnectionStringOrInconclusive();
+        if (connection is null) return;
+        await using var setup = CreateDb(connection);
+        await setup.Database.MigrateAsync();
+        try
+        {
+            var first = await SeedQueuedAsync(setup, "MAERSK", AgentExecutionType.Scheduled);
+            var second = AgentExecution.Create(first.AgentDefinitionId, first.ProviderId,
+                null, null, AgentExecutionType.Manual, 100, "{}", 2,
+                Guid.NewGuid().ToString("N"));
+            second.Queue();
+            setup.AgentExecutions.Add(second);
+            var unrelated = await SeedQueuedAsync(setup, "OTHER", AgentExecutionType.Manual);
+            await setup.SaveChangesAsync();
+
+            await using var workerA = CreateDb(connection);
+            await using var workerB = CreateDb(connection);
+            var storeA = new PostgresAgentQueueLeaseStore(workerA);
+            var storeB = new PostgresAgentQueueLeaseStore(workerB);
+            var maerskScope = $"maersk:{first.ProviderId:N}";
+            var maerskOwner = Guid.NewGuid();
+            Assert.IsTrue(await storeA.TryClaimAsync(first.Id, maerskScope,
+                maerskOwner, TimeSpan.FromSeconds(180)));
+
+            Assert.IsFalse(await storeB.TryClaimAsync(second.Id, maerskScope,
+                Guid.NewGuid(), TimeSpan.FromSeconds(180)),
+                "A second Maersk job must not use the same provider session in parallel.");
+            var otherScope = $"execution:{unrelated.Id:N}";
+            var otherOwner = Guid.NewGuid();
+            Assert.IsTrue(await storeB.TryClaimAsync(unrelated.Id, otherScope,
+                otherOwner, TimeSpan.FromSeconds(180)),
+                "Maersk's busy session must not block other providers.");
+            await storeA.ReleaseAsync(maerskScope, first.Id, maerskOwner);
+            await storeB.ReleaseAsync(otherScope, unrelated.Id, otherOwner);
+        }
+        finally { await setup.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
+    public async Task LegacyRunningWithoutLease_ExpiresAsFailedAndNeverReplaysAutomatically()
+    {
+        var connection = ConnectionStringOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var interrupted = await SeedQueuedAsync(db, "MAERSK", AgentExecutionType.Manual);
+            interrupted.Start(DateTime.UtcNow.AddHours(-13));
+            await db.SaveChangesAsync();
+            var store = new PostgresAgentQueueLeaseStore(db);
+
+            Assert.AreEqual(1, await store.FailInterruptedAsync());
+            var state = await db.AgentExecutions.AsNoTracking()
+                .SingleAsync(x => x.Id == interrupted.Id);
+            Assert.AreEqual(AgentExecutionStatus.Failed, state.Status);
+            Assert.AreEqual("agent_legacy_execution_interrupted", state.ErrorCode);
+            Assert.IsFalse(await store.TryClaimAsync(interrupted.Id,
+                $"maersk:{interrupted.ProviderId:N}", Guid.NewGuid(),
+                TimeSpan.FromSeconds(180)));
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
     private static string? ConnectionStringOrInconclusive()
     {
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
