@@ -44,6 +44,32 @@ Desplegar los cambios ya validados de fases 1–7 sin perder ejecuciones, sesion
 4. Desplegar primero API, verificar `/health`; luego workers y `AGENT_QUEUE_PUMP_STARTED`. Comparar conteos pre/post y tasa de errores. No limpiar ni reiniciar sesiones bloqueadas.
 5. Verificar los endpoints de operación y permisos antes de habilitar cualquier flag productivo; activar uno por vez, midiendo lease/heartbeat, cola y alertas. Nunca cerrar automáticamente un circuito que requiere operador.
 
+## Comprobaciones de restauración y rollback automatizado
+
+Los workflows de staging y producción ejecutan, antes de reconstruir imágenes,
+`scripts/maersk-phase8-restore-drill.sh`: levantan un PostgreSQL 16 desechable
+**sin red**, restauran el `agent.dump` completo y verifican la presencia de tablas
+`agent`. El contenedor y sus volúmenes anónimos se eliminan al terminar. Nunca se
+restaura sobre la base en uso. Este ensayo puede requerir espacio adicional en el
+runner; si falta espacio o una migración rompe la restauración, el despliegue se
+detiene sin tocar API ni workers.
+
+Antes de construir, `scripts/maersk-phase8-image-rollback.sh capture`
+protege los IDs de las imágenes existentes usando tags
+`phase8-prev-<ambiente>-<GITHUB_RUN_ID>`; no depende de que sigan presentes
+los tags `latest`/`staging`. El paso `mark-deploy` marca el comienzo real
+del cambio. Si falla un paso posterior, el workflow ejecuta `restore`,
+recupera ambos tags originales y recrea API y workers sin eliminar volúmenes,
+bases, sesiones, colas o filas de auditoría. Si falla la propia recuperación,
+investigar el log y **no continuar el rollout**; la restauración no revierte
+migraciones SQL.
+
+En producción se prohíbe `docker image prune -af` dentro de la fase 8:
+borraría imágenes antiguas etiquetadas de las que depende el rollback. Solo
+se permite limpiar imágenes sin etiqueta y cache de build. Antes de retirar
+manualmente tags `phase8-prev-*` comprobar política de retención y al menos
+una versión estable recuperable.
+
 ## 4. Rollback sin pérdida de datos
 
 1. Si aumenta la cola, aparecen reclamos duplicados o falla el health check, detener la activación. Establecer **false** en los tres flags en API y workers; reiniciar de forma coordinada solo después de conservar estado y permitir terminar trabajos vivos.
