@@ -23,6 +23,11 @@ project=dhole
 if [[ "$environment" == staging ]]; then project=dhole-staging; fi
 grep -Fxq "environment=$environment" "$backup_dir/metadata.txt" || die "Backup environment mismatch"
 grep -Fxq "compose_project=$project" "$backup_dir/metadata.txt" || die "Backup project mismatch"
+expected_database="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$env_file" | head -n 1 | tr -d '\r' | tr ';' '\n' | sed -n 's/^Database=//p' | head -n 1)"
+[[ -n "$expected_database" ]] || die "Agent database is unspecified"
+grep -Fxq "database_name=$expected_database" "$backup_dir/metadata.txt" || die "Backup database mismatch"
+grep -Fxq "profile_volume=${project}_agent-browser-profiles" "$backup_dir/metadata.txt" || die "Profile volume mismatch"
+grep -Fxq "keys_volume=${project}_agent-data-protection-keys" "$backup_dir/metadata.txt" || die "Key-ring volume mismatch"
 # Fresh evidence is required for every deployment (24h maximum).
 now="$(date -u +%s)"
 created="$(sed -n 's/^created_epoch=//p' "$backup_dir/metadata.txt" | head -n 1)"
