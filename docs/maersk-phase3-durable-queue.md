@@ -16,6 +16,7 @@ Se registra **un solo** dispatcher en DI por worker: el `QueuedExecutionBackgrou
     "PollIntervalSeconds": 1,
     "LeaseSeconds": 180,
     "HeartbeatSeconds": 20,
+    "MaxExecutionSeconds": 3600,
     "MaxTransientRetries": 2,
     "RetryBackoffSeconds": [15, 60]
   }
