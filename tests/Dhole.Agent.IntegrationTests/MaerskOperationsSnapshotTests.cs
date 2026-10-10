@@ -45,6 +45,17 @@ public sealed class MaerskOperationsSnapshotTests
     }
 
     [TestMethod]
+    public void DisabledAndStoredCircuitState_AreExplicitlyDifferentFields()
+    {
+        var dto = new MaerskOperationCircuitDto(
+            false, "Disabled", false, null, null, 0, null)
+        { PersistedState = "Open", ConfigurationSource = "Default" };
+        Assert.AreEqual("Disabled", dto.State);
+        Assert.AreEqual("Open", dto.PersistedState);
+        Assert.IsFalse(dto.FeatureEnabled);
+    }
+
+    [TestMethod]
     public void OverviewDto_ExcludesCredentialsStorageAndRawResponses()
     {
         var properties = typeof(MaerskOperationsDto).Assembly
