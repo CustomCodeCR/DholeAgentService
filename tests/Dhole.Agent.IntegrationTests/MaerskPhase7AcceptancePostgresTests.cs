@@ -121,7 +121,13 @@ public sealed class MaerskPhase7AcceptancePostgresTests
         {
             var seeded = await SeedQueuedAsync(db, "MAERSK", AgentProviderType.Maersk);
             var execution = seeded.Execution;
-            var snapshotId = Guid.NewGuid();
+            var profile = AgentExtractionProfile.Create(
+                seeded.Provider.Id, null, "Acceptance snapshot profile", null,
+                "https://example.invalid", null, null, "https://example.invalid",
+                "Offline test prompt", AgentExecutionStrategy.Browser, null);
+            db.AgentExtractionProfiles.Add(profile);
+            await db.SaveChangesAsync();
+            var snapshotId = profile.Id;
             execution.AttachProfileSnapshot(snapshotId,
                 "Frozen snapshot for one execution", """{"source":"original"}""");
             execution.Start(DateTime.UtcNow);
