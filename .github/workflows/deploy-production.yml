@@ -59,20 +59,29 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/runs/$STAGING_RUN_ID")"
+          # A historical push-based staging success is not sufficient:
+          # require a manually authorized release of the CURRENT develop commit.
+          branch_payload="$(curl --fail --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/CustomCodeCR/DholeAgentService/branches/develop")"
+          CURRENT_DEVELOP_SHA="$(printf '%s' "$branch_payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["sha"])')"
+          export CURRENT_DEVELOP_SHA
           printf '%s' "$payload" | python3 -c '
-          import json, sys
+          import json, os, sys
           from datetime import datetime, timedelta, timezone
           run = json.load(sys.stdin)
+          age = datetime.now(timezone.utc) - datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
           accepted = (run.get("name") == "Deploy Dhole Agent - Staging"
                       and run.get("head_branch") == "develop"
+                      and run.get("head_sha") == os.environ["CURRENT_DEVELOP_SHA"]
+                      and run.get("event") == "workflow_dispatch"
                       and run.get("conclusion") == "success"
-                      and datetime.now(timezone.utc) -
-                          datetime.fromisoformat(run["created_at"].replace("Z", "+00:00")) <
-                          timedelta(hours=48))
+                      and timedelta(0) <= age < timedelta(hours=48))
           if not accepted:
-              print("No successful staging deployment evidence from the last 48h", file=sys.stderr)
+              print("Require a successful manually verified staging deploy of current develop within 48h", file=sys.stderr)
               sys.exit(1)
-          print("Staging acceptance workflow verified.")
+          print("Current develop manual staging acceptance verified.")
           '
 
       - name: Load Dhole production infrastructure
