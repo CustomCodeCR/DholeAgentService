@@ -39,6 +39,23 @@ host="${host:-postgres}"
 port="${port:-5432}"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || die "Invalid database configuration"
 
+# pg_dump must be at least the server's major version. Staging currently
+# runs PostgreSQL 17 while production may have a different major.
+# Query the existing server with a read-only client; never upgrade servers.
+server_version_num="$(docker run --rm --network "$network" -e PGPASSWORD="$password" \
+  -e PGOPTIONS='-c default_transaction_read_only=on' postgres:16-alpine \
+  psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$username" -d "$database" \
+  -c 'SHOW server_version_num;')"
+[[ "$server_version_num" =~ ^[0-9]+$ ]] || die 'Could not detect PostgreSQL server version'
+pg_major="$((server_version_num / 10000))"
+case "$pg_major" in
+  16|17) ;;
+  *) die "PostgreSQL server major $pg_major not yet supported by backup verification" ;;
+esac
+backup_image="postgres:$pg_major-alpine"
+docker image inspect "$backup_image" >/dev/null 2>&1 || die "Required matching PostgreSQL image absent: $backup_image"
+echo "BACKUP_POSTGRES_MAJOR=$pg_major"
+
 profile_volume="${project}_agent-browser-profiles"
 keys_volume="${project}_agent-data-protection-keys"
 docker volume inspect "$profile_volume" >/dev/null || die "Browser-profile volume does not exist: $profile_volume"
@@ -56,20 +73,20 @@ mkdir -p "$backup_root/$environment"
 mkdir -m 700 "$output" || die "Could not create unique backup location"
 
 docker run --rm --network "$network" -e PGPASSWORD="$password" \
-  -v "$output:/backup" postgres:16-alpine \
+  -v "$output:/backup" "$backup_image" \
   pg_dump -h "$host" -p "$port" -U "$username" -Fc -f /backup/agent.dump "$database"
 
-docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
+docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" "$backup_image" \
   tar -C /source -czf /backup/browser-profiles.tar.gz .
-docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
+docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" "$backup_image" \
   tar -C /source -czf /backup/agent-keys.tar.gz .
 
-printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\nkeys_volume=%s\ncreated_epoch=%s\n' \
-  "$environment" "$project" "$database" "$profile_volume" "$keys_volume" "$(date -u +%s)" > "$output/metadata.txt"
+printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\nkeys_volume=%s\npostgres_major=%s\ncreated_epoch=%s\n' \
+  "$environment" "$project" "$database" "$profile_volume" "$keys_volume" "$pg_major" "$(date -u +%s)" > "$output/metadata.txt"
 (cd "$output" && sha256sum agent.dump browser-profiles.tar.gz agent-keys.tar.gz metadata.txt > SHA256SUMS)
 # Bind-mounted snapshots are created as container root. Return file ownership
 # to the self-hosted runner while keeping archives private.
-docker run --rm -v "$output:/backup" alpine:3.20 sh -c \
+docker run --rm -v "$output:/backup" "$backup_image" sh -c \
   "chown $(id -u):$(id -g) /backup/* && chmod 600 /backup/*"
 # GitHub Actions output contains only the operator's host path, never backup bytes.
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
