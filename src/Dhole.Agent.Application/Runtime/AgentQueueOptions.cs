@@ -11,6 +11,7 @@ public sealed class AgentQueueOptions
     public int PollIntervalSeconds { get; set; } = 1;
     public int LeaseSeconds { get; set; } = 180;
     public int HeartbeatSeconds { get; set; } = 20;
+    public int MaxExecutionSeconds { get; set; } = 3600;
     public int MaxTransientRetries { get; set; } = 2;
     public int[] RetryBackoffSeconds { get; set; } = [15, 60];
 
