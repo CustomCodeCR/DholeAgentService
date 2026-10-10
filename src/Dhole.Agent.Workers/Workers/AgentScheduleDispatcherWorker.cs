@@ -100,10 +100,13 @@ public sealed class AgentScheduleDispatcherWorker(
                     schedule.Id, cancellationToken);
                 if (blocked || outstanding)
                 {
-                    schedule.MarkDispatched(now, calculator.GetNext(schedule, now));
-                    await unitOfWork.SaveChangesAsync(cancellationToken);
-                    logger.LogWarning(
-                        "MAERSK_SCHEDULE_SKIPPED schedule={ScheduleId} blocked={Blocked} outstanding={Outstanding}",
+                    // Phase 4: a provider challenge or outstanding execution is
+                    // NOT a dispatch. Preserve NextExecutionAt and LastExecutionAt.
+                    // In particular, a once-only schedule must not be consumed
+                    // while CAPTCHA/403/429 requires operator verification.
+                    // A later tick may dispatch one due execution once unblocked.
+                    logger.LogDebug(
+                        "MAERSK_SCHEDULE_DEFERRED schedule={ScheduleId} blocked={Blocked} outstanding={Outstanding}",
                         schedule.Id, blocked, outstanding);
                     continue;
                 }
