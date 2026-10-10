@@ -50,6 +50,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.Configure<BrowserOptions>(configuration.GetSection(BrowserOptions.SectionName));
         services.AddSingleton<IBrowserProfileManager, BrowserProfileManager>();
+        services.AddSingleton<IBrowserProfileExclusiveLock, FileSystemBrowserProfileExclusiveLock>();
         services.AddScoped<IBrowserManager, PlaywrightBrowserManager>();
         services.AddSingleton<ISecretProvider, EnvironmentSecretProvider>();
         services.AddSingleton<SecretRedactor>();
