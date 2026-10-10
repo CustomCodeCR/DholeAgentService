@@ -120,3 +120,5 @@ jobs:
           bash -n scripts/maersk-phase8-backup.sh
           bash -n scripts/tests/test-maersk-phase8-preflight.sh
           bash scripts/tests/test-maersk-phase8-preflight.sh
+          bash -n scripts/tests/test-maersk-phase8-workflows.sh
+          bash scripts/tests/test-maersk-phase8-workflows.sh
