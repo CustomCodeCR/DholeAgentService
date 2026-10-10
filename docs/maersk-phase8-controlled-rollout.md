@@ -15,6 +15,39 @@ Desplegar los cambios ya validados de fases 1–7 sin perder ejecuciones, sesion
 - Se elimina el paso legacy de producción que cancelaba `Queued` y marcaba `Running` como `Failed`. Nunca efectuar limpieza destructiva de la cola como efecto de un deploy.
 - Se desactiva `cancel-in-progress` para evitar cancelar un despliegue de producción a medio aplicar.
 
+## Preparación asistida desde GitHub Actions (nuevo)
+
+Para reducir operaciones manuales **sin saltarse los controles de seguridad**, existe
+`Prepare Maersk Phase 8 Backup` (`.github/workflows/maersk-phase8-backup.yml`).
+Este workflow se ejecuta **solo por `workflow_dispatch`** en el runner Dhole y
+comparte el grupo de concurrencia con el deployment del mismo entorno.
+
+1. Crear una carpeta durable en el host (ejemplo: `/opt/dhole/backups`),
+   con permisos exclusivos para el usuario del runner y espacio suficiente.
+   **No copiar secretos, sesiones o respaldos a GitHub.**
+2. Detener nuevas ejecuciones, esperar que termine toda ejecución Running y
+   detener manualmente **solo el worker del entorno elegido**. Si sigue
+   ejecutándose, el nuevo workflow fallará antes de tocar perfiles o BD.
+3. En la pestaña **Actions**, elegir `Prepare Maersk Phase 8 Backup`.
+   Seleccionar la rama `develop` para staging o `master` para production.
+   Indicar `environment=staging|production`, `backup_root` absoluta y la
+   autorización exacta `BACKUP_AGENT_STAGING` o `BACKUP_AGENT_PRODUCTION`.
+4. El workflow prepara el env file sin imprimir credenciales, crea dump y
+   snapshots de ambos volúmenes, valida checksums/metadatos/flags e inicia
+   un PostgreSQL 16 temporal sin red para demostrar que el dump restaura.
+   Si todo pasa, copiar el campo **snapshot directory** del resumen de la
+   ejecución; esa es la ruta que exige `backup_dir` al desplegar.
+5. Ejecutar el deployment manual del ambiente elegido usando esa ruta.
+   El deployment volverá a comprobar integridad, realizará el ensayo de
+   restauración y validará salud de API/worker. Si no se va a desplegar,
+   reanudar **explícitamente** el worker detenido por el operador tras
+   verificar que no hay mantenimiento pendiente. El workflow de backup
+   **nunca** lo inicia ni lo detiene automáticamente.
+
+La comprobación de restore aísla PostgreSQL, **no es una prueba de que las
+tarifas reales de Maersk hayan sido extraídas**. El respaldo y sus llaves
+quedan únicamente en el host y deben gestionarse según retención segura.
+
 ## 1. Preparar respaldo (fuera del repositorio)
 
 1. En el **host del ambiente exacto**, asegurar que el directorio durable de respaldos tenga espacio, permisos correctos y no esté dentro de checkout, `/tmp` ni volúmenes que el deploy pueda podar. No subir la copia a Actions/artifacts, Git ni servicios públicos.
