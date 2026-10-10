@@ -1,0 +1,102 @@
+name: Maersk Phase 2 — Staging Readiness Readonly
+
+on:
+  push:
+    branches:
+      - fix/maersk-phase2-live-readiness-develop-20261010
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maersk-phase2-readonly-staging
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 12
+    steps:
+      - name: Inspect live staging without modifying containers, DB, sessions or backups
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          echo PHASE2_STAGING_PREFLIGHT_START
+          env_file=/opt/dhole/.env.staging
+          if [[ ! -r "$env_file" ]]; then echo 'ENV_FILE_UNREADABLE'; exit 1; fi
+          project=dhole-staging
+          network=dhole-staging
+          for service in dhole-agent-api dhole-agent-workers; do
+            cid="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service")"
+            if [[ "$(printf '%s\n' "$cid" | sed '/^$/d' | wc -l)" -ne 1 ]]; then
+              echo "SERVICE_INVALID=$service"
+              continue
+            fi
+            image="$(docker inspect --format '{{.Image}}' "$cid")"
+            echo "RUNNING_IMAGE_$service=$image"
+            docker inspect --format '{{.State.Status}}' "$cid" | sed "s/^/STATE_$service=/"
+            for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled AgentQueue__ConcurrentDispatcherEnabled AgentQueue__MaxConcurrentMaersk; do
+              value="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" | sed -n "s/^$key=//p" | tail -n 1 || true)"
+              if [[ "$key" == AgentQueue__MaxConcurrentMaersk ]]; then
+                [[ "$value" =~ ^[0-9]+$ ]] || value=UNKNOWN
+              else
+                case "$value" in true|false|0|1) ;; *) value=UNKNOWN ;; esac
+              fi
+              echo "FLAG_$service/$key=$value"
+            done
+          done
+
+          conn="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+          if [[ -z "$conn" ]]; then
+            pguser="$(sed -n 's/^POSTGRES_USER=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+            pgpassword="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$env_file" | tail -n 1 | tr -d '\r')"
+            [[ -n "$pguser" && -n "$pgpassword" ]] || { echo 'DB_CONNECTION_MISSING'; exit 1; }
+            conn="Host=postgres;Port=5432;Database=dhole_agent;Username=$pguser;Password=$pgpassword"
+          fi
+          value() { printf '%s' "$conn" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n 1; }
+          host="$(value Host)"
+          port="$(value Port)"
+          db="$(value Database)"
+          user="$(value Username)"
+          password="$(value Password)"
+          [[ "$db" =~ ^[A-Za-z0-9_]+$ && -n "$user" && -n "$password" ]] || { echo 'DB_CONNECTION_INVALID'; exit 1; }
+          host="${host:-postgres}"
+          port="${port:-5432}"
+
+          docker run --rm --network "$network" -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
+            postgres:16-alpine psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$user" -d "$db" <<'SQL'
+          SELECT 'CIRCUIT_TABLE=' || (to_regclass('agent.maersk_circuits') IS NOT NULL)::text;
+          SELECT 'CIRCUIT_EVENT_TABLE=' || (to_regclass('agent.maersk_circuit_events') IS NOT NULL)::text;
+          SELECT 'DEDUP_COLUMN=' || EXISTS (
+            SELECT 1 FROM information_schema.columns WHERE table_schema='agent'
+            AND table_name='maersk_circuit_events' AND column_name='execution_id'
+          );
+          SELECT 'STAGING_RUNNING=' || count(*) FROM agent."AgentExecutions" WHERE status='Running';
+          SELECT 'STAGING_WAITING_AUTH=' || count(*) FROM agent."AgentExecutions"
+          WHERE provider_id='2155f49f-ef15-43a5-9cc1-55203598af59'
+          AND status='WaitingForAuthentication';
+          SELECT 'STAGING_PROVIDER_CAPTCHA_BACKLOG=' || count(*) FROM agent."AgentExecutions"
+          WHERE provider_id='2155f49f-ef15-43a5-9cc1-55203598af59'
+          AND status='WaitingForAuthentication'
+          AND error_code IN ('maersk_hcaptcha_required','maersk_authentication_forbidden','maersk_authentication_rate_limited');
+          SELECT 'STAGING_CIRCUIT_STATE=' || COALESCE(
+            (SELECT state || '/' || requires_operator::text || '/' || COALESCE(reason_code,'NONE')
+              FROM agent.maersk_circuits WHERE provider_id='2155f49f-ef15-43a5-9cc1-55203598af59'), 'NO_ROW');
+          SQL
+
+          for name in dhole/agent-api:staging dhole/agent-workers:staging; do
+            if docker image inspect "$name" >/dev/null 2>&1; then
+              echo "RELEASE_IMAGE_PRESENT=$name"
+            else echo "RELEASE_IMAGE_ABSENT=$name"; fi
+          done
+          backup_count=0
+          while IFS= read -r manifest; do
+            [[ -n "$manifest" ]] || continue
+            if [[ "$(date -u +%s)" -lt "$(($(stat -c %Y "$manifest") + 86400))" ]]; then
+              backup_count=$((backup_count+1))
+            fi
+          done < <(find /opt/dhole /home/Argos /var/backups -maxdepth 7 -type f -name SHA256SUMS -print 2>/dev/null || true)
+          echo "RECENT_BACKUP_MANIFEST_COUNT=$backup_count"
+          echo 'PHASE2_STAGING_PREFLIGHT_READONLY_COMPLETE'
