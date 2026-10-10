@@ -4,6 +4,7 @@ using CustomCodeFramework.Persistence.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Agents;
+using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Application.Abstractions.Security;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Infrastructure.Browser;
@@ -208,6 +209,16 @@ public sealed class MaerskAgentProvider(
                     plan.AuthenticationSuccessUrl,
                     context.Execution.ExecutionType == AgentExecutionType.Manual,
                     cancellationToken);
+
+                if (captured.Status is 401 or 403 or 429)
+                {
+                    // Structured response evidence: provider restrictions are not
+                    // ordinary search failures and must stop this batch immediately.
+                    var classified = MaerskFailureClassifier.Classify(null, httpStatusCode: captured.Status);
+                    throw new MaerskAuthenticationException(
+                        classified.CanonicalErrorCode,
+                        $"Maersk departures/offers returned HTTP {captured.Status}.");
+                }
 
                 if (captured.Status is < 200 or >= 300)
                     throw new InvalidOperationException(
@@ -1010,18 +1021,23 @@ public sealed class MaerskAgentProvider(
     }
 
     private static BrowserProfileStatus MapBrowserProfileStatus(string errorCode)
-        => errorCode switch
+    {
+        var classified = MaerskFailureClassifier.Classify(errorCode);
+        return classified.Category switch
         {
-            "maersk_authentication_forbidden" => BrowserProfileStatus.Blocked,
-            "maersk_authentication_edge_denied" => BrowserProfileStatus.Blocked,
-            "maersk_authentication_rate_limited" => BrowserProfileStatus.Blocked,
-            "maersk_authentication_unauthorized" => BrowserProfileStatus.LoginRequired,
-            "maersk_authentication_verification_required" => BrowserProfileStatus.LoginRequired,
-            "maersk_hcaptcha_required" => BrowserProfileStatus.Blocked,
-            "maersk_post_auth_navigation_failed" => BrowserProfileStatus.LoginRequired,
-            "maersk_authentication_service_error" => BrowserProfileStatus.Error,
+            FailureCategory.ProviderAccessRestricted or FailureCategory.ProviderRateLimited
+                => BrowserProfileStatus.Blocked,
+            FailureCategory.ProviderVerificationRequired
+                when errorCode is "maersk_hcaptcha_required" or "maersk_browser_profile_blocked"
+                => BrowserProfileStatus.Blocked,
+            FailureCategory.ProviderVerificationRequired or FailureCategory.AuthenticationExpired
+                => BrowserProfileStatus.LoginRequired,
+            FailureCategory.ProviderOrUiTimeout
+                when errorCode == "maersk_post_auth_navigation_failed"
+                => BrowserProfileStatus.LoginRequired,
             _ => BrowserProfileStatus.Error
         };
+    }
 
     private static RuntimeInput ParseRuntime(string? inputJson)
     {

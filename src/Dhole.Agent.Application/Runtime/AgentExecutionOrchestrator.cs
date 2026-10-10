@@ -156,6 +156,28 @@ public sealed class AgentExecutionOrchestrator(
                 var failureCode=result.ErrorCode??"provider_failed";
                 var failureMessage=result.ErrorMessage??"Provider execution failed.";
 
+                if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+                {
+                    var classification = MaerskFailureClassifier.Classify(failureCode);
+                    logger.LogWarning(
+                        "MAERSK_FAILURE_CLASSIFIED execution={ExecutionId} provider={ProviderId} credential={CredentialId} extractionProfile={ExtractionProfileId} category={Category} code={ErrorCode} canRetry={CanRetry} requiresOperator={RequiresOperator} openCircuit={ShouldOpenCircuit} preserveProfile={PreserveProfile} attempt={Attempt} environment={Environment} utc={TimestampUtc}",
+                        execution.Id,
+                        provider.Id,
+                        credentialId,
+                        profile.Id,
+                        classification.Category,
+                        classification.CanonicalErrorCode,
+                        classification.CanRetry,
+                        classification.RequiresOperator,
+                        classification.ShouldOpenCircuit,
+                        classification.PreserveProfile,
+                        execution.Attempt,
+                        Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+                            ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                            ?? "unknown",
+                        DateTime.UtcNow);
+                }
+
                 if(IsAuthenticationRequiredFailure(failureCode))
                 {
                     execution.WaitForAuthentication(
@@ -308,16 +330,7 @@ public sealed class AgentExecutionOrchestrator(
     }
 
     private static bool IsAuthenticationRequiredFailure(string errorCode)
-        => errorCode.Equals("maersk_authentication_verification_required", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_unauthorized", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_forbidden", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_edge_denied", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_rate_limited", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_continue_not_clickable", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_authentication_callback_timeout", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_post_auth_navigation_failed", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_hcaptcha_required", StringComparison.OrdinalIgnoreCase)
-           || errorCode.Equals("maersk_browser_profile_repair_requires_manual_run", StringComparison.OrdinalIgnoreCase);
+        => MaerskFailureClassifier.Classify(errorCode).RequiresOperator;
 
     private static string? NormalizePersistedJson(string? json)
     {
