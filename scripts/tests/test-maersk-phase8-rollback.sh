@@ -38,6 +38,9 @@ manifest="$fixture/maersk-phase8-9876543-staging.manifest"
 grep -Fq "api_tag=dhole/agent-api:phase8-prev-staging-9876543" "$manifest"
 grep -Fq "worker_tag=dhole/agent-workers:phase8-prev-staging-9876543" "$manifest"
 bash "$rollback" restore staging
+# A failed build must restore original tags without recreating either service.
+grep -Fq 'image tag dhole/agent-api:phase8-prev-staging-9876543 dhole/agent-api:staging' "$DOCKER_MOCK_LOG"
+grep -Fq 'image tag dhole/agent-workers:phase8-prev-staging-9876543 dhole/agent-workers:staging' "$DOCKER_MOCK_LOG"
 if grep -Fq ' up -d ' "$DOCKER_MOCK_LOG"; then
   echo "Rollback must not touch services before deployment starts" >&2
   exit 1
