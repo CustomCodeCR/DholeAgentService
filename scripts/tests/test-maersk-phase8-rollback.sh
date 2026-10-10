@@ -33,6 +33,7 @@ export DHOLE_ENV_FILE="$fixture/.env"
 export COMPOSE_FILE="$fixture/compose.yml"
 export COMPOSE_OVERRIDE="$fixture/staging.yml"
 
+grep -Fq PHASE8_RESTORE_REFERENCE_INTEGRITY_FAILED "$repo/scripts/maersk-phase8-restore-drill.sh"
 rollback="$repo/scripts/maersk-phase8-image-rollback.sh"
 bash -n "$rollback"
 
