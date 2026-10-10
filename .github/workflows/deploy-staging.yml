@@ -1,9 +1,17 @@
 name: Deploy Dhole Agent - Staging
 
 on:
-  push:
-    branches: [develop]
+  # Phase 8 guarded release: no implicit deployment from a Git push.
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DEPLOY_AGENT_STAGING to authorize this release"
+        type: string
+        required: true
+      backup_dir:
+        description: "Absolute path to verified backups on the self-hosted runner"
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -26,6 +34,14 @@ jobs:
     steps:
       - name: Checkout Agent
         uses: actions/checkout@v4
+
+      - name: Confirm phase 8 manual release
+        shell: bash
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_STAGING" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
 
       - name: Load Dhole staging infrastructure
         shell: bash
@@ -50,6 +66,14 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "AGENT_NOVNC_HOST_PORT=6081" >> "$RUNNER_TEMP/dhole-env/.env.staging"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
+
+      - name: Phase 8 verify database and profile/key backups
+        shell: bash
+        env:
+          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-preflight.sh staging "$PHASE8_BACKUP_DIR" "$DHOLE_ENV_FILE"
 
       - name: Ensure Agent database exists
         shell: bash

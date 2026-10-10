@@ -1,17 +1,30 @@
 name: Deploy Dhole Agent - Production
 
 on:
-  push:
-    branches: [master]
+  # Phase 8 guarded release: no implicit deployment from a Git push.
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DEPLOY_AGENT_PRODUCTION to authorize this release"
+        type: string
+        required: true
+      backup_dir:
+        description: "Absolute path to verified backups on the self-hosted runner"
+        type: string
+        required: true
+      staging_run_id:
+        description: "Successful recent staging deployment workflow run ID (develop)"
+        type: string
+        required: true
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
   packages: read
 
 concurrency:
   group: dhole-agent-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   COMPOSE_FILE: .dhole-system/deploy/docker-compose.services.yml
@@ -25,6 +38,42 @@ jobs:
     steps:
       - name: Checkout Agent
         uses: actions/checkout@v4
+
+      - name: Confirm phase 8 manual release
+        shell: bash
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_PRODUCTION" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
+
+      - name: Require successful recent staging acceptance
+        shell: bash
+        env:
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$STAGING_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Invalid staging run ID" >&2; exit 1; }
+          payload="$(curl --fail --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/runs/$STAGING_RUN_ID")"
+          printf '%s' "$payload" | python3 -c '
+          import json, sys
+          from datetime import datetime, timedelta, timezone
+          run = json.load(sys.stdin)
+          accepted = (run.get("name") == "Deploy Dhole Agent - Staging"
+                      and run.get("head_branch") == "develop"
+                      and run.get("conclusion") == "success"
+                      and datetime.now(timezone.utc) -
+                          datetime.fromisoformat(run["created_at"].replace("Z", "+00:00")) <
+                          timedelta(hours=48))
+          if not accepted:
+              print("No successful staging deployment evidence from the last 48h", file=sys.stderr)
+              sys.exit(1)
+          print("Staging acceptance workflow verified.")
+          '
 
       - name: Load Dhole production infrastructure
         shell: bash
@@ -48,6 +97,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dhole-env"
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.production" >> "$GITHUB_ENV"
+
+      - name: Phase 8 verify database and profile/key backups
+        shell: bash
+        env:
+          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase8-preflight.sh production "$PHASE8_BACKUP_DIR" "$DHOLE_ENV_FILE"
 
       - name: Ensure Agent database exists
         shell: bash
@@ -111,59 +168,6 @@ jobs:
           else
             echo "Agent database already exists: $DB_NAME"
           fi
-
-      # One-time operational cleanup requested on the tagged hotfix merge.
-      # Preserve every execution record; do not delete rows, profiles or volumes.
-      - name: Release blocked Maersk queue once before builds
-        shell: bash
-        run: |
-          set -euo pipefail
-          SENTINEL="$HOME/.dhole-maersk-queue-released-20261009"
-          if [ -f "$SENTINEL" ]; then
-            echo "Maersk queue cleanup was already completed on this runner."
-            exit 0
-          fi
-          AGENT_CONNECTION="$(grep -m1 '^AGENT_POSTGRES_CONNECTION_STRING=' "$DHOLE_ENV_FILE" | cut -d= -f2-)"
-          test -n "$AGENT_CONNECTION"
-
-          connection_value() {
-            printf '%s' "$AGENT_CONNECTION" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1
-          }
-
-          DB_HOST="$(connection_value Host)"
-          DB_PORT="$(connection_value Port)"
-          DB_NAME="$(connection_value Database)"
-          DB_USER="$(connection_value Username)"
-          DB_PASSWORD="$(connection_value Password)"
-          DB_HOST="${DB_HOST:-postgres}"
-          DB_PORT="${DB_PORT:-5432}"
-          test -n "$DB_NAME" && test -n "$DB_USER" && test -n "$DB_PASSWORD"
-
-          # Terminate only the Agent worker browser process before closing
-          # orphaned Running rows; do not touch databases or other services.
-          docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" \
-            stop -t 30 dhole-agent-workers
-          trap 'docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" up -d --no-deps --pull never dhole-agent-workers || true' EXIT
-
-          docker run --rm -i --network "$DHOLE_NETWORK" -e PGPASSWORD="$DB_PASSWORD" postgres:16-alpine \
-            psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" <<'SQL'
-          BEGIN;
-          UPDATE agent."AgentExecutions"
-          SET status = 'Cancelled', completed_at = NOW()
-          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
-            AND status = 'Queued';
-
-          UPDATE agent."AgentExecutions"
-          SET status = 'Failed',
-              completed_at = NOW(),
-              error_code = 'agent_worker_restarted',
-              error_message = 'Interrupted during controlled Maersk queue recovery; re-run manually.'
-          WHERE provider_id = '2155f49f-ef15-43a5-9cc1-55203598af59'
-            AND status = 'Running';
-          COMMIT;
-          SQL
-          touch "$SENTINEL"
-          echo "Maersk queue recovery completed; execution history preserved."
 
       - name: Diagnose Agent execution statuses
         shell: bash
