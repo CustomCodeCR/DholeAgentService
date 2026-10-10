@@ -7,6 +7,7 @@ using Dhole.Agent.Persistence.DbContexts;
 using Dhole.Agent.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Dhole.Agent.IntegrationTests;
 
@@ -88,6 +89,7 @@ public sealed class ExecutionPipelineIntegrationTests
             new AgentResultRepository(db),
             new FakeProviderResolver(),
             new TestUnitOfWork(db),
+            Options.Create(new AgentQueueOptions()),
             NullLogger<AgentExecutionOrchestrator>.Instance);
 
         await orchestrator.ExecuteAsync(execution.Id);
