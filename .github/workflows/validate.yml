@@ -113,6 +113,26 @@ jobs:
             grep -F "Passed ${scenario}" /tmp/maersk-phase7-acceptance.log
           done
 
+      - name: Phase 4 Maersk circuit and verified reset acceptance (PostgreSQL)
+        env:
+          AGENT_QUEUE_POSTGRES_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres"
+        run: |
+          set -euo pipefail
+          dotnet test tests/Dhole.Agent.IntegrationTests/Dhole.Agent.IntegrationTests.csproj \
+            --configuration Release --no-build --no-restore \
+            --filter "FullyQualifiedName~MaerskCircuitPostgresIntegrationTests" \
+            --logger "console;verbosity=normal" | tee /tmp/maersk-phase4-acceptance.log
+          for scenario in \
+            CaptchaAnd429_StayOpenEvenAfterCooldownUntilVerifiedOperatorReset \
+            TechnicalThreshold_AllowsOnlyOneHalfOpenProbeAcrossWorkers \
+            FailedProbe_ReopensForCooldownWithoutRotatingProviderIdentity \
+            OperatorReset_FailsClosedUntilBlockedProfileIsReauthenticated; do
+            grep -F "Passed ${scenario}" /tmp/maersk-phase4-acceptance.log || {
+              echo "Maersk Phase 4 scenario failed or skipped: $scenario" >&2
+              exit 1
+            }
+          done
+
       - name: Phase 3 durable queue acceptance gate (real PostgreSQL)
         env:
           AGENT_QUEUE_POSTGRES_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres"
