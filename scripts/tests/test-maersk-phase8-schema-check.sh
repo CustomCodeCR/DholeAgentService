@@ -22,6 +22,9 @@ export DOCKER_MOCK_LOG="$fixture/docker.log"
 export DHOLE_ENV_FILE="$fixture/agent.env"
 script="$root/scripts/maersk-phase8-schema-check.sh"
 bash -n "$script"
+grep -Fq 'ix_maersk_circuit_events_failure_reason' "$script"
+grep -Fq 'provider_id, execution_id, event_type, reason_code' "$script"
+grep -Fq "column_name = 'execution_id'" "$script"
 
 bash "$script" staging
 grep -Fq -- '--network dhole-staging' "$DOCKER_MOCK_LOG"

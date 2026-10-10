@@ -30,6 +30,19 @@ query="SELECT CASE WHEN
   AND to_regclass('agent.maersk_circuits') IS NOT NULL
   AND to_regclass('agent.maersk_circuit_events') IS NOT NULL
   AND to_regclass('agent.maersk_health_alerts') IS NOT NULL
+  -- Phase-2 idempotency requires the latest migration. The earlier 3-column
+  -- unique index cannot support a timeout followed by CAPTCHA in one job.
+  AND EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'agent' AND table_name = 'maersk_circuit_events'
+      AND column_name = 'execution_id'
+  )
+  AND EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = 'agent'
+      AND indexname = 'ix_maersk_circuit_events_failure_reason'
+      AND indexdef ILIKE '%(provider_id, execution_id, event_type, reason_code)%'
+  )
   AND EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'agent' AND table_name = 'AgentExecutions'
@@ -40,4 +53,4 @@ result="$(docker run --rm --network "$network" -e PGPASSWORD="$password" postgre
   psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$username" -d "$database" -c "$query")" \
   || die "Could not query Agent database"
 [[ "$result" == PHASE8_SCHEMA_READY ]] || die "Required lease/circuit/monitoring tables or execution column are absent"
-echo "PHASE8_SCHEMA_READY: all three migrations visible in $environment (read-only verification)."
+echo "PHASE8_SCHEMA_READY: circuit, queue, monitoring and phase-2 dedup schema verified in $environment (read-only verification)."
