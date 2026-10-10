@@ -15,7 +15,7 @@ echo browser-profile-fixture > "$temp/source/profile"
 tar -czf "$temp/backup/browser-profiles.tar.gz" -C "$temp/source" .
 echo data-protection-fixture > "$temp/source/key"
 tar -czf "$temp/backup/agent-keys.tar.gz" -C "$temp/source" .
-printf 'environment=staging\ncompose_project=dhole-staging\ndatabase_name=dhole_agent\nprofile_volume=dhole-staging_agent-browser-profiles\nkeys_volume=dhole-staging_agent-data-protection-keys\ncreated_epoch=%s\n' "$(date -u +%s)" > "$temp/backup/metadata.txt"
+printf 'environment=staging\ncompose_project=dhole-staging\ndatabase_name=dhole_agent\nprofile_volume=dhole-staging_agent-browser-profiles\nkeys_volume=dhole-staging_agent-data-protection-keys\npostgres_major=17\ncreated_epoch=%s\n' "$(date -u +%s)" > "$temp/backup/metadata.txt"
 (cd "$temp/backup" && sha256sum agent.dump browser-profiles.tar.gz agent-keys.tar.gz metadata.txt > SHA256SUMS)
 cat > "$temp/runtime.env" <<'ENV'
 AGENT_POSTGRES_CONNECTION_STRING=Host=postgres;Port=5432;Database=dhole_agent;Username=fixture;Password=fixture
@@ -24,6 +24,7 @@ MaerskCircuit__Enabled=false
 MaerskMonitoring__Enabled=false
 ENV
 preflight="$root/scripts/maersk-phase8-preflight.sh"
+grep -Fq 'postgres:$pg_major-alpine' "$preflight"
 PATH="$temp/bin:$PATH" bash "$preflight" staging "$temp/backup" "$temp/runtime.env" >/dev/null
 
 if PATH="$temp/bin:$PATH" bash "$preflight" production "$temp/backup" "$temp/runtime.env" >/dev/null 2>&1; then
