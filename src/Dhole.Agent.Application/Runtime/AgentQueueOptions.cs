@@ -24,6 +24,7 @@ public sealed class AgentQueueOptions
             || LeaseSeconds is < 60 or > 3600
             || HeartbeatSeconds is < 5
             || HeartbeatSeconds * 3 >= LeaseSeconds
+            || MaxExecutionSeconds is < 60 or > 14400
             || MaxTransientRetries is < 0 or > 5
             || RetryBackoffSeconds is null || RetryBackoffSeconds.Length < Math.Max(1, MaxTransientRetries)
             || RetryBackoffSeconds.Any(x => x is < 1 or > 3600))
