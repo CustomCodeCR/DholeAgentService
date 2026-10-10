@@ -113,6 +113,10 @@ jobs:
           PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
         run: |
           set -euo pipefail
+          # Only existing verified active rollouts may keep flags on during
+          # future protected deployments; preflight still checks backups,
+          # checksum, restored schema and both flags.
+          export MAERSK_PHASE2_ACTIVE_REDEPLOY=CONFIRMED
           bash scripts/maersk-phase8-preflight.sh production "$PHASE8_BACKUP_DIR" "$DHOLE_ENV_FILE"
 
       - name: Phase 8 isolated PostgreSQL restoration drill

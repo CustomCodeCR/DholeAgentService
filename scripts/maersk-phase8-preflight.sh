@@ -42,10 +42,28 @@ tar -tzf "$backup_dir/agent-keys.tar.gz" >/dev/null || die "Corrupt data-protect
 docker run --rm -v "$backup_dir:/backup:ro" postgres:16-alpine \
   pg_restore --file /dev/null /backup/agent.dump >/dev/null || die "Corrupt PostgreSQL archive"
 
-# All new features remain opt-in until the staged rollout is approved.
-for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled AgentQueue__ConcurrentDispatcherEnabled; do
-  value="$(sed -n "s/^$key=//p" "$env_file" | tail -n 1 | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
-  [[ -z "$value" || "$value" == false || "$value" == 0 ]] || die "$key must remain disabled for the guarded deploy"
-done
+# First rollout remains opt-in. An already activated installation can
+# upgrade only after the same backup/restore gates and an explicit active
+# redeploy acknowledgment, with both protection and monitoring still on.
+read_flag() {
+  sed -n "s/^$1=//p" "$env_file" | tail -n 1 | tr -d '\r' | tr '[:upper:]' '[:lower:]'
+}
+circuit="$(read_flag MaerskCircuit__Enabled)"
+monitor="$(read_flag MaerskMonitoring__Enabled)"
+queue="$(read_flag AgentQueue__ConcurrentDispatcherEnabled)"
+[[ -z "$queue" || "$queue" == false || "$queue" == 0 ]] ||
+  die 'Concurrent dispatcher must remain disabled during circuit rollout'
+if [[ "$circuit" == true && "$monitor" == true ]]; then
+  [[ "${MAERSK_PHASE2_ACTIVE_REDEPLOY:-}" == CONFIRMED ]] ||
+    die 'Releasing with active circuit requires an explicit active-redeploy gate'
+  DHOLE_ENV_FILE="$env_file" bash "$(dirname "$0")/maersk-phase8-schema-check.sh" "$environment" >/dev/null ||
+    die 'Active redeploy requires the live migrated schema'
+  echo 'PHASE2_ALREADY_ACTIVE_REDEPLOY_GATE_PASSED'
+else
+  for value in "$circuit" "$monitor"; do
+    [[ -z "$value" || "$value" == false || "$value" == 0 ]] ||
+      die 'Both circuit and monitor must be disabled before first activation'
+  done
+fi
 
 echo "PHASE8_PREFLIGHT_OK: $environment; PostgreSQL and both persistent volumes backed up and archive-checked."
