@@ -38,11 +38,13 @@ public sealed class MaerskCircuitPostgresIntegrationTests
 
             Assert.IsFalse(await circuit.CanScheduleAsync(providerId));
             Assert.IsFalse(await circuit.TryEnterAsync(providerId, Guid.NewGuid()));
-            Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
+            await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
+            {
                 await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
-                    "Operator did not verify", false));
-            Assert.IsFalse(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
-                "Provider verification complete", true) == false);
+                    "Operator did not verify", false);
+            });
+            Assert.IsTrue(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Provider verification complete", true));
             Assert.AreEqual("Closed", (await circuit.GetAsync(providerId)).State);
 
             var next = Guid.NewGuid();
