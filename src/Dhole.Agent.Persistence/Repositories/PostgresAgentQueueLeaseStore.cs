@@ -1,6 +1,7 @@
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Persistence.DbContexts;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Dhole.Agent.Persistence.Repositories;
 
@@ -23,7 +24,10 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
         // The PostgreSQL scope PRIMARY KEY serializes claims, including attempts
         // from other workers. For Maersk, reject a transition while an older
         // (pre-rollout) Running execution is still active on this provider.
-        var written = await db.Database.ExecuteSqlInterpolatedAsync(
+        int written;
+        try
+        {
+            written = await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             INSERT INTO agent.execution_leases
                 (lease_scope, execution_id, owner_id, expires_at_utc, heartbeat_at_utc)
@@ -34,12 +38,24 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
               AND e.status = 'Queued'
               AND e.attempt < e.max_attempts
               AND (e.next_attempt_at_utc IS NULL OR e.next_attempt_at_utc <= NOW())
-              AND (NOT {maersk} OR NOT EXISTS (
+              -- Old sequential workers may still own Running work without
+              -- a lease while a rolling upgrade begins. Never overlap that
+              -- work on the same browser credential/profile even if its
+              -- lease row is absent or has expired.
+              AND NOT EXISTS (
                     SELECT 1 FROM agent."AgentExecutions" running
                     WHERE running.provider_id = e.provider_id
                       AND running.status = 'Running'
                       AND running.id <> e.id
-                  ))
+                      AND (
+                          {maersk}
+                          OR (e.credential_id IS NOT NULL
+                              AND running.credential_id = e.credential_id)
+                          OR (e.credential_id IS NULL
+                              AND e.extraction_profile_id IS NOT NULL
+                              AND running.extraction_profile_id = e.extraction_profile_id)
+                      )
+                  )
             ON CONFLICT (lease_scope) DO UPDATE SET
                 execution_id = EXCLUDED.execution_id,
                 owner_id = EXCLUDED.owner_id,
@@ -47,6 +63,17 @@ public sealed class PostgresAgentQueueLeaseStore(ServiceDbContext db) : IAgentQu
                 heartbeat_at_utc = EXCLUDED.heartbeat_at_utc
             WHERE agent.execution_leases.expires_at_utc < NOW();
             """, cancellationToken);
+        }
+        catch (PostgresException error)
+            when (error.SqlState == PostgresErrorCodes.UniqueViolation
+                  && error.ConstraintName == "ux_agent_execution_leases_execution")
+        {
+            // Concurrent workers can race on the execution_id uniqueness
+            // constraint before the lease_scope UPSERT arbitration completes.
+            // The other worker owns the attempt; never treat it as a fatal
+            // dispatch error or retry concurrently.
+            return false;
+        }
 
         return written == 1;
     }
