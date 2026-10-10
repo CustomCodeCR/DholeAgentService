@@ -63,8 +63,8 @@ docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" alpine:3.20
 docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
   tar -C /source -czf /backup/agent-keys.tar.gz .
 
-printf 'environment=%s\ncompose_project=%s\ncreated_epoch=%s\n' \
-  "$environment" "$project" "$(date -u +%s)" > "$output/metadata.txt"
+printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\nkeys_volume=%s\ncreated_epoch=%s\n' \
+  "$environment" "$project" "$database" "$profile_volume" "$keys_volume" "$(date -u +%s)" > "$output/metadata.txt"
 (cd "$output" && sha256sum agent.dump browser-profiles.tar.gz agent-keys.tar.gz metadata.txt > SHA256SUMS)
 # Bind-mounted snapshots are created as container root. Return file ownership
 # to the self-hosted runner while keeping archives private.
