@@ -42,6 +42,8 @@ public sealed class QueuedExecutionBackgroundService(
             using var scope = serviceProvider.CreateScope();
             var executions = scope.ServiceProvider.GetRequiredService<IAgentExecutionRepository>();
             var orchestrator = scope.ServiceProvider.GetRequiredService<IAgentExecutionOrchestrator>();
+            var providers = scope.ServiceProvider.GetRequiredService<IAgentProviderRepository>();
+            var maerskCircuit = scope.ServiceProvider.GetRequiredService<IMaerskCircuitBreaker>();
 
             var queued = await executions.GetQueuedOlderThanAsync(
                 DateTime.UtcNow,
@@ -68,6 +70,11 @@ public sealed class QueuedExecutionBackgroundService(
                     execution.Status,
                     execution.Attempt,
                     execution.CreatedAtUtc);
+
+                var provider = await providers.GetByIdAsync(execution.ProviderId, cancellationToken);
+                if (provider?.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase) == true
+                    && !await maerskCircuit.CanScheduleAsync(provider.Id, cancellationToken))
+                    continue;
 
                 await orchestrator.ExecuteAsync(execution.Id, cancellationToken);
             }
