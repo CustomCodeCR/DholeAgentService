@@ -81,6 +81,31 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
         MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
     }
 
+    /// <summary>
+    /// Operator-approved reuse of the same execution, input, snapshots and
+    /// correlation after real provider verification. This is not a retry
+    /// policy: the API must first validate the original browser credential,
+    /// a closed circuit, the operator's scopes and the available attempt limit.
+    /// </summary>
+    public void ResumeAfterVerification(Guid actorId)
+    {
+        if (actorId == Guid.Empty)
+            throw new ArgumentException("Operator identity is required.", nameof(actorId));
+        if (Status != AgentExecutionStatus.WaitingForAuthentication)
+            throw new InvalidOperationException("Only waiting executions may be resumed.");
+        // A provider challenge may exhaust the old retry budget. A human
+        // authorization grants exactly one additional attempt to the SAME
+        // execution, never a new record or an unlimited automatic retry.
+        if (Attempt >= MaxAttempts)
+            MaxAttempts = checked(Attempt + 1);
+
+        Status = AgentExecutionStatus.Queued;
+        NextAttemptAtUtc = null;
+        ErrorCode = null;
+        ErrorMessage = null;
+        MarkAsUpdated(DateTime.UtcNow, actorId.ToString());
+    }
+
     public void Start(DateTime startedAt, Guid? updatedBy = null)
     {
         if (Status is not (AgentExecutionStatus.Pending or AgentExecutionStatus.Queued or AgentExecutionStatus.WaitingForAuthentication))
