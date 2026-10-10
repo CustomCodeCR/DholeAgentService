@@ -48,7 +48,10 @@ public static class MaerskFailureClassifier
         if (code is "maersk_browser_profile_corrupt")
             return Create(FailureCategory.LocalProfileCorrupt, code, requiresOperator: true);
 
-        if (code is "browser_profile_repair_failed"
+        if (code is "maersk_browser_profile_busy"
+            or "maersk_profile_lock_unavailable"
+            or "maersk_chromium_launch_failed"
+            or "browser_profile_repair_failed"
             or "browser_session_invalid"
             or "maersk_worker_connection_failed"
             or "maersk_chromium_crashed")
