@@ -205,11 +205,10 @@ public sealed class MaerskBrowserAutomation
 
         if (!equipmentReady)
         {
-            var diagnostics = await MaerskShadowDom.DescribeAsync(page);
-            throw new InvalidOperationException(
-                $"Maersk container selector remained disabled after selecting commodity '{input.Commodity}'. " +
-                $"Verify that origin, destination, CY/CY and commodity are committed. " +
-                $"URL='{page.Url}'. ShadowDOM diagnostics={diagnostics}");
+            // This failure affects the commodity form state shared by every
+            // equipment search in the batch. Do not loop through all six
+            // containers and generate megabytes of repeated DOM diagnostics.
+            throw new MaerskCommodityNotCommittedException(input.Commodity);
         }
 
         var equipmentOpened = await MaerskShadowDom.ClickFirstAsync(
