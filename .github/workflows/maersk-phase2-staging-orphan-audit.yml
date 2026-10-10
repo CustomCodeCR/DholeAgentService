@@ -1,0 +1,27 @@
+name: Maersk Phase 2 — Staging Orphan Credential Audit
+on:
+  push:
+    branches:
+      - ops/maersk-phase2-staging-orphan-cleanup-20261010
+    paths:
+      - 'scripts/maersk-phase2-staging-orphan-audit.sh'
+      - '.github/workflows/maersk-phase2-staging-orphan-audit.yml'
+permissions:
+  contents: read
+concurrency:
+  group: maersk-phase2-staging-orphan-maintenance
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate script syntax
+        shell: bash
+        run: bash -n scripts/maersk-phase2-staging-orphan-audit.sh
+      - name: Verify staging orphan dependencies and preserved backup (read only)
+        shell: bash
+        run: bash scripts/maersk-phase2-staging-orphan-audit.sh
