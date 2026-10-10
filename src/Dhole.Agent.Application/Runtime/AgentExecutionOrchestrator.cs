@@ -26,6 +26,7 @@ public sealed class AgentExecutionOrchestrator(
     IAgentProviderResolver providerResolver,
     IUnitOfWork unitOfWork,
     IOptions<AgentQueueOptions> queueOptions,
+    IMaerskCircuitBreaker circuitBreaker,
     ILogger<AgentExecutionOrchestrator> logger):IAgentExecutionOrchestrator
 {
     public async Task ExecuteAsync(Guid executionId,CancellationToken cancellationToken=default)
@@ -131,6 +132,17 @@ public sealed class AgentExecutionOrchestrator(
                 profile.Id,
                 profile.ExecutionStrategy);
 
+            if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
+                && !await circuitBreaker.TryEnterAsync(provider.Id, execution.Id, cancellationToken))
+            {
+                // Denied jobs remain Queued, preserving correlation/snapshots.
+                // They are not attempted and never force a different session.
+                logger.LogWarning(
+                    "MAERSK_CIRCUIT_DISPATCH_PAUSED execution={ExecutionId} provider={ProviderId}",
+                    execution.Id, provider.Id);
+                return;
+            }
+
             execution.Start(DateTime.UtcNow);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -179,6 +191,10 @@ public sealed class AgentExecutionOrchestrator(
                             ?? "unknown",
                         DateTime.UtcNow);
                 }
+
+                if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+                    await circuitBreaker.RecordFailureAsync(
+                        provider.Id, execution.Id, failureCode, cancellationToken);
 
                 if(IsAuthenticationRequiredFailure(failureCode))
                 {
@@ -250,6 +266,9 @@ public sealed class AgentExecutionOrchestrator(
                 result.PartiallyCompleted);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
+                await circuitBreaker.RecordSuccessAsync(provider.Id, execution.Id, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
