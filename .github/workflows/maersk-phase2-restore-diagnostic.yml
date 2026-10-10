@@ -42,25 +42,5 @@ jobs:
             echo 'ISOLATED_RESTORE_RESULT=SUCCESS'
             exit 0
           fi
-          python3 - "$log" <<'PY'
-          import pathlib,re,sys
-          data=pathlib.Path(sys.argv[1]).read_text(errors="replace")
-          rules=[
-            ("EXTENSION_NOT_INSTALLED",r"extension .*not available|extension control file"),
-            ("MISSING_ROLE",r"role .*does not exist"),
-            ("SCHEMA_ALREADY_EXISTS",r"already exists"),
-            ("PERMISSION_ERROR",r"permission denied|must be owner"),
-            ("UNSUPPORTED_SQL",r"unrecognized configuration parameter|syntax error"),
-            ("MISSING_DEPENDENCY",r"does not exist|undefined"),
-            ("DUPLICATE_OBJECT",r"duplicate key|unique constraint"),
-            ("DATABASE_CONNECTION",r"connection.*(lost|refused|failure)"),
-            ("RESTORE_CONFLICT",r"could not execute query"),
-            ("UNCLASSIFIED",r"."),
-          ]
-          category=next(name for name,pattern in rules if re.search(pattern,data,re.I|re.S))
-          print("ISOLATED_RESTORE_RESULT=FAILED")
-          print("ISOLATED_RESTORE_CATEGORY="+category)
-          print("ISOLATED_RESTORE_HAS_SQL_ERROR="+str("ERROR:" in data).lower())
-          print("ISOLATED_RESTORE_HAS_FATAL_ERROR="+str("FATAL:" in data).lower())
-          PY
+          python3 -c 'import pathlib,re,sys; d=pathlib.Path(sys.argv[1]).read_text(errors="replace"); rules=[("EXTENSION_NOT_INSTALLED",r"extension .*not available|extension control file"),("MISSING_ROLE",r"role .*does not exist"),("SCHEMA_ALREADY_EXISTS",r"already exists"),("PERMISSION_ERROR",r"permission denied|must be owner"),("UNSUPPORTED_SQL",r"unrecognized configuration parameter|syntax error"),("MISSING_DEPENDENCY",r"does not exist|undefined"),("DUPLICATE_OBJECT",r"duplicate key|unique constraint"),("DATABASE_CONNECTION",r"connection.*(lost|refused|failure)"),("RESTORE_CONFLICT",r"could not execute query")]; category=next((name for name,pattern in rules if re.search(pattern,d,re.I|re.S)),"UNCLASSIFIED"); print("ISOLATED_RESTORE_RESULT=FAILED"); print("ISOLATED_RESTORE_CATEGORY="+category); print("ISOLATED_RESTORE_HAS_SQL_ERROR="+str("ERROR:" in d).lower()); print("ISOLATED_RESTORE_HAS_FATAL_ERROR="+str("FATAL:" in d).lower())' "$log"
           exit 1
