@@ -248,6 +248,7 @@ public sealed class MaerskAgentProvider(
         var completed = 0;
         var available = 0;
         var failed = 0;
+        var timedOutSearches = 0;
 
         foreach (var search in plan.Searches!)
         {
@@ -337,6 +338,8 @@ public sealed class MaerskAgentProvider(
                         StringComparison.OrdinalIgnoreCase)
                     ? "maersk_offer_timeout"
                     : "maersk_search_failed";
+                if (errorCode == "maersk_offer_timeout")
+                    timedOutSearches++;
 
                 errors.Add(new
                 {
@@ -365,7 +368,8 @@ public sealed class MaerskAgentProvider(
         if (completed == 0)
         {
             return AgentProviderExecutionResult.Failed(
-                "maersk_all_searches_failed",
+                timedOutSearches > 0 && timedOutSearches == failed
+                    ? "maersk_offer_timeout" : "maersk_all_searches_failed",
                 $"Maersk completed 0 of {plan.Searches!.Count} planned searches. "
                 + string.Join(
                     " | ",
