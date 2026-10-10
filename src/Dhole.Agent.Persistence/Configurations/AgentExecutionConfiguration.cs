@@ -18,6 +18,7 @@ internal sealed class AgentExecutionConfiguration : EntityTypeConfigurationBase<
         builder.Property(x => x.OutputJson).HasColumnType("jsonb");
         builder.Property(x => x.PromptSnapshot).HasColumnType("text");
         builder.Property(x => x.ConfigurationSnapshotJson).HasColumnType("jsonb");
+        builder.Property(x => x.NextAttemptAtUtc).HasColumnName("next_attempt_at_utc");
         builder.Property(x => x.ErrorCode).HasMaxLength(120);
         builder.Property(x => x.ErrorMessage).HasColumnType("text");
         builder.Property(x => x.CorrelationId).HasMaxLength(100).IsRequired();
