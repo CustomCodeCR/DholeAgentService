@@ -296,6 +296,29 @@ public sealed class AgentExecutionOrchestrator(
                 errorCode,
                 detailedError);
 
+            // An unexpected exception during the sole HalfOpen probe must
+            // not leave the circuit accepting neither success nor failure.
+            // Unknown runtime errors do not open an otherwise healthy circuit.
+            if (execution.Status == AgentExecutionStatus.Running)
+            {
+                try
+                {
+                    var failedProvider = await providers.GetByIdAsync(
+                        execution.ProviderId, cancellationToken);
+                    if (failedProvider?.Code.Equals(
+                            "MAERSK", StringComparison.OrdinalIgnoreCase) == true)
+                        await circuitBreaker.RecordFailureAsync(
+                            failedProvider.Id, execution.Id,
+                            "maersk_runtime_error", cancellationToken);
+                }
+                catch (Exception circuitException)
+                {
+                    logger.LogWarning(circuitException,
+                        "MAERSK_CIRCUIT_EXCEPTION_RECORD_FAILED execution={ExecutionId}",
+                        execution.Id);
+                }
+            }
+
             execution.Fail(errorCode,detailedError,DateTime.UtcNow);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
