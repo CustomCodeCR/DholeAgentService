@@ -304,6 +304,15 @@ public sealed class MaerskAgentProvider(
                     error = (string?)null
                 });
             }
+            catch (MaerskCommodityNotCommittedException ex)
+            {
+                // The commodity is shared by all route/equipment combinations.
+                // Repeating the same form for each equipment cannot resolve a
+                // selection the provider has not acknowledged.
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_commodity_not_committed",
+                    ex.Message);
+            }
             catch (MaerskAuthenticationException ex)
             {
                 failed++;
