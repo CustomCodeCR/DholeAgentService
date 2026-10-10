@@ -20,7 +20,32 @@ public sealed class PlaywrightBrowserManager(IOptions<BrowserOptions> options) :
 
         try
         {
-            var context = await playwright.Chromium.LaunchPersistentContextAsync(
+            IBrowserContext context;
+            try
+            {
+                context = await LaunchAsync();
+            }
+            catch (PlaywrightException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // One bounded retry of a local browser-launch failure. No fresh
+                // profile, storage deletion, IP/session rotation or provider
+                // navigation happens at this point.
+                await Task.Delay(500, cancellationToken);
+                context = await LaunchAsync();
+            }
+
+            context.SetDefaultTimeout(_options.DefaultTimeoutMs);
+            context.SetDefaultNavigationTimeout(_options.DefaultTimeoutMs);
+            return new PlaywrightBrowserSession(playwright, context);
+        }
+        catch
+        {
+            playwright.Dispose();
+            throw;
+        }
+
+        Task<IBrowserContext> LaunchAsync()
+            => playwright.Chromium.LaunchPersistentContextAsync(
                 profile.StoragePath,
                 new BrowserTypeLaunchPersistentContextOptions
                 {
@@ -33,15 +58,5 @@ public sealed class PlaywrightBrowserManager(IOptions<BrowserOptions> options) :
                         "--disable-setuid-sandbox"
                     ]
                 });
-
-            context.SetDefaultTimeout(_options.DefaultTimeoutMs);
-            context.SetDefaultNavigationTimeout(_options.DefaultTimeoutMs);
-            return new PlaywrightBrowserSession(playwright, context);
-        }
-        catch
-        {
-            playwright.Dispose();
-            throw;
-        }
     }
 }
