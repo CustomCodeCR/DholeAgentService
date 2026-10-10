@@ -66,5 +66,8 @@ docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
 printf 'environment=%s\ncompose_project=%s\ncreated_epoch=%s\n' \
   "$environment" "$project" "$(date -u +%s)" > "$output/metadata.txt"
 (cd "$output" && sha256sum agent.dump browser-profiles.tar.gz agent-keys.tar.gz metadata.txt > SHA256SUMS)
-chmod 600 "$output"/*
+# Bind-mounted snapshots are created as container root. Return file ownership
+# to the self-hosted runner while keeping archives private.
+docker run --rm -v "$output:/backup" alpine:3.20 sh -c \
+  "chown $(id -u):$(id -g) /backup/* && chmod 600 /backup/*"
 echo "Snapshot created. Run preflight against: $output"
