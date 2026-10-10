@@ -12,6 +12,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddCustomCodeCqrs(AssemblyReference.Assembly);
         services.AddCustomCodeCqrsBehaviors();
         services.AddScoped<IAgentExecutionOrchestrator, AgentExecutionOrchestrator>();
+        services.AddScoped<IMaerskSessionRecoveryOrchestrator, MaerskSessionRecoveryOrchestrator>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.EndpointCaptureMatcher>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.AgentPromptBuilder>();
         services.AddSingleton<Dhole.Agent.Application.ExtractionProfiles.AgentExecutionSnapshotBuilder>();
