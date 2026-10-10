@@ -6,6 +6,7 @@ using Dhole.Agent.Workers.Outbox;
 using Dhole.Agent.Workers.Streams;
 using Dhole.Agent.Workers.Scheduling;
 using Dhole.Agent.Workers.Workers;
+using Dhole.Agent.Application.Runtime;
 
 namespace Dhole.Agent.Workers.DependencyInjection;
 
@@ -26,7 +27,14 @@ public static class WorkerServiceCollectionExtensions
         services.AddCustomCodeWorkers(configuration);
         services.AddSingleton<ScheduleCalculator>();
         services.AddCustomCodePeriodicWorker<AgentScheduleDispatcherWorker>();
-        services.AddHostedService<QueuedExecutionBackgroundService>();
+        services.Configure<AgentQueueOptions>(configuration.GetSection(AgentQueueOptions.SectionName));
+        // Exactly one dispatcher per worker process. Keep the original pump as
+        // a rollback path until schema and multi-worker rollout are validated.
+        if (bool.TryParse(configuration["AgentQueue:ConcurrentDispatcherEnabled"], out var concurrent)
+            && concurrent)
+            services.AddHostedService<ConcurrentQueuedExecutionBackgroundService>();
+        else
+            services.AddHostedService<QueuedExecutionBackgroundService>();
         return services;
     }
 }
