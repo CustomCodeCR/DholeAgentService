@@ -112,3 +112,11 @@ jobs:
             DisabledMonitoringCannotAcknowledgeOrMutateExistingIncident; do
             grep -F "Passed ${scenario}" /tmp/maersk-phase7-acceptance.log
           done
+
+      - name: Phase 8 guarded rollout regression tests
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-phase8-preflight.sh
+          bash -n scripts/maersk-phase8-backup.sh
+          bash -n scripts/tests/test-maersk-phase8-preflight.sh
+          bash scripts/tests/test-maersk-phase8-preflight.sh
