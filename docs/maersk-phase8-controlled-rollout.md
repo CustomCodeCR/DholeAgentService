@@ -10,7 +10,7 @@ Desplegar los cambios ya validados de fases 1–7 sin perder ejecuciones, sesion
 
 - Los workflows de Agent staging y producción pasan a `workflow_dispatch` únicamente: los `push` a develop/master dejan de desplegar sin intervención.
 - Se requiere `confirmation` y una ruta de respaldo válida (`backup_dir`) en el runner local.
-- Producción exige además `staging_run_id`, verificado mediante GitHub Actions: workflow correcto, rama develop, conclusión success y antigüedad menor a 48 horas.
+- Producción exige además `staging_run_id`, verificado mediante GitHub Actions: workflow correcto, ejecución **manual** (`workflow_dispatch`) en `develop`, SHA idéntico al HEAD actual de `develop`, conclusión success y antigüedad menor a 48 horas. Un antiguo despliegue automático de fase 7 no satisface esta condición.
 - `scripts/maersk-phase8-preflight.sh` exige copias íntegras, recientes (menos de 24 horas), del dump de PostgreSQL, del volumen de perfiles Playwright y de las llaves de protección; compara el ambiente y bloquea flags prematuramente habilitados.
 - Se elimina el paso legacy de producción que cancelaba `Queued` y marcaba `Running` como `Failed`. Nunca efectuar limpieza destructiva de la cola como efecto de un deploy.
 - Se desactiva `cancel-in-progress` para evitar cancelar un despliegue de producción a medio aplicar.
@@ -55,7 +55,7 @@ Desplegar los cambios ya validados de fases 1–7 sin perder ejecuciones, sesion
 
 - SHAs de ambos repos y ramas, PRs y checks de CI verde.
 - Inventario de volúmenes/DB, ubicación segura de backups, checksums y prueba real de restauración.
-- Resultado de migraciones y smoke test de staging; número del workflow exitoso.
+- Resultado de migraciones y smoke test de staging; número del workflow exitoso y SHA exacto de develop.
 - Resultado de health, queue pump, permisos y métricas antes/después en producción.
 - Valores efectivos de las tres flags por ambiente, versiones de imagen y rollback ensayado.
 - Confirmación explícita de que no hubo rotación de sesiones, bypass del proveedor ni eliminación de datos.
