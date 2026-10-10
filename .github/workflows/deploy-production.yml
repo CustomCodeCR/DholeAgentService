@@ -59,20 +59,29 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/runs/$STAGING_RUN_ID")"
+          # A historical push-based staging success is not sufficient:
+          # require a manually authorized release of the CURRENT develop commit.
+          branch_payload="$(curl --fail --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/CustomCodeCR/DholeAgentService/branches/develop")"
+          CURRENT_DEVELOP_SHA="$(printf '%s' "$branch_payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["sha"])')"
+          export CURRENT_DEVELOP_SHA
           printf '%s' "$payload" | python3 -c '
-          import json, sys
+          import json, os, sys
           from datetime import datetime, timedelta, timezone
           run = json.load(sys.stdin)
+          age = datetime.now(timezone.utc) - datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
           accepted = (run.get("name") == "Deploy Dhole Agent - Staging"
                       and run.get("head_branch") == "develop"
+                      and run.get("head_sha") == os.environ["CURRENT_DEVELOP_SHA"]
+                      and run.get("event") == "workflow_dispatch"
                       and run.get("conclusion") == "success"
-                      and datetime.now(timezone.utc) -
-                          datetime.fromisoformat(run["created_at"].replace("Z", "+00:00")) <
-                          timedelta(hours=48))
+                      and timedelta(0) <= age < timedelta(hours=48))
           if not accepted:
-              print("No successful staging deployment evidence from the last 48h", file=sys.stderr)
+              print("Require a successful manually verified staging deploy of current develop within 48h", file=sys.stderr)
               sys.exit(1)
-          print("Staging acceptance workflow verified.")
+          print("Current develop manual staging acceptance verified.")
           '
 
       - name: Load Dhole production infrastructure
@@ -284,6 +293,33 @@ jobs:
           set -euo pipefail
           docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" \
             up -d --no-deps --force-recreate --pull never dhole-agent-workers
+
+      - name: Verify Agent worker queue pump
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER_ID="$(docker compose --env-file "$DHOLE_ENV_FILE" -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" ps -q dhole-agent-workers)"
+          test -n "$CONTAINER_ID"
+
+          for attempt in $(seq 1 30); do
+            STATUS="$(docker inspect --format='{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || true)"
+            if [ "$STATUS" = "exited" ] || [ "$STATUS" = "dead" ]; then
+              docker logs --tail 300 "$CONTAINER_ID" || true
+              exit 1
+            fi
+
+            if docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -q 'AGENT_QUEUE_PUMP_STARTED'; then
+              echo "Agent queue pump is running."
+              docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -E 'AGENT_QUEUE_PUMP_(STARTED|HEARTBEAT)' | tail -n 20 || true
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Agent worker is running but queue pump did not start." >&2
+          docker logs --tail 300 "$CONTAINER_ID" || true
+          exit 1
 
       - name: Cleanup old images
         if: always()
