@@ -1,0 +1,29 @@
+name: Diagnose Agent Worker Startup (staging, read-only)
+on:
+  push:
+    branches:
+      - fix/maersk-phase2-worker-boot-diagnostic-20261010
+    paths:
+      - '.github/workflows/diagnose-staging-agent-worker.yml'
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    steps:
+      - name: Inspect exact worker state, boot markers and exception categories
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          project=dhole-staging
+          for svc in dhole-agent-api dhole-agent-workers; do
+            cid="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$svc" | head -n1)"
+            if [[ -z "$cid" ]]; then echo "SERVICE_ABSENT=$svc"; continue; fi
+            echo "SERVICE=$svc"
+            docker inspect -f 'CONTAINER_ID={{.Id}} IMAGE_ID={{.Image}} STATUS={{.State.Status}} EXIT_CODE={{.State.ExitCode}} OOM={{.State.OOMKilled}} START={{.State.StartedAt}} FINISH={{.State.FinishedAt}} RESTARTS={{.RestartCount}}' "$cid"
+            if [[ "$svc" = dhole-agent-workers ]]; then
+              docker logs --since 12m --tail 2000 "$cid" 2>&1 | python3 -c 'import collections,re,sys; s=sys.stdin.read(); patterns={"ENTRYPOINT":r"AGENT_WORKER_ENTRYPOINT_STARTED","XVFB_READY":r"AGENT_WORKER_XVFB_READY","XVFB_FAILURE":r"AGENT_WORKER_XVFB_(?:FAILED|TIMEOUT|NOT_FOUND)","X11VNC_READY":r"AGENT_WORKER_X11VNC_READY","X11VNC_FAILURE":r"AGENT_WORKER_X11VNC_(?:FAILED|NOT_FOUND|TIMEOUT)","NOVNC_READY":r"AGENT_WORKER_NOVNC_READY","NOVNC_FAILURE":r"AGENT_WORKER_NOVNC_(?:FAILED|NOT_FOUND|TIMEOUT|WEB_ROOT_NOT_FOUND)","DOTNET_START":r"AGENT_WORKER_DOTNET_STARTING","PUMP_STARTED":r"AGENT_QUEUE_PUMP_STARTED","PUMP_ERRORS":r"AGENT_QUEUE_PUMP_ERROR","FATAL":r"\\bFATAL\\b","DB_CONNECT":r"connection refused|failed to connect|connection timeout|password authentication failed","PROCESS_EXIT":r"Process terminated|Application is shutting down|Host terminated unexpectedly","MIGRATION_FAILURE":r"migration.*failed|already exists|relation .* does not exist|SqlState:","CRASH":r"Unhandled exception|Failed to start|crit:"}; [print("MARKER_"+k+"="+str(len(re.findall(v,s,re.I)))) for k,v in patterns.items()]; errors=re.findall(r"(?<![A-Za-z0-9])(?:System|Microsoft|Npgsql|Dhole)\\.[A-Za-z0-9_.]*(?:Exception|Error)\\b",s); [print("EXCEPTION_TYPE="+v) for v in list(dict.fromkeys(errors))[:18]]; print("LOG_CHARS_REDACTED="+str(len(s)))'
+            fi
+          done
