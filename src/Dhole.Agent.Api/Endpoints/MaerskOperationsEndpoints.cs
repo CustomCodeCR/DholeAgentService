@@ -1,5 +1,6 @@
 using CustomCodeFramework.Api.Responses;
 using Dhole.Agent.Api.Authorization;
+using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Runtime;
@@ -24,6 +25,7 @@ internal static class MaerskOperationsEndpoints
             IAgentProviderRepository providers,
             IMaerskCircuitBreaker breaker,
             IOptions<MaerskCircuitOptions> circuitOptions,
+            IMaerskMonitoring monitoring,
             ServiceDbContext db,
             CancellationToken ct) =>
         {
@@ -83,10 +85,39 @@ internal static class MaerskOperationsEndpoints
                     Count(AgentExecutionStatus.WaitingForAuthentication),
                     Count(AgentExecutionStatus.Completed) + Count(AgentExecutionStatus.PartiallyCompleted),
                     Count(AgentExecutionStatus.Failed)),
-                profiles, recent, events);
+                profiles, recent, events,
+                await monitoring.GetSnapshotAsync(provider.Id, ct));
             return Results.Ok(ApiResponse<MaerskOperationsDto>.Ok(result));
         })
         .RequireScope(AgentScopeNames.ExecutionsView)
         .RequireScope(AgentScopeNames.BrowserProfilesView);
+
+        // Acknowledgement records that a human has seen the alert.
+        // It never closes the provider circuit, retries jobs, or repairs profiles.
+        root.MapPost("/maersk/alerts/{alertId:guid}/acknowledge", async (
+            Guid alertId,
+            HttpContext context,
+            IAgentProviderRepository providers,
+            IMaerskMonitoring monitoring,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetCurrentUserId();
+            if (actor is null || actor.Value == Guid.Empty)
+                return Results.Unauthorized();
+
+            var provider = await providers.GetByCodeAsync("MAERSK", ct);
+            if (provider is null || provider.IsDeleted)
+                return Results.NotFound();
+
+            var updated = await monitoring.AcknowledgeAsync(provider.Id,
+                alertId, actor.Value, ct);
+            return updated
+                ? Results.Ok(new { acknowledged = true, alertId })
+                : Results.Conflict(new
+                {
+                    error = "Alert not active, previously acknowledged or monitoring is disabled."
+                });
+        })
+        .RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
     }
 }

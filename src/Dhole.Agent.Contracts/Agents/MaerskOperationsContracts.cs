@@ -30,4 +30,5 @@ public sealed record MaerskOperationsDto(
     MaerskOperationCircuitDto Circuit, MaerskOperationCountersDto Counters,
     IReadOnlyCollection<MaerskOperationProfileDto> Profiles,
     IReadOnlyCollection<MaerskOperationExecutionDto> Executions,
-    IReadOnlyCollection<MaerskOperationEventDto> Events);
+    IReadOnlyCollection<MaerskOperationEventDto> Events,
+    MaerskHealthSnapshotDto Monitoring);
