@@ -127,3 +127,9 @@ jobs:
           bash scripts/tests/test-maersk-phase8-rollback.sh
           bash -n scripts/maersk-phase8-schema-check.sh
           bash scripts/tests/test-maersk-phase8-schema-check.sh
+
+      - name: Maersk phase 1 read-only diagnostic regression
+        run: |
+          set -euo pipefail
+          bash -n scripts/inspect-maersk-phase1.sh
+          bash scripts/tests/test-maersk-phase1-inspect.sh
