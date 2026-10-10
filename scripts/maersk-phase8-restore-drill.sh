@@ -6,6 +6,9 @@ backup_dir="${1:?Usage: maersk-phase8-restore-drill.sh <verified-backup-director
 die() { echo "Phase 8 isolated restore drill: $*" >&2; exit 1; }
 
 [[ "$backup_dir" = /* && -r "$backup_dir/agent.dump" ]] || die "An absolute directory with agent.dump is required"
+pg_major="$(sed -n 's/^postgres_major=//p' "$backup_dir/metadata.txt" 2>/dev/null | head -n 1 || true)"
+pg_major="${pg_major:-16}" # Legacy snapshots were taken using PostgreSQL 16.
+case "$pg_major" in 16|17) ;; *) die 'Unsupported PostgreSQL dump major version' ;; esac
 [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || die "A valid GitHub Actions run ID is required"
 command -v docker >/dev/null || die "Docker is required"
 command -v openssl >/dev/null || die "OpenSSL is required"
@@ -32,7 +35,7 @@ trap cleanup EXIT
 password="$(openssl rand -hex 24)"
 docker run -d --name "$container" --network none \
   --mount "type=bind,src=$backup_dir,dst=/backup,readonly" \
-  -e POSTGRES_PASSWORD="$password" postgres:16-alpine >/dev/null
+  -e POSTGRES_PASSWORD="$password" "postgres:$pg_major-alpine" >/dev/null
 created=true
 
 ready=false
