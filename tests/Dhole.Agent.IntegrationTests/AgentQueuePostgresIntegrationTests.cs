@@ -263,7 +263,7 @@ public sealed class AgentQueuePostgresIntegrationTests
             true, null);
         db.AgentProviders.Add(provider);
         var definition = AgentDefinition.Create(
-            provider.Id, "TEST_SEARCH", "Test", null,
+            provider.Id, $"{providerCode}_TEST_SEARCH", "Test", null,
             AgentActionType.SearchOceanRates,
             AgentExecutionStrategy.BrowserNetworkCapture, null);
         db.AgentDefinitions.Add(definition);
