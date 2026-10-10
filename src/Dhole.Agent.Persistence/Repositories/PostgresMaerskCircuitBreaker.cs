@@ -99,7 +99,7 @@ public sealed class PostgresMaerskCircuitBreaker(
             INSERT INTO agent.maersk_circuit_events
                 (id,provider_id,execution_id,event_type,reason_code)
             VALUES ({Guid.NewGuid()},{providerId},{executionId},'FailureObserved',{normalized})
-            ON CONFLICT (provider_id,execution_id,event_type)
+            ON CONFLICT (provider_id,execution_id,event_type,reason_code)
                 WHERE execution_id IS NOT NULL DO NOTHING
             """, ct);
         if (observed == 0)

@@ -74,6 +74,19 @@ running="$(docker run --rm --network "$network" -e PGPASSWORD="$dbpass" \
   -c "SELECT COUNT(*) FROM agent.\"AgentExecutions\" WHERE status='Running';")" ||
   die 'Cannot inspect running executions'
 [ "$running" = 0 ] || die 'Active executions must finish before deployment'
+# Refuse activation against a schema missing phase-2 idempotency protections.
+phase2_schema="$(docker run --rm --network "$network" -e PGPASSWORD="$dbpass" \
+  -e PGOPTIONS='-c default_transaction_read_only=on' postgres:16-alpine \
+  psql -X -v ON_ERROR_STOP=1 -At -h "$dbhost" -p "$dbport" -U "$dbuser" -d "$dbname" \
+  -c "SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='agent' AND table_name='maersk_circuit_events'
+      AND column_name='execution_id'
+  ) AND EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname='agent' AND indexname='ix_maersk_circuit_events_failure_reason'
+  ) THEN 1 ELSE 0 END;")" || die 'Cannot verify phase-2 migration'
+[ "$phase2_schema" = 1 ] || die 'Phase-2 idempotency migration not applied to this database'
 # Refuse first activation when old provider challenges are still pending.
 # Phase 3 reconciliation must bring these incidents into a durable Open circuit
 # BEFORE workers are allowed to schedule Maersk again.
