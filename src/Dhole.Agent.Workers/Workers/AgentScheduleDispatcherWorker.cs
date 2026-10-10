@@ -75,7 +75,18 @@ public sealed class AgentScheduleDispatcherWorker(
 
             if(effectiveDue.Value>now)continue;
 
-            var provider=await GetProviderAsync(schedule.ProviderId,cancellationToken);
+            // Imported or retired schedules may retain a provider reference that
+            // does not exist in the current environment. Preserve the schedule
+            // and its due time, but never terminate the hosted dispatcher.
+            var provider = await providers.GetByIdAsync(schedule.ProviderId, cancellationToken);
+            if (provider is null || provider.IsDeleted || !provider.IsActive)
+            {
+                logger.LogWarning(
+                    "AGENT_SCHEDULE_PROVIDER_UNAVAILABLE schedule={ScheduleId} provider={ProviderId}. " +
+                    "No execution dispatched and NextExecutionAt preserved.",
+                    schedule.Id, schedule.ProviderId);
+                continue;
+            }
 
             if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
             {
@@ -180,10 +191,6 @@ public sealed class AgentScheduleDispatcherWorker(
             .ThenBy(x=>x.Name,StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
     }
-
-    private async Task<AgentProvider> GetProviderAsync(Guid providerId,CancellationToken cancellationToken)
-        => await providers.GetByIdAsync(providerId,cancellationToken)
-            ?? throw new InvalidOperationException($"Agent provider {providerId} not found while dispatching schedule.");
 
     private static DateOnly? TryGetCargoReadyDate(string inputJson)
     {
