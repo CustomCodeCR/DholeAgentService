@@ -14,6 +14,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Models;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Parsers;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
+using Microsoft.Playwright;
 
 namespace Dhole.Agent.Infrastructure.Providers.Maersk;
 
@@ -27,6 +28,7 @@ public sealed class MaerskAgentProvider(
     MaerskLocationResolver locations,
     MaerskEquipmentResolver equipment,
     MaerskCommodityResolver commodities,
+    IMaerskSessionRecoveryOrchestrator recovery,
     ICredentialProtector credentialProtector,
     ISecretProvider legacySecrets,
     IBrowserProfileRepository browserProfiles,
@@ -46,6 +48,34 @@ public sealed class MaerskAgentProvider(
                 "missing_credential",
                 "Maersk execution requires a credential reference.");
 
+        // Hold this lifetime lock until the Playwright context has been disposed.
+        // No concurrent worker can open or archive this physical profile.
+        IAsyncDisposable? profileLock;
+        try
+        {
+            profileLock = await recovery.TryEnterAsync(
+                ProviderCode, context.Credential.Id, cancellationToken);
+        }
+        catch (IOException)
+        {
+            return AgentProviderExecutionResult.Failed(
+                "maersk_profile_lock_unavailable",
+                "The persistent profile lock directory is unavailable.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return AgentProviderExecutionResult.Failed(
+                "maersk_profile_lock_unavailable",
+                "The persistent profile lock directory is not writable.");
+        }
+
+        if (profileLock is null)
+            return AgentProviderExecutionResult.Failed(
+                "maersk_browser_profile_busy",
+                "Another execution is already using the persistent Maersk profile.");
+
+        await using var heldProfileLock = profileLock;
+
         var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
@@ -55,45 +85,38 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id,
             cancellationToken);
 
-        // Provider-side verification/WAF challenges are not fixed by repeating
-        // scheduled automation. Preserve the persistent profile and stop automated
-        // submissions until an operator explicitly requests authentication again.
-        if (browserProfile?.Status == BrowserProfileStatus.Blocked)
-        {
+        var recoveryDecision = recovery.Evaluate(
+            browserProfile?.Status, context.Execution.ExecutionType);
+        if (!recoveryDecision.CanContinue)
             return AgentProviderExecutionResult.Failed(
-                "maersk_browser_profile_blocked",
-                "The Maersk browser profile is blocked by provider-side verification or edge protection. " +
-                "The persistent profile was preserved. Complete any interactive verification and explicitly request browser-profile authentication before running scheduled searches again.");
-        }
+                recoveryDecision.ErrorCode!,
+                recoveryDecision.Explanation!);
 
-        // Repair is an explicit operator action for expired or damaged local
-        // Chromium state; never run it as a response to provider verification.
-        if (browserProfile?.Status == BrowserProfileStatus.ResetRequested)
+        // A provider CAPTCHA/access restriction never becomes ResetRequested.
+        // The explicit admin repair command has already checked eligibility,
+        // and the lifetime lock above excludes every other local Chromium run.
+        if (recoveryDecision.Action == MaerskSessionRecoveryAction.ApprovedTechnicalRepair
+            && browserProfile is not null)
         {
-            if (context.Execution.ExecutionType != AgentExecutionType.Manual)
-                return AgentProviderExecutionResult.Failed(
-                    "maersk_browser_profile_repair_requires_manual_run",
-                    "This browser profile needs an operator-initiated run to complete local session repair.");
-
             try
             {
-                // Keep a timestamped backup of the old profile and create a
-                // clean directory before Chromium starts.
-                profiles.ResetStoragePath(ProviderCode, context.Credential.Id);
+                recovery.RepairApprovedTechnicalProfile(
+                    ProviderCode, context.Credential.Id,
+                    browserProfile.Status, context.Execution.ExecutionType);
                 browserProfile.SetStatus(BrowserProfileStatus.LoginRequired);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
-            catch (IOException ex)
+            catch (IOException)
             {
                 return AgentProviderExecutionResult.Failed(
                     "browser_profile_repair_failed",
-                    $"Could not archive the damaged browser profile: {ex.Message}");
+                    "The technical profile archive could not be completed. Previous backups were preserved.");
             }
-            catch (UnauthorizedAccessException ex)
+            catch (UnauthorizedAccessException)
             {
                 return AgentProviderExecutionResult.Failed(
                     "browser_profile_repair_failed",
-                    $"Browser profile directory is not writable: {ex.Message}");
+                    "The technical profile archive could not be written.");
             }
         }
 
@@ -128,7 +151,37 @@ public sealed class MaerskAgentProvider(
             context.Credential.Id.ToString("N"),
             storagePath);
 
-        await using var session = await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        IBrowserSession openedSession;
+        try
+        {
+            openedSession = await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        }
+        catch (PlaywrightException)
+        {
+            // Browser launch failed locally even after its single bounded retry.
+            // Do not archive the profile without an explicit technical repair.
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(BrowserProfileStatus.Error);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            return AgentProviderExecutionResult.Failed(
+                "maersk_chromium_launch_failed",
+                "Chromium could not open the existing persistent profile. The session files were preserved.");
+        }
+        catch (IOException)
+        {
+            if (browserProfile is not null)
+            {
+                browserProfile.SetStatus(BrowserProfileStatus.Error);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            return AgentProviderExecutionResult.Failed(
+                "maersk_chromium_launch_failed",
+                "Chromium profile storage could not be accessed. The session files were preserved.");
+        }
+
+        await using var session = openedSession;
         if (session is not PlaywrightBrowserSession playwrightSession)
             return AgentProviderExecutionResult.Failed(
                 "browser_session_invalid",
