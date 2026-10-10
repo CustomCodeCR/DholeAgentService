@@ -1,5 +1,6 @@
 using CustomCodeFramework.Api.Responses;
 using Dhole.Agent.Api.Authorization;
+using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Runtime;
