@@ -125,3 +125,5 @@ jobs:
           bash -n scripts/maersk-phase8-image-rollback.sh
           bash -n scripts/maersk-phase8-restore-drill.sh
           bash scripts/tests/test-maersk-phase8-rollback.sh
+          bash -n scripts/maersk-phase8-schema-check.sh
+          bash scripts/tests/test-maersk-phase8-schema-check.sh
