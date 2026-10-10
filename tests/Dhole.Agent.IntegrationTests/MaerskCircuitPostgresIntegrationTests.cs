@@ -43,8 +43,12 @@ public sealed class MaerskCircuitPostgresIntegrationTests
                 await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
                     "Operator did not verify", false);
             });
+            Assert.IsFalse(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Attestation without verified browser profile is insufficient", true));
+            Assert.AreEqual("Open", (await circuit.GetAsync(providerId)).State);
+            var verifiedProfile = await SeedAuthenticatedProfileAsync(db, providerId);
             Assert.IsTrue(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
-                "Provider verification complete", true));
+                "Provider verification complete using authenticated browser profile", true));
             Assert.AreEqual("Closed", (await circuit.GetAsync(providerId)).State);
 
             var next = Guid.NewGuid();
@@ -132,6 +136,51 @@ public sealed class MaerskCircuitPostgresIntegrationTests
             Assert.IsFalse(await circuit.CanScheduleAsync(providerId));
         }
         finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
+    public async Task OperatorReset_FailsClosedUntilBlockedProfileIsReauthenticated()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(db);
+            var profile = await SeedAuthenticatedProfileAsync(db, providerId);
+            var circuit = CreateCircuit(db);
+            await circuit.RecordFailureAsync(providerId, Guid.NewGuid(), "maersk_hcaptcha_required");
+            profile.SetStatus(BrowserProfileStatus.Blocked);
+            await db.SaveChangesAsync();
+
+            Assert.IsFalse(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Verification is claimed but session is still blocked", true));
+            Assert.IsTrue((await circuit.GetAsync(providerId)).RequiresOperator);
+
+            profile.Authenticate(DateTime.UtcNow);
+            await db.SaveChangesAsync();
+            Assert.IsTrue(await circuit.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Session successfully authenticated after provider verification", true));
+            Assert.AreEqual("Closed", (await circuit.GetAsync(providerId)).State);
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    private static async Task<BrowserProfile> SeedAuthenticatedProfileAsync(
+        ServiceDbContext db, Guid providerId)
+    {
+        var credential = AgentCredential.CreateEncrypted(
+            providerId, "circuit-test-credential", "encrypted-test-user", "encrypted-test-secret");
+        db.AgentCredentials.Add(credential);
+        var profile = BrowserProfile.Create(providerId, credential.Id,
+            "circuit-test-profile", Guid.NewGuid().ToString("N"),
+            "/tmp/maersk-circuit-test-not-used");
+        db.BrowserProfiles.Add(profile);
+        await db.SaveChangesAsync();
+        profile.Authenticate(DateTime.UtcNow);
+        await db.SaveChangesAsync();
+        return profile;
     }
 
     private static string? ConnectionOrInconclusive()
