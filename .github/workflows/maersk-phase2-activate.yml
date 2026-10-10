@@ -1,0 +1,104 @@
+name: Activate Maersk Circuit - Postdeploy
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target: staging first; production only after staging acceptance"
+        type: choice
+        required: true
+        options:
+          - staging
+          - production
+      confirmation:
+        description: "ACTIVATE_MAERSK_CIRCUIT_STAGING or ACTIVATE_MAERSK_CIRCUIT_PRODUCTION"
+        type: string
+        required: true
+      backup_dir:
+        description: "Verified phase-8 backup directory on Argos (never upload)"
+        type: string
+        required: true
+      expected_release_sha:
+        description: "Exact 40-character Agent commit deployed by protected pipeline"
+        type: string
+        required: true
+      staging_activation_run_id:
+        description: "For production: successful staging circuit-activation run ID"
+        type: string
+        required: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: dhole-agent-phase2-activation
+  cancel-in-progress: false
+jobs:
+  activate:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Agent
+        uses: actions/checkout@v4
+      - name: Validate environment, release and explicit authorization
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_release_sha }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$ENVIRONMENT" = staging ]]; then
+            [[ "$REF_NAME" = develop && "$CONFIRMATION" = ACTIVATE_MAERSK_CIRCUIT_STAGING ]]
+          else
+            [[ "$ENVIRONMENT" = production && "$REF_NAME" = master && "$CONFIRMATION" = ACTIVATE_MAERSK_CIRCUIT_PRODUCTION ]]
+          fi
+          [[ "$EXPECTED_SHA" = "$RUN_SHA" ]]
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - name: Validate staging approval for production
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          STAGING_RUN: ${{ inputs.staging_activation_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$ENVIRONMENT" != production ]]; then exit 0; fi
+          [[ "$STAGING_RUN" =~ ^[0-9]+$ ]]
+          payload="$(curl -fsS --retry 3             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/runs/$STAGING_RUN")"
+          printf '%s' "$payload" | python3 -c '
+          import json,sys
+          from datetime import datetime,timedelta,timezone
+          r=json.load(sys.stdin)
+          age=datetime.now(timezone.utc)-datetime.fromisoformat(r["created_at"].replace("Z","+00:00"))
+          assert r.get("name")=="Activate Maersk Circuit - Postdeploy"
+          assert r.get("event")=="workflow_dispatch"
+          assert r.get("head_branch")=="develop"
+          assert r.get("conclusion")=="success"
+          assert timedelta(0)<=age<timedelta(hours=48)
+          print("Verified recent staging activation, without exporting secrets")
+          '
+      - name: Checkout environment-specific DholeSystem
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          infra_branch=develop
+          if [[ "$ENVIRONMENT" = production ]]; then infra_branch=master; fi
+          for attempt in 1 2 3 4 5; do
+            if git clone --depth 1 --branch "$infra_branch" https://github.com/CustomCodeCR/DholeSystem.git .dhole-system; then break; fi
+            rm -rf .dhole-system
+            if [[ "$attempt" = 5 ]]; then exit 1; fi
+            sleep 5
+          done
+      - name: Activate after backup, restore drill, schema and exact-image gates
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          BACKUP_DIR: ${{ inputs.backup_dir }}
+          EXPECTED_SHA: ${{ inputs.expected_release_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-phase2-activate.sh             "$ENVIRONMENT" "$BACKUP_DIR" "$EXPECTED_SHA" "$GITHUB_WORKSPACE/.dhole-system" "$CONFIRMATION"
