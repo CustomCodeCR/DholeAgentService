@@ -19,7 +19,7 @@ public sealed class PostgresMaerskCircuitBreaker(
     public async Task<MaerskCircuitSnapshot> GetAsync(Guid providerId, CancellationToken ct = default)
     {
         if (!_options.Enabled)
-            return MaerskCircuitSnapshot.Closed(providerId);
+            return MaerskCircuitSnapshot.Disabled(providerId);
         ValidateProvider(providerId);
         _options.Validate();
         var row = await db.Set<MaerskCircuitRecord>().AsNoTracking()
