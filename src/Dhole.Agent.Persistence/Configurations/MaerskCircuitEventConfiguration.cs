@@ -19,7 +19,7 @@ internal sealed class MaerskCircuitEventConfiguration : IEntityTypeConfiguration
         entity.Property(x => x.OperatorReason).HasColumnName("operator_reason").HasMaxLength(1000);
         entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         entity.HasIndex(x => new { x.ProviderId, x.OccurredAtUtc });
-        entity.HasIndex(x => new { x.ProviderId, x.ExecutionId, x.EventType })
+        entity.HasIndex(x => new { x.ProviderId, x.ExecutionId, x.EventType, x.ReasonCode })
             .IsUnique().HasFilter("execution_id IS NOT NULL");
     }
 }
