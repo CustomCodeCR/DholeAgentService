@@ -2,6 +2,8 @@ using CustomCodeFramework.Redis.Abstractions;
 using CustomCodeFramework.Workers.Abstractions;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
+using Dhole.Agent.Application.Runtime;
+using Microsoft.Extensions.Options;
 
 namespace Dhole.Agent.Workers.Workers;
 
@@ -9,6 +11,7 @@ public sealed class QueuedExecutionRecoveryWorker(
     IAgentExecutionRepository executions,
     IAgentExecutionOrchestrator orchestrator,
     IDistributedLock distributedLock,
+    IOptions<AgentQueueOptions> queueOptions,
     ILogger<QueuedExecutionRecoveryWorker> logger) : IBackgroundWorker
 {
     private static readonly TimeSpan QueueGracePeriod = TimeSpan.FromSeconds(15);
@@ -20,6 +23,16 @@ public sealed class QueuedExecutionRecoveryWorker(
         IWorkerExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // Phase 3: only the PostgreSQL lease-owning dispatcher may execute jobs.
+        // This legacy recovery worker may still be registered by older worker
+        // manifests. In concurrent mode it MUST NOT bypass atomic claims.
+        if (queueOptions.Value.ConcurrentDispatcherEnabled)
+        {
+            logger.LogDebug(
+                "AGENT_QUEUE_LEGACY_RECOVERY_DISABLED: concurrent PostgreSQL dispatcher owns recovery.");
+            return;
+        }
+
         var cutoff = DateTime.UtcNow.Subtract(QueueGracePeriod);
         var queued = await executions.GetQueuedOlderThanAsync(cutoff, 25, cancellationToken);
 
