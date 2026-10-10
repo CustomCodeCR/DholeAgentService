@@ -85,7 +85,9 @@ public sealed class AgentExecution : AuditableAggregateRoot<Guid>
     {
         if (Status is not (AgentExecutionStatus.Pending or AgentExecutionStatus.Queued or AgentExecutionStatus.WaitingForAuthentication))
             throw new InvalidOperationException($"Execution cannot start from {Status}.");
-        if (Attempt >= MaxAttempts)
+        // Human-authorized resumption after verification is distinct from an
+        // automated technical retry. The dispatcher never polls WaitingForAuthentication.
+        if (Status != AgentExecutionStatus.WaitingForAuthentication && Attempt >= MaxAttempts)
             throw new InvalidOperationException("Execution has exhausted MaxAttempts.");
         Status = AgentExecutionStatus.Running;
         StartedAt = startedAt;
