@@ -128,6 +128,12 @@ jobs:
           bash -n scripts/maersk-phase8-schema-check.sh
           bash scripts/tests/test-maersk-phase8-schema-check.sh
 
+      - name: Maersk phase 2 circuit activation safety regression
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-phase2-activate.sh
+          bash scripts/tests/test-maersk-phase2-activate.sh
+
       - name: Maersk phase 1 read-only diagnostic regression
         run: |
           set -euo pipefail
