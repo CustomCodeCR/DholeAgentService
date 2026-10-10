@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-temp="$(mktemp -d)"
+temp="$(mktemp -d "$HOME/maersk-phase8-test.XXXXXX")"
 trap 'rm -rf "$temp"' EXIT
 mkdir -p "$temp/bin" "$temp/backup" "$temp/source"
 cat > "$temp/bin/docker" <<'FAKE_DOCKER'
