@@ -87,8 +87,9 @@ def main():
     target = args.target or config.get("default_destination")
     if not isinstance(target, str) or not re.fullmatch(r"prod[1-9][0-9]*", target):
         fail("destination must be a named standby production generation")
-    if target not in config.get("allowed_destinations", []):
-        fail("destination is not registered")
+    destinations = config.get("allowed_destinations", [])
+    if target not in destinations and "prod*" not in destinations:
+        fail("destination is not permitted by policy")
     rule = config.get("events", {}).get(args.event, {})
     if not config.get("enabled") or not rule.get("enabled"):
         fail("this event source is disabled")
