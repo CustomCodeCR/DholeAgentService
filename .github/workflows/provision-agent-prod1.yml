@@ -1,24 +1,28 @@
-name: Provision isolated Agent prod1 standby
+name: Provision isolated Agent production generation
 
 on:
   push:
     branches: [master, develop]
     paths:
       - .github/workflows/provision-agent-prod1.yml
-      - tests/test_production_generation_executor.py
-      - scripts/production-generation-executor.py
+      - scripts/provision-production-generation.sh
   workflow_dispatch:
     inputs:
-      confirmation:
-        description: "For apply enter PROVISION_AGENT_PROD1"
-        required: true
+      generation:
+        description: "New numbered production generation (prod2, prod3, ...)"
         type: string
-      mode:
-        description: "Check configuration or safely pre-provision stopped Worker"
         required: true
+        default: prod2
+      mode:
+        description: "Read-only preflight or create dormant runtime"
         type: choice
+        required: true
         default: check
         options: [check, apply]
+      confirmation:
+        description: "For apply type PROVISION_INDEPENDENT_GENERATION"
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -28,124 +32,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-definition:
+  validate:
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - run: |
+      - name: Validate provisioning script and policy
+        run: |
           set -euo pipefail
+          bash -n scripts/provision-production-generation.sh
           python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
-          echo "PROD1_STANDBY_DEFINITION_VALIDATED; provisioning not started"
+          echo "GENERATION_PROVISION_DEFINITION_VALIDATED; host untouched"
 
   provision:
-    # One guarded, idempotent standby pre-provision on an explicitly updated
-    # master workflow. No Worker is activated and no sessions are reset.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: [self-hosted, linux, x64, dhole]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Run standby executor tests before any host mutation
-        run: python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
-      - name: Check explicit operator authorization
+      - name: Validate requested generation and authorization
         shell: bash
         env:
-          REQUESTED_MODE: ${{ github.event_name == 'push' && 'apply' || inputs.mode }}
+          GENERATION: ${{ inputs.generation }}
+          REQUEST_MODE: ${{ inputs.mode }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [[ "$REQUESTED_MODE" == apply && "${{ github.event_name }}" != push ]]; then
-            [[ "$CONFIRMATION" == PROVISION_AGENT_PROD1 ]] || {
-              echo "PROVISION_AGENT_PROD1 confirmation is required" >&2
-              exit 1
-            }
+          [[ "$GENERATION" =~ ^prod[1-9][0-9]*$ ]] && [[ "${#GENERATION}" -le 64 ]] || exit 2
+          if [[ "$REQUEST_MODE" == apply ]]; then
+            [[ "$CONFIRMATION" == PROVISION_INDEPENDENT_GENERATION ]] || exit 2
           fi
-
-      - name: Fetch production compose and prepare private environment
+          python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
+      - name: Prepare private production configuration
         shell: bash
         run: |
           set -euo pipefail
           git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
-          mkdir -p "$RUNNER_TEMP/prod1-preparation"
-          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/prod1-preparation" >/dev/null
-          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/prod1-preparation/.env.production" >> "$GITHUB_ENV"
-          docker network inspect dhole >/dev/null
-          docker volume inspect dhole_agent-data-protection-keys >/dev/null
-
-      - name: Check existing production images and Compose configuration
+          mkdir -p "$RUNNER_TEMP/agent-generation-env"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/agent-generation-env" >/dev/null
+          echo "PREPARED_AGENT_ENV=$RUNNER_TEMP/agent-generation-env/.env.production" >> "$GITHUB_ENV"
+      - name: Provision isolated standby without starting its Worker
         shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          REQUEST_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          docker image inspect dhole/agent-api:latest >/dev/null
-          docker image inspect dhole/agent-workers:latest >/dev/null
-          docker image inspect dhole/hermes-agent:latest >/dev/null
-          test -r "$DHOLE_ENV_FILE"
-          export DHOLE_IMAGE_TAG=latest DHOLE_NETWORK=dhole
-          docker compose --env-file "$DHOLE_ENV_FILE" \
-            -f .dhole-system/deploy/docker-compose.agent-prod1.yml \
-            -p dhole-agent-prod1 --profile activated config -q
-          free_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
-          test "$free_kb" -ge $((5 * 1024 * 1024))
-          echo "PROD1_PREPROVISION_CHECK_OK"
-
-      - name: Initialize isolated prod1 credential keyring once
-        if: ${{ github.event_name == 'push' || inputs.mode == 'apply' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The keyring is copied ONLY ONCE so encrypted credentials in the
-          # shared PostgreSQL database remain readable. It is never mounted
-          # from the original environment afterwards.
-          docker volume inspect dhole_agent-data-protection-keys >/dev/null
-          docker volume create dhole_agent_prod1_keys >/dev/null
-          docker run --rm \
-            -v dhole_agent-data-protection-keys:/original:ro \
-            -v dhole_agent_prod1_keys:/standby \
-            --entrypoint /bin/sh alpine:3.20 -ec '
-              if [ -z "$(ls -A /standby)" ]; then
-                cp -a /original/. /standby/
-              fi
-              test -n "$(ls -A /standby)"
-              chmod 700 /standby
-            '
-          echo "PROD1_INDEPENDENT_KEYRING_READY; browser profiles were not copied"
-
-      - name: Create independent runtime with inactive Worker
-        if: ${{ github.event_name == 'push' || inputs.mode == 'apply' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          export DHOLE_IMAGE_TAG=latest DHOLE_NETWORK=dhole
-          compose=(docker compose --env-file "$DHOLE_ENV_FILE" \
-            -f .dhole-system/deploy/docker-compose.agent-prod1.yml \
-            -p dhole-agent-prod1 --profile activated)
-          "${compose[@]}" up -d --pull never \
-            hermes-config-init-prod1 hermes-agent-prod1 dhole-agent-api-prod1
-          "${compose[@]}" create --no-build --pull never dhole-agent-workers-prod1
-          standby="$("${compose[@]}" ps -aq dhole-agent-workers-prod1)"
-          test -n "$standby"
-          state="$(docker inspect --format='{{.State.Status}}' "$standby")"
-          [[ "$state" == created || "$state" == exited ]] || {
-            echo "Standby Worker unexpectedly active; refusing provisioning" >&2
-            exit 1
-          }
-          for attempt in $(seq 1 35); do
-            if docker run --rm --network dhole curlimages/curl:8.12.1 \
-              --fail --silent --show-error --max-time 4 \
-              http://dhole-agent-api-prod1:8080/health >/dev/null 2>&1 && \
-              docker run --rm --network dhole curlimages/curl:8.12.1 \
-              --fail --silent --show-error --max-time 4 \
-              http://hermes-agent-prod1:8642/health >/dev/null 2>&1; then
-              echo "PROD1_STANDBY_INFRASTRUCTURE_READY"
-              echo "Worker is stopped. Provider authorization has NOT been verified."
-              exit 0
-            fi
-            sleep 4
-          done
-          # Diagnostics are restricted to service state/health (no environment,
-          # credentials, cookies or application logs are printed).
-          "${compose[@]}" ps hermes-agent-prod1 dhole-agent-api-prod1 || true
-          echo "PROD1_STANDBY_HEALTH_FAILED" >&2
-          exit 1
+          bash scripts/provision-production-generation.sh \
+            "$GENERATION" "$REQUEST_MODE" .dhole-system "$PREPARED_AGENT_ENV"
