@@ -83,7 +83,7 @@ class ExecutorSafetyTests(unittest.TestCase):
         self.assertTrue(executor.healthy({"State": {"Status": "running"}}))
         self.assertFalse(executor.healthy({"State": {"Status": "restarting"}}))
         self.assertFalse(executor.healthy({"State": {
-            "Status": "running", "Health": {"Status": "unhealthy"}}))
+            "Status": "running", "Health": {"Status": "unhealthy"}}}))
 
 
 if __name__ == "__main__":
