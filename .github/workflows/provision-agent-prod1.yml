@@ -90,6 +90,28 @@ jobs:
           test "$free_kb" -ge $((5 * 1024 * 1024))
           echo "PROD1_PREPROVISION_CHECK_OK"
 
+      - name: Initialize isolated prod1 credential keyring once
+        if: ${{ github.event_name == 'push' || inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The keyring is copied ONLY ONCE so encrypted credentials in the
+          # shared PostgreSQL database remain readable. It is never mounted
+          # from the original environment afterwards.
+          docker volume inspect dhole_agent-data-protection-keys >/dev/null
+          docker volume create dhole_agent_prod1_keys >/dev/null
+          docker run --rm \
+            -v dhole_agent-data-protection-keys:/original:ro \
+            -v dhole_agent_prod1_keys:/standby \
+            --entrypoint /bin/sh alpine:3.20 -ec '
+              if [ -z "$(ls -A /standby)" ]; then
+                cp -a /original/. /standby/
+              fi
+              test -n "$(ls -A /standby)"
+              chmod 700 /standby
+            '
+          echo "PROD1_INDEPENDENT_KEYRING_READY; browser profiles were not copied"
+
       - name: Create independent runtime with inactive Worker
         if: ${{ github.event_name == 'push' || inputs.mode == 'apply' }}
         shell: bash
@@ -122,5 +144,8 @@ jobs:
             fi
             sleep 4
           done
+          # Diagnostics are restricted to service state/health (no environment,
+          # credentials, cookies or application logs are printed).
+          "${compose[@]}" ps hermes-agent-prod1 dhole-agent-api-prod1 || true
           echo "PROD1_STANDBY_HEALTH_FAILED" >&2
           exit 1
