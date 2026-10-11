@@ -1,0 +1,120 @@
+name: Provision isolated Agent prod1 standby
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/provision-agent-prod1.yml
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "For apply enter PROVISION_AGENT_PROD1"
+        required: true
+        type: string
+      mode:
+        description: "Check configuration or safely pre-provision stopped Worker"
+        required: true
+        type: choice
+        default: check
+        options: [check, apply]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  validate-definition:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
+          echo "PROD1_STANDBY_DEFINITION_VALIDATED; provisioning not started"
+
+  provision:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check explicit operator authorization
+        shell: bash
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUESTED_MODE" == apply ]]; then
+            [[ "$CONFIRMATION" == PROVISION_AGENT_PROD1 ]] || {
+              echo "PROVISION_AGENT_PROD1 confirmation is required" >&2
+              exit 1
+            }
+          fi
+
+      - name: Fetch production compose and prepare private environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/prod1-preparation"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/prod1-preparation" >/dev/null
+          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/prod1-preparation/.env.production" >> "$GITHUB_ENV"
+          docker network inspect dhole >/dev/null
+          docker volume inspect dhole_agent-data-protection-keys >/dev/null
+
+      - name: Check existing production images and Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image inspect dhole/agent-api:latest >/dev/null
+          docker image inspect dhole/agent-workers:latest >/dev/null
+          docker image inspect dhole/hermes-agent:latest >/dev/null
+          test -r "$DHOLE_ENV_FILE"
+          export DHOLE_IMAGE_TAG=latest DHOLE_NETWORK=dhole
+          docker compose --env-file "$DHOLE_ENV_FILE" \
+            -f .dhole-system/deploy/docker-compose.agent-prod1.yml \
+            -p dhole-agent-prod1 --profile activated config -q
+          free_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+          test "$free_kb" -ge $((5 * 1024 * 1024))
+          echo "PROD1_PREPROVISION_CHECK_OK"
+
+      - name: Create independent runtime with inactive Worker
+        if: ${{ inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DHOLE_IMAGE_TAG=latest DHOLE_NETWORK=dhole
+          compose=(docker compose --env-file "$DHOLE_ENV_FILE" \
+            -f .dhole-system/deploy/docker-compose.agent-prod1.yml \
+            -p dhole-agent-prod1 --profile activated)
+          "${compose[@]}" up -d --pull never \
+            hermes-config-init-prod1 hermes-agent-prod1 dhole-agent-api-prod1
+          "${compose[@]}" create --no-build --pull never dhole-agent-workers-prod1
+          standby="$("${compose[@]}" ps -aq dhole-agent-workers-prod1)"
+          test -n "$standby"
+          state="$(docker inspect --format='{{.State.Status}}' "$standby")"
+          [[ "$state" == created || "$state" == exited ]] || {
+            echo "Standby Worker unexpectedly active; refusing provisioning" >&2
+            exit 1
+          }
+          for attempt in $(seq 1 35); do
+            if docker run --rm --network dhole curlimages/curl:8.12.1 \
+              --fail --silent --show-error --max-time 4 \
+              http://dhole-agent-api-prod1:8080/health >/dev/null 2>&1 && \
+              docker run --rm --network dhole curlimages/curl:8.12.1 \
+              --fail --silent --show-error --max-time 4 \
+              http://hermes-agent-prod1:8642/health >/dev/null 2>&1; then
+              echo "PROD1_STANDBY_INFRASTRUCTURE_READY"
+              echo "Worker is stopped. Provider authorization has NOT been verified."
+              exit 0
+            fi
+            sleep 4
+          done
+          echo "PROD1_STANDBY_HEALTH_FAILED" >&2
+          exit 1
