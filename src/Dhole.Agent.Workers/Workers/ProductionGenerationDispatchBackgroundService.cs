@@ -42,6 +42,7 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                     var db = scope.ServiceProvider.GetRequiredService<ServiceDbContext>();
                     if (await ExistsAsync(db, stoppingToken))
                     {
+                        await DispatchProvisioningAsync(db, stoppingToken);
                         await ExpireOverdueAsync(db, stoppingToken);
                         await EvaluateRulesAsync(db, stoppingToken);
                         await DispatchPendingAsync(db, stoppingToken);
@@ -157,6 +158,73 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             """, ct, ("minutes", minutes), ("codes", TechnicalCodes));
         return int.TryParse(result, out var parsed) ? parsed : 0;
     }
+
+    private async Task DispatchProvisioningAsync(ServiceDbContext db, CancellationToken ct)
+    {
+        var pending = await QueryRowsAsync(db, """
+            WITH candidate AS (
+              SELECT generation FROM agent.runtime_generation_provisions
+              WHERE status='Pending' ORDER BY created_at_utc
+              LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE agent.runtime_generation_provisions r
+            SET status='Dispatching', updated_at_utc=now()
+            FROM candidate WHERE r.generation=candidate.generation
+            RETURNING r.generation
+            """, ct);
+        if (pending.Count == 0) return;
+        var generation = pending[0][0];
+        // Registering an environment through the UI provisions its isolated
+        // infrastructure once; it does NOT switch Workers or authenticate.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(generation, @"^prod[1-9][0-9]*$") ||
+            generation.Length > 64)
+        {
+            await SetProvisionStatusAsync(db, generation, "Failed", "invalid_generation", ct);
+            return;
+        }
+        var token = configuration["GenerationOrchestrator:GitHubToken"];
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            await SetProvisionStatusAsync(db, generation, "Failed", "github_actions_token_missing", ct);
+            return;
+        }
+        try
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post,
+                "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/workflows/provision-agent-prod1.yml/dispatches");
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            message.Headers.UserAgent.ParseAdd("DholeAgent-generation-orchestrator/1.0");
+            message.Content = JsonContent.Create(new
+            {
+                @ref = "master",
+                inputs = new {
+                    generation,
+                    mode = "apply",
+                    confirmation = "PROVISION_INDEPENDENT_GENERATION"
+                }
+            });
+            using var response = await _github.SendAsync(message, ct);
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.Created)
+                throw new InvalidOperationException("GitHub provisioning dispatch refused");
+            await SetProvisionStatusAsync(db, generation, "Dispatched", "github_provision_requested", ct);
+            logger.LogInformation("GENERATION_PROVISION_DISPATCHED generation={Generation}", generation);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogWarning("GENERATION_PROVISION_DISPATCH_FAILED generation={Generation} reason={Type}",
+                generation, exception.GetType().Name);
+            await SetProvisionStatusAsync(db, generation, "Failed", "github_provision_dispatch_failed", ct);
+        }
+    }
+
+    private static Task SetProvisionStatusAsync(ServiceDbContext db, string generation,
+        string status, string code, CancellationToken ct) => QueryAsync(db, """
+            UPDATE agent.runtime_generation_provisions
+            SET status=@status, diagnostic_code=@code, updated_at_utc=now()
+            WHERE generation=@generation AND status IN ('Dispatching','Dispatched')
+            RETURNING generation
+            """, ct, ("status", status), ("code", code), ("generation", generation));
 
     private async Task DispatchPendingAsync(ServiceDbContext db, CancellationToken ct)
     {
