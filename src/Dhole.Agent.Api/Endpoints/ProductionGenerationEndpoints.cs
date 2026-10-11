@@ -33,6 +33,15 @@ internal static class ProductionGenerationEndpoints
         INSERT INTO agent.runtime_generations(name)
         VALUES ('prod'), ('prod1') ON CONFLICT (name) DO NOTHING;
 
+        CREATE TABLE IF NOT EXISTS agent.runtime_generation_provisions (
+            generation text PRIMARY KEY REFERENCES agent.runtime_generations(name),
+            status text NOT NULL DEFAULT 'Pending'
+                CHECK (status IN ('Pending','Dispatching','Dispatched','Provisioned','Failed')),
+            created_at_utc timestamptz NOT NULL DEFAULT now(),
+            updated_at_utc timestamptz NOT NULL DEFAULT now(),
+            diagnostic_code text
+        );
+
         CREATE TABLE IF NOT EXISTS agent.runtime_generation_rules (
             code text PRIMARY KEY,
             enabled boolean NOT NULL DEFAULT false,
@@ -76,10 +85,23 @@ internal static class ProductionGenerationEndpoints
             var active = await ScalarAsync(db,
                 "SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true", ct);
             var generationRows = await RowsAsync(db, """
-                SELECT name, registered_at_utc::text
-                FROM agent.runtime_generations
-                ORDER BY CASE WHEN name='prod' THEN 0 ELSE 1 END,
-                         CASE WHEN name='prod' THEN 0 ELSE substring(name from 5)::numeric END
+                SELECT g.name, g.registered_at_utc::text,
+                       coalesce(p.status, 'Registered')
+                FROM agent.runtime_generations g
+                LEFT JOIN agent.runtime_generation_provisions p ON p.generation=g.name
+                ORDER BY CASE WHEN g.name='prod' THEN 0 ELSE 1 END,
+                         CASE WHEN g.name='prod' THEN 0 ELSE substring(g.name from 5)::numeric END
+                """, ct);
+            var authIncidents = await ScalarAsync(db, """
+                SELECT count(*)::text FROM agent."AgentExecutions"
+                WHERE status='WaitingForAuthentication'
+                  AND error_code IN (
+                     'maersk_hcaptcha_required',
+                     'maersk_authentication_verification_required',
+                     'maersk_authentication_forbidden',
+                     'maersk_authentication_unauthorized',
+                     'maersk_authentication_edge_denied'
+                  )
                 """, ct);
             var rules = await RowsAsync(db, """
                 SELECT code, enabled::text, threshold::text, schedule_minutes::text
@@ -95,9 +117,10 @@ internal static class ProductionGenerationEndpoints
             var result = new
             {
                 activeGeneration = active ?? "unknown",
+                authenticationIncidentCount = int.TryParse(authIncidents, out var authCount) ? authCount : 0,
                 generations = generationRows.Select(r => new {
                     name = r[0], browserState = "IsolatedPersistent", sharedDatabases = true,
-                    registeredAtUtc = r[1]
+                    registeredAtUtc = r[1], provisioningStatus = r[2]
                 }),
                 rules = rules.Select(r => new {
                     code = r[0], enabled = r[1] == "true", threshold = int.Parse(r[2]),
@@ -127,13 +150,18 @@ internal static class ProductionGenerationEndpoints
                     INSERT INTO agent.runtime_generations (name)
                     VALUES (@name) ON CONFLICT(name) DO NOTHING
                     """, ct, ("name", request.Name));
+                await ExecuteAsync(db, """
+                    INSERT INTO agent.runtime_generation_provisions(generation,status)
+                    VALUES (@name,'Pending') ON CONFLICT(generation) DO NOTHING
+                    """, ct, ("name", request.Name));
             }
             catch (DbException)
             {
                 return Results.Conflict(new { error = "Generation registration was rejected." });
             }
             // Registration is metadata only: Docker, Chromium and Workers remain untouched.
-            return Results.Ok(new { name = request.Name, registered = true, provisioned = false });
+            return Results.Accepted("/api/agents/runtime-generations/",
+                new { name = request.Name, registered = true, provisioning = "Requested", provisioned = false });
         }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
         group.MapPost("/requests", async (
