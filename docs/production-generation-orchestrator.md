@@ -77,8 +77,22 @@ python3 scripts/production-generation-orchestrator.py \
 
 ### Important limitations
 
-This is a guarded handoff of the **Worker processing owner**, not a public API gateway cutover. The primary public Agent API stays the stable ingress; the standby Agent API and Hermes are independently provisioned. Only `prod1` has a Compose manifest; further generations need individually reviewed manifests and their own authorized sessions.
+This is a guarded handoff of the **Worker processing owner**, not a public API gateway cutover. The primary public Agent API stays the stable ingress; the standby Agent API and Hermes are independently provisioned. New generations may be configured through the generic `deploy/docker-compose.agent-generation.yml` manifest in DholeSystem; each requires its own persisted isolated browser and Hermes storage and independently authorized session.
 
 An open provider circuit, CAPTCHA, 401/403, rate limit or missing provider authentication blocks a switch. The workflow cannot create, discard or rotate sessions to evade authentication restrictions.
 
 **Deployment state is distinct from repository state:** publishing these workflows does not prove a self-hosted run completed, and provisioning the standby does not mean a production handoff occurred. Inspect the matching workflow run and Agent queue/application health before declaring success.
+
+## Arbitrarily numbered production generations (prodN)
+
+The API uses `agent.runtime_generations` for the registered inventory. From DholeWeb **Agent → Orquestador de entornos**, register `prod2`, `prod3`, etc. Names must match `prod[1-9][0-9]*` and contain no more than 64 characters. Database registration does **not** create or start Docker containers.
+
+For a previously unprovisioned generation, open **Provision isolated Agent production generation** in DholeAgentService GitHub Actions and select `workflow_dispatch` with `generation=prodN`, `mode=check` first. Then choose `mode=apply` and confirmation `PROVISION_INDEPENDENT_GENERATION` to provision its independent volumes, Hermes API and an intentionally **stopped** standby Worker. This only prepares infrastructure; provider authentication must be completed and verified separately.
+
+The generic Compose manifest lives at `DholeSystem/deploy/docker-compose.agent-generation.yml` and uses an independent Compose project `dhole-agent-prodN`, its own browser-profiles volume and Hermes volume, plus an independent encryption keyring initialized one time from the existing protected database key material (not a browser profile/session). PostgreSQL, MongoDB and Redis are shared services, **not copied into each generation**. Never call `docker compose down -v`, prune volumes or reinitialize previously allocated browser profiles.
+
+`scripts/production-generation-status-sync.sh` discovers the actual running Worker across all configured production generations. It refuses to announce an active generation when zero or multiple Workers appear active. The backend's `runtime-generations` endpoints expose inventory, operational rules, pending requests and recorded active generation, with authorization checks. A registered name is not a health claim.
+
+A generation transition is allowed only toward an existing destination with a fresh independent authorized-access attestation, a healthy runtime, no running jobs, and a clear provider circuit. Provider authentication errors, challenges and rate limits remain subject to their own protections; the orchestrator does not rotate browser identities to bypass them.
+
+**Current limitation:** web-created database requests are persistent and visible but **not connected to the host handoff executor**. The separate executor is run via the guarded GitHub Actions workflow for authorized, pre-provisioned standbys. End-to-end switching from the DholeWeb interface is not considered complete until a separately audited host queue bridge is validated and deployed.
