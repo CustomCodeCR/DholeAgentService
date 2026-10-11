@@ -1,0 +1,34 @@
+name: Maersk Staging FK Backup Diagnostic
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/maersk-restore-fk-diagnostic-20261011.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-staging
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read-only diagnostic on archived staging snapshot
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify backed-up archive and attempt offline full restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          backup_root="$HOME/dhole-agent-protected-release-backups/staging"
+          test -d "$backup_root"
+          snapshot="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -printf '%f\n' | sort -r | head -n 1)"
+          test -n "$snapshot"
+          backup_dir="$backup_root/$snapshot"
+          (cd "$backup_dir" && sha256sum -c --status SHA256SUMS)
+          test -s "$backup_dir/agent.dump"
+          bash -n scripts/maersk-phase8-restore-drill.sh
+          bash scripts/maersk-phase8-restore-drill.sh "$backup_dir"
