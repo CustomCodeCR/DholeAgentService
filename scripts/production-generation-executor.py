@@ -43,6 +43,41 @@ def inspect(project, service):
     return json.loads(command(["docker", "inspect", ids[0]]))[0]
 
 
+def generation_services(generation):
+    """Compose project / API / Worker / Hermes naming; prod1 remains legacy-compatible."""
+    if generation == "prod":
+        return ("dhole", "dhole-agent-api", "dhole-agent-workers", None)
+    if not isinstance(generation, str) or not re.fullmatch(r"prod[1-9][0-9]*", generation) or len(generation) > 64:
+        stop("invalid generation")
+    if generation == "prod1":
+        return ("dhole-agent-prod1", "dhole-agent-api-prod1",
+                "dhole-agent-workers-prod1", "hermes-agent-prod1")
+    return (f"dhole-agent-{generation}", "dhole-agent-api",
+            "dhole-agent-workers", "hermes-agent")
+
+
+def find_running_generation():
+    # Discover actual Worker owner, never trust only the stored current-generation label.
+    ids = command(["docker", "ps", "-q",
+                   "--filter", "label=com.docker.compose.project"]).splitlines()
+    found = []
+    for container_id in ids:
+        info = json.loads(command(["docker", "inspect", container_id]))[0]
+        labels = info.get("Config", {}).get("Labels", {}) or {}
+        project = labels.get("com.docker.compose.project", "")
+        service = labels.get("com.docker.compose.service", "")
+        if project == "dhole" and service == "dhole-agent-workers":
+            found.append(("prod", info))
+        elif re.fullmatch(r"dhole-agent-prod[1-9][0-9]*", project):
+            generation = project.removeprefix("dhole-agent-")
+            allowed = generation_services(generation)[2]
+            if service == allowed:
+                found.append((generation, info))
+    if len(found) != 1:
+        stop("exactly one active Agent Worker across all generations is required")
+    return found[0]
+
+
 def container_env(container):
     return dict(s.split("=", 1) for s in container["Config"]["Env"] if "=" in s)
 
@@ -98,8 +133,12 @@ def validate(state_dir, request, config):
     if config.get("enabled") is not True:
         stop("orchestrator is not enabled")
     target = request.get("target")
-    if target not in config.get("allowed_destinations", []) or target != "prod1":
-        stop("destination not registered or currently unsupported")
+    if (not isinstance(target, str) or
+            not re.fullmatch(r"prod[1-9][0-9]*", target) or len(target) > 64):
+        stop("invalid standby generation")
+    allowed = config.get("allowed_destinations", [])
+    if target not in allowed and "prod*" not in allowed:
+        stop("destination is not permitted")
     source = request.get("event")
     if source not in ("manual", "scheduled", "technical_failure"):
         stop("unsupported event")
@@ -107,11 +146,11 @@ def validate(state_dir, request, config):
         stop("event is disabled")
     if request.get("status") != "pending" or request.get("requires_executor_verification") is not True:
         stop("request was not registered by publisher")
-    marker = state_dir / "ready" / "prod1.json"
+    marker = state_dir / "ready" / (target + ".json")
     if marker.is_symlink() or not marker.is_file():
         stop("standby has no operator-verified readiness record")
     readiness = json.loads(marker.read_text())
-    if readiness.get("generation") != "prod1" or readiness.get("ready") is not True:
+    if readiness.get("generation") != target or readiness.get("ready") is not True:
         stop("destination was not verified")
     if (readiness.get("provider_authorized") is not True or
             not isinstance(readiness.get("verified_by"), str) or
@@ -146,12 +185,16 @@ def main():
     request = json.loads(request_file.read_text())
     if request.get("id") != args.request_id:
         stop("request ID mismatch")
-    validate(state_dir, request, config)
+    target = validate(state_dir, request, config)
 
-    original = inspect("dhole", "dhole-agent-workers")
-    alternate = inspect("dhole-agent-prod1", "dhole-agent-workers-prod1")
-    api = inspect("dhole-agent-prod1", "dhole-agent-api-prod1")
-    hermes = inspect("dhole-agent-prod1", "hermes-agent-prod1")
+    active_name, original = find_running_generation()
+    if active_name == target:
+        stop("requested destination is already the active Worker")
+    source_project, source_api, _, _ = generation_services(active_name)
+    target_project, target_api, target_worker, target_hermes = generation_services(target)
+    alternate = inspect(target_project, target_worker)
+    api = inspect(target_project, target_api)
+    hermes = inspect(target_project, target_hermes)
     if not healthy(api) or not healthy(hermes):
         stop("standby API and Hermes must already be running and healthy")
     if alternate["State"]["Status"] not in ("created", "exited"):
@@ -160,7 +203,7 @@ def main():
         stop("primary Worker must be running")
     if original["Image"] != alternate["Image"]:
         stop("standby Worker must use the same image revision as primary")
-    primary_api = inspect("dhole", "dhole-agent-api")
+    primary_api = inspect(source_project, source_api)
     if primary_api["Image"] != api["Image"]:
         stop("standby API must use the same image revision as primary")
     original_env, alternate_env = container_env(original), container_env(alternate)
@@ -174,15 +217,15 @@ def main():
     if (original_env.get("AgentQueue__ConcurrentDispatcherEnabled", "").lower() !=
             alternate_env.get("AgentQueue__ConcurrentDispatcherEnabled", "").lower()):
         stop("source and destination queue dispatch mode must match")
-    if mount_name(original, "/data/agent-keys") != mount_name(alternate, "/data/agent-keys"):
-        stop("destination cannot decrypt existing Agent credentials")
+    if mount_name(original, "/data/agent-keys") == mount_name(alternate, "/data/agent-keys"):
+        stop("keyring volume must be isolated per generation; compatibility requires prior verification")
     if mount_name(original, "/data/browser-profiles") == mount_name(alternate, "/data/browser-profiles"):
         stop("isolated Workers must have different browser profile volumes")
     config_db = load_connection(args.env_file)
     database_clear(config_db)
     if args.mode == "check":
         print(json.dumps({"status": "READY_FOR_OPERATOR_CONTROLLED_HANDOFF",
-                          "target": "prod1", "event_id": args.request_id,
+                          "target": target, "source": active_name, "event_id": args.request_id,
                           "executed": False}))
         return
     if args.confirmation != "AUTHORIZE_VERIFIED_WORKER_HANDOFF":
@@ -224,7 +267,7 @@ def main():
     os.replace(temporary, destination)
     request_file.unlink()
     print(json.dumps({"status": "WORKER_HANDOFF_COMPLETED",
-                      "target": "prod1", "event_id": args.request_id,
+                      "target": target, "source": active_name, "event_id": args.request_id,
                       "executed": True}))
 
 
