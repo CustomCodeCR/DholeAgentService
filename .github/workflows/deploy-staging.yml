@@ -1,6 +1,8 @@
 name: Deploy Dhole Agent - Staging
 
 on:
+  # Release data-quality trigger acceptance through the same protected
+  # staging and production promotion without weakening any authentication gate.
   # Final production-gated release: includes post-failure GitHub dispatch
   # cooldown and safe re-submission of infrastructure provisioning requests.
   # Final validated orchestration release: includes arbitrary prodN safe return
