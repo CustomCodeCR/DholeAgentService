@@ -96,6 +96,18 @@ def run(request_id, env_file, state_dir, check_only):
     if registered != "t":
         set_terminal(db, request_id, "Rejected", "unregistered_generation")
         raise GateError("Destination was never registered")
+    # Signal to the dispatcher that GitHub has started processing. Stale
+    # workflow_dispatch events may expire, but a live handoff is never
+    # marked failed in the middle of a safely bounded Docker transition.
+    begun = sql(db, f"""
+        UPDATE agent.runtime_generation_requests
+        SET diagnostic_code='github_workflow_running'
+        WHERE id='{request_id}'::uuid AND status='Processing'
+          AND diagnostic_code='github_workflow_dispatched'
+        RETURNING id::text;
+    """)
+    if begun != request_id:
+        raise GateError("Request has already been started or completed by another runner")
     # The executor validates live queues/circuits and the independent provider
     # authorization record on every invocation. Do not synthesize readiness.
     state = Path(state_dir).expanduser().resolve()
