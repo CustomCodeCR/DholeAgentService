@@ -74,16 +74,61 @@ running="$(docker run --rm --network "$network" -e PGPASSWORD="$dbpass" \
   -c "SELECT COUNT(*) FROM agent.\"AgentExecutions\" WHERE status='Running';")" ||
   die 'Cannot inspect running executions'
 [ "$running" = 0 ] || die 'Active executions must finish before deployment'
-# Refuse first activation when old provider challenges are still pending.
-# Phase 3 reconciliation must bring these incidents into a durable Open circuit
-# BEFORE workers are allowed to schedule Maersk again.
-pending="$(docker run --rm --network "$network" -e PGPASSWORD="$dbpass" \
-  -e PGOPTIONS='-c default_transaction_read_only=on' postgres:16-alpine \
-  psql -X -v ON_ERROR_STOP=1 -At -h "$dbhost" -p "$dbport" -U "$dbuser" -d "$dbname" \
-  -c "SELECT count(*) FROM agent.\"AgentExecutions\" WHERE status='WaitingForAuthentication' AND error_code IN ('maersk_hcaptcha_required','maersk_authentication_forbidden','maersk_authentication_rate_limited');")" ||
-  die 'Cannot verify existing CAPTCHA backlog'
-[ "$pending" = 0 ] ||
-  die "There are $pending earlier provider-verification incidents. Complete safe reconciliation before enabling any new Maersk work"
+# Reconcile pre-existing restrictions before releasing any new Worker.
+# Existing WaitingForAuthentication rows must never be deleted/retried just to
+# enable the breaker: latch a provider-wide Open circuit in PostgreSQL instead.
+# Executions, snapshots, credentials and browser profiles are left untouched.
+# This runs only after the backup/restore/schema gates and the Running=0 gate.
+# Repeated activations remain fail-closed until a verified operator reset.
+reconcile_sql=$(cat <<'SQL'
+BEGIN;
+WITH blocked AS (
+  SELECT DISTINCT e.provider_id
+    FROM agent."AgentExecutions" e
+    JOIN agent."AgentProviders" p ON p.id=e.provider_id
+   WHERE UPPER(p.code)='MAERSK'
+     AND e.status='WaitingForAuthentication'
+     AND e.error_code IN (
+       'maersk_hcaptcha_required',
+       'maersk_authentication_edge_denied',
+       'maersk_authentication_forbidden',
+       'maersk_authentication_rate_limited',
+       'maersk_authentication_verification_required',
+       'maersk_browser_profile_blocked',
+       'maersk_authentication_unauthorized')
+), latched AS (
+  INSERT INTO agent.maersk_circuits
+      (provider_id,state,requires_operator,reason_code,
+       open_until_utc,consecutive_failures,probe_execution_id,updated_at_utc)
+  SELECT provider_id,'Open',true,'maersk_existing_auth_restriction',
+         NOW() + INTERVAL '30 minutes',1,NULL,NOW()
+  FROM blocked
+  ON CONFLICT (provider_id) DO UPDATE
+    SET state='Open',
+        requires_operator=true,
+        reason_code=CASE
+          WHEN agent.maersk_circuits.requires_operator
+            THEN agent.maersk_circuits.reason_code
+          ELSE 'maersk_existing_auth_restriction'
+        END,
+        probe_execution_id=NULL,
+        consecutive_failures=GREATEST(agent.maersk_circuits.consecutive_failures,1),
+        updated_at_utc=NOW()
+  RETURNING provider_id
+)
+INSERT INTO agent.maersk_circuit_events
+    (id,provider_id,event_type,reason_code,occurred_at_utc)
+SELECT gen_random_uuid(),provider_id,'Opened','maersk_existing_auth_restriction',NOW()
+FROM latched;
+COMMIT;
+SQL
+)
+docker run --rm --network "$network" -e PGPASSWORD="$dbpass" postgres:16-alpine \
+  psql -X -v ON_ERROR_STOP=1 -q -h "$dbhost" -p "$dbport" -U "$dbuser" -d "$dbname" \
+  -c "$reconcile_sql" >/dev/null ||
+  die 'Existing provider restriction reconciliation failed; do not start workers'
+echo 'MAERSK_PENDING_AUTH_RECONCILED: circuit latched Open where provider restrictions exist; no queue replay'
+
 
 compose="$system_dir/deploy/docker-compose.services.yml"
 compose_apply() {
