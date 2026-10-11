@@ -39,7 +39,7 @@ created="$(sed -n 's/^created_epoch=//p' "$backup_dir/metadata.txt" | head -n 1)
 (cd "$backup_dir" && sha256sum -c --status SHA256SUMS) || die "Backup checksum mismatch"
 tar -tzf "$backup_dir/browser-profiles.tar.gz" >/dev/null || die "Corrupt browser profile archive"
 tar -tzf "$backup_dir/agent-keys.tar.gz" >/dev/null || die "Corrupt data-protection archive"
-docker run --rm -v "$backup_dir:/backup:ro" postgres:16-alpine \
+docker run --rm -v "$backup_dir:/backup:ro" postgres:17-alpine \
   pg_restore --file /dev/null /backup/agent.dump >/dev/null || die "Corrupt PostgreSQL archive"
 
 # First activation requires disabled flags. Subsequent redeploys need an
