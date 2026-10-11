@@ -73,6 +73,25 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh \
             /opt/dhole/.env "$RUNNER_TEMP/agent-generation-env" >/dev/null
           echo "PREPARED_AGENT_ENV=$RUNNER_TEMP/agent-generation-env/.env.production" >> "$GITHUB_ENV"
+      - name: Pass scoped GitHub dispatcher credential to the dormant standby Worker
+        shell: bash
+        env:
+          GENERATION_ACTIONS_TOKEN: ${{ secrets.GENERATION_ORCHESTRATOR_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GENERATION_ACTIONS_TOKEN" ]]; then
+            echo 'GENERATION_STANDBY_DISPATCHER_DISABLED_NO_TOKEN'
+            exit 0
+          fi
+          chmod 600 "$PREPARED_AGENT_ENV"
+          sed -i '/^GenerationOrchestrator__GitHubToken=/d' "$PREPARED_AGENT_ENV"
+          echo "GenerationOrchestrator__GitHubToken=$GENERATION_ACTIONS_TOKEN" >> "$PREPARED_AGENT_ENV"
+          if grep -q '^GenerationOrchestrator__Enabled=' "$PREPARED_AGENT_ENV"; then
+            sed -i 's/^GenerationOrchestrator__Enabled=.*/GenerationOrchestrator__Enabled=true/' "$PREPARED_AGENT_ENV"
+          else
+            echo 'GenerationOrchestrator__Enabled=true' >> "$PREPARED_AGENT_ENV"
+          fi
+          echo 'GENERATION_STANDBY_DISPATCHER_CONFIGURED'
       - name: Provision isolated standby without starting its Worker
         shell: bash
         env:
