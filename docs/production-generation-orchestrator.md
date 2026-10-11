@@ -96,3 +96,33 @@ The generic Compose manifest lives at `DholeSystem/deploy/docker-compose.agent-g
 A generation transition is allowed only toward an existing destination with a fresh independent authorized-access attestation, a healthy runtime, no running jobs, and a clear provider circuit. Provider authentication errors, challenges and rate limits remain subject to their own protections; the orchestrator does not rotate browser identities to bypass them.
 
 **Current limitation:** web-created database requests are persistent and visible but **not connected to the host handoff executor**. The separate executor is run via the guarded GitHub Actions workflow for authorized, pre-provisioned standbys. End-to-end switching from the DholeWeb interface is not considered complete until a separately audited host queue bridge is validated and deployed.
+
+
+## Web-to-GitHub operational orchestration (October 2026)
+
+The Agent API now persists **registration and provisioning** separately. `POST /api/agents/runtime-generations/register` records `agent.runtime_generation_provisions.status=Pending`. The production Worker polls PostgreSQL every 10 seconds and dispatches a GitHub Actions `workflow_dispatch` to `provision-agent-prod1.yml` with `generation=prodN` and `mode=apply`. The existing volumes are never removed or overwritten. The workflow writes `Provisioned` only if infrastructure preparation succeeds; this **does not mean provider authentication is authorized**.
+
+The web's **Solicitar cambio** button inserts one audited request in `agent.runtime_generation_requests`. The production Worker atomically claims it and submits `production-generation-apply.yml` with the **request UUID only**. The self-hosted runner loads its protected database configuration, re-reads and checks that specific ID, verifies that the rule is still enabled and the destination was previously registered, then invokes `production-generation-executor.py`. The executor requires a fresh operator verified, authorized-access marker `ready/prodN.json`, compatible persisted encrypted database keys, separated Chromium profile volumes, one active Worker, no running business executions and non-blocking circuit restrictions. A successful transition updates both request and active generation in PostgreSQL.
+
+Automated triggers are evaluated by the Worker every ~10 seconds, **not by a GitHub cron**:
+- `scheduled`: interval from `agent.runtime_generation_rules.schedule_minutes` since the last recorded generation switch.
+- `technical_failure`: threshold of recent explicitly allowlisted infrastructure error codes; excludes authentication denials.
+- `data_quality`: threshold of recently partially completed Agent extractions, without counting authentication incidents.
+
+Only infrastructure-provisioned numbered generations are eligible for automatic selection, in ascending numeric order, wrapping when necessary. The destination must additionally satisfy independent access authorization at handoff time. Each event is deduplicated in PostgreSQL; queued GitHub requests expire after about 4 minutes 45 seconds, and the Actions job is capped at five minutes. GitHub runner queue times and provider checks are external and cannot be guaranteed to satisfy five minutes.
+
+CAPTCHA, HTTP 401/403, MFA and provider rate limiting are surfaced separately as access incidents and preserved in Maersk's circuit breaker. These events **do not cause an automatic browser identity/environment rotation to circumvent provider restrictions**.
+
+### One-time GitHub credential setup
+
+Create a fine-grained access token or scoped GitHub App credential with **Actions: read and write** permission on `CustomCodeCR/DholeAgentService`. Add it as an Actions repository secret named **`GENERATION_ORCHESTRATOR_GITHUB_TOKEN`**. The protected production deployment copies that secret into the runner's temporary production env file (never source control or workflow output) and sets `GenerationOrchestrator__Enabled=true`. Without that secret, the API reports `githubDispatcherConfigured=false` and the automatic publisher stays disabled; do not mistake saved requests for completed transitions.
+
+This secret must be intentionally provisioned by an authorized repository administrator. GitHub's per-workflow ephemeral `github.token` cannot be reused by a long-running Docker Worker.
+
+### Readiness and live validation
+
+An infrastructure-provisioned environment is not automatically an authorized provider login. Before approving a handoff, verify provider access through an independently authorized interactive session and record the recent authenticated standby readiness in the host's protected `~/.local/state/dhole-production-generation/ready/prodN.json` file. The old Chromium volumes are intentionally untouched. Validate production Worker logs for `GENERATION_DISPATCHER_RUNNING`, and GitHub Actions for the matching UUID, followed by the database request's `Completed` status and a single running Worker.
+
+If the Actions request fails, the current environment is retained or the executor initiates rollback. Check `diagnostic_code` and host health before any operator retry. A failed provisioning job does not delete previous volumes.
+
+The five-minute bound is a **target**, not a promise: workflow scheduling, provider authorization and business job draining may block or reject a transition. Never bypass a circuit breaker to satisfy this latency objective.
