@@ -140,7 +140,7 @@ def validate(state_dir, request, config):
     if target not in allowed and "prod*" not in allowed:
         stop("destination is not permitted")
     source = request.get("event")
-    if source not in ("manual", "scheduled", "technical_failure"):
+    if source not in ("manual", "scheduled", "technical_failure", "data_quality"):
         stop("unsupported event")
     if not config.get("events", {}).get(source, {}).get("enabled"):
         stop("event is disabled")
