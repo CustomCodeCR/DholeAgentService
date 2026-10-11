@@ -48,6 +48,22 @@ class ExecutorSafetyTests(unittest.TestCase):
         self.save()
         self.assertEqual(executor.validate(self.state, self.request, self.config), "prod1")
 
+    def test_dynamic_numbered_target_is_supported(self):
+        self.config["allowed_destinations"] = ["prod*"]
+        self.request["target"] = "prod38"
+        self.record.update(
+            generation="prod38", provider_authorized=True, verified_by="operator")
+        (self.ready / "prod38.json").write_text(json.dumps(self.record))
+        self.assertEqual(executor.validate(self.state, self.request, self.config), "prod38")
+
+    def test_generation_service_mapping(self):
+        self.assertEqual(executor.generation_services("prod10"),
+                         ("dhole-agent-prod10", "dhole-agent-api",
+                          "dhole-agent-workers", "hermes-agent"))
+        self.assertEqual(executor.generation_services("prod")[0], "dhole")
+        with self.assertRaisesRegex(RuntimeError, "invalid generation"):
+            executor.generation_services("stage42")
+
     def test_provider_attestation_expires(self):
         self.record.update(
             provider_authorized=True, verified_by="operator",
