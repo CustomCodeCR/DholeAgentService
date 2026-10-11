@@ -154,10 +154,15 @@ def main():
     hermes = inspect("dhole-agent-prod1", "hermes-agent-prod1")
     if not healthy(api) or not healthy(hermes):
         stop("standby API and Hermes must already be running and healthy")
-    if alternate["State"]["Status"] != "exited":
+    if alternate["State"]["Status"] not in ("created", "exited"):
         stop("standby Worker must be stopped before handoff")
     if original["State"]["Status"] != "running":
         stop("primary Worker must be running")
+    if original["Image"] != alternate["Image"]:
+        stop("standby Worker must use the same image revision as primary")
+    primary_api = inspect("dhole", "dhole-agent-api")
+    if primary_api["Image"] != api["Image"]:
+        stop("standby API must use the same image revision as primary")
     original_env, alternate_env = container_env(original), container_env(alternate)
     for key in ("Postgres__ConnectionString", "Redis__ConnectionString",
                 "CredentialProtection__KeyRingPath"):
