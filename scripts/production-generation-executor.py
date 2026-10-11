@@ -22,8 +22,9 @@ def stop(message):
 
 
 def command(args, *, environment=None, timeout=35):
-    return subprocess.run(args, capture_output=True, text=True,
-                          check=True, timeout=timeout, env=environment).stdout.strip()
+    result = subprocess.run(args, capture_output=True, text=True,
+                            check=True, timeout=timeout, env=environment)
+    return (result.stdout + "\n" + result.stderr).strip()
 
 
 def parse_time(value):
@@ -148,9 +149,9 @@ def main():
     validate(state_dir, request, config)
 
     original = inspect("dhole", "dhole-agent-workers")
-    alternate = inspect("dhole-agent-prod1", "dhole-agent-workers")
-    api = inspect("dhole-agent-prod1", "dhole-agent-api")
-    hermes = inspect("dhole-agent-prod1", "hermes-agent")
+    alternate = inspect("dhole-agent-prod1", "dhole-agent-workers-prod1")
+    api = inspect("dhole-agent-prod1", "dhole-agent-api-prod1")
+    hermes = inspect("dhole-agent-prod1", "hermes-agent-prod1")
     if not healthy(api) or not healthy(hermes):
         stop("standby API and Hermes must already be running and healthy")
     if alternate["State"]["Status"] != "exited":
