@@ -52,8 +52,10 @@ worker_id="$(container_id "$project" dhole-agent-workers)"
 [[ "$(printf '%s\n' "$worker_id" | sed '/^$/d' | wc -l)" -eq 1 ]] ||
   die 'Expected exactly one Agent Worker container'
 for id in "$api_id" "$worker_id"; do
-  [[ "$(get_flag "$id" MaerskCircuit__Enabled)" == 1 ]] ||
-    die 'Circuit breaker not enabled in BOTH deployed services; no automatic restarts'
+  if [[ "$(get_flag "$id" MaerskCircuit__Enabled)" != 1 ]]; then
+    echo 'AGENT_RUNTIME_RECOVERY_INACTIVE: circuit disabled; no automatic rebuild'
+    exit 0
+  fi
 done
 
 services=(dhole-agent-api dhole-agent-workers "$hermes_service")
