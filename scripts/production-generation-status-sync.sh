@@ -23,13 +23,9 @@ if (( primary + alternative != 1 )); then
   exit 1
 fi
 if (( primary == 1 )); then generation=prod; else generation=prod1; fi
-query="DO \\\$\\\$ BEGIN
-IF to_regclass('agent.runtime_generation_state') IS NOT NULL THEN
-  UPDATE agent.runtime_generation_state
-    SET active_generation='$generation', updated_at_utc=NOW()
-    WHERE singleton=true;
-END IF;
-END \\\$\\\$;"
+query="UPDATE agent.runtime_generation_state
+  SET active_generation='$generation', updated_at_utc=NOW()
+  WHERE singleton=true;"
 docker run --rm --network dhole \
   -e PGPASSWORD="$password" postgres:17-alpine \
   psql -X -q -v ON_ERROR_STOP=1 \
