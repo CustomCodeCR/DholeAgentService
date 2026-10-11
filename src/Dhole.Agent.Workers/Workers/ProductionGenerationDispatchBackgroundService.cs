@@ -110,6 +110,18 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             """, ct);
         if (!string.Equals(cooldown, "True", StringComparison.OrdinalIgnoreCase)) return;
 
+        // Avoid repeated GitHub Actions requests when a destination fails
+        // readiness or an operator must investigate an infrastructure issue.
+        var recentlyAttempted = await QueryAsync(db, """
+            SELECT EXISTS(
+                SELECT 1 FROM agent.runtime_generation_requests
+                WHERE trigger_code <> 'manual'
+                  AND created_at_utc > now() - interval '15 minutes'
+            )
+            """, ct);
+        if (string.Equals(recentlyAttempted, "True", StringComparison.OrdinalIgnoreCase))
+            return;
+
         // Provider errors and CAPTCHA are excluded from every technical trigger.
         var eligible = await QueryRowsAsync(db, """
             SELECT code, threshold::text, schedule_minutes::text
