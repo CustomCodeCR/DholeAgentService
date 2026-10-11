@@ -12,7 +12,11 @@ for workflow in "$staging" "$production"; do
   grep -Fq 'confirmation:' "$workflow"
   grep -Fq 'backup_dir:' "$workflow"
   grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
-  grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
+  # Full restores belong to the separate backup/repair workflow, not each deploy.
+  if grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"; then
+    echo "Duplicate full database restoration must not block routine deployments: $workflow" >&2
+    exit 1
+  fi
   grep -Fq 'cancel-in-progress: false' "$workflow"
   grep -Fq 'AGENT_QUEUE_PUMP_STARTED' "$workflow"
   grep -Fq 'Verify Agent worker queue pump' "$workflow"
@@ -32,7 +36,7 @@ for workflow in "$staging" "$production"; do
     grep -Fq 'branches: [develop]' "$workflow"
     grep -Fq '.github/workflows/deploy-staging.yml' "$workflow"
     grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
-    grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
+    grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
   fi
   if [[ "$workflow" == "$production" ]] && grep -Fq 'workflow_run:' "$workflow"; then
     grep -Fq 'workflows: ["Deploy Dhole Agent - Staging"]' "$workflow"
