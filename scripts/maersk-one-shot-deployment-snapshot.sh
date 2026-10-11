@@ -57,7 +57,7 @@ password="$(value Password)"
    -n "$username" && -n "$password" ]] || die 'Invalid Agent database'
 running="$(docker run --rm --network "$network" \
   -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
-  postgres:16-alpine psql -X -v ON_ERROR_STOP=1 -At \
+  postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -At \
   -h "$host" -p "$port" -U "$username" -d "$database" \
   -c 'SELECT COUNT(*) FROM agent."AgentExecutions" WHERE status='\''Running'\'';')" ||
     die 'Cannot inspect active jobs'
