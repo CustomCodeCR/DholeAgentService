@@ -1,0 +1,61 @@
+name: Apply verified production generation request
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "UUID of the previously authorized PostgreSQL request"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted production executor
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Validate requested ID and script integrity
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          set -euo pipefail
+          [[ "$REQUEST_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || exit 2
+          python3 -m py_compile \
+            scripts/production-generation-executor.py \
+            scripts/production-generation-apply-request.py
+          echo "GENERATION_WORKFLOW_ID_VALIDATED"
+
+      - name: Prepare protected production database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/generation-dispatch-env"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/generation-dispatch-env" >/dev/null
+          chmod 700 "$RUNNER_TEMP/generation-dispatch-env"
+          echo "GENERATION_PRIVATE_ENV=$RUNNER_TEMP/generation-dispatch-env/.env.production" >> "$GITHUB_ENV"
+
+      - name: Execute database-authorized, pre-provisioned standby handoff
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production-generation-apply-request.py \
+            --request-id "$REQUEST_ID" \
+            --env-file "$GENERATION_PRIVATE_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
