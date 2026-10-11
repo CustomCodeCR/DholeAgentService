@@ -12,6 +12,7 @@ for workflow in "$staging" "$production"; do
   grep -Fq 'confirmation:' "$workflow"
   grep -Fq 'backup_dir:' "$workflow"
   grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
+  grep -Fq 'Require enabled Maersk circuit and monitoring' "$workflow"
   # Full restores belong to the separate backup/repair workflow, not each deploy.
   if grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"; then
     echo "Duplicate full database restoration must not block routine deployments: $workflow" >&2
