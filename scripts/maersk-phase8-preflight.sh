@@ -50,15 +50,18 @@ read_flag() {
 circuit="$(read_flag MaerskCircuit__Enabled)"
 monitor="$(read_flag MaerskMonitoring__Enabled)"
 queue="$(read_flag AgentQueue__ConcurrentDispatcherEnabled)"
-[[ -z "$queue" || "$queue" == false || "$queue" == 0 ]] ||
-  die 'Concurrent dispatcher must remain disabled during circuit rollout'
 if [[ "$circuit" == true && "$monitor" == true ]]; then
+  # Previously activated deployments may also have the durable dispatcher on.
+  [[ -z "$queue" || "$queue" == false || "$queue" == true || "$queue" == 0 || "$queue" == 1 ]] ||
+    die 'Invalid dispatcher flag on active redeploy'
   [[ "${MAERSK_PHASE2_ACTIVE_REDEPLOY:-}" == CONFIRMED ]] ||
     die 'Releasing with active circuit requires an explicit active-redeploy gate'
   DHOLE_ENV_FILE="$env_file" bash "$(dirname "$0")/maersk-phase8-schema-check.sh" "$environment" >/dev/null ||
     die 'Active redeploy requires the live migrated schema'
   echo 'PHASE2_ALREADY_ACTIVE_REDEPLOY_GATE_PASSED'
 else
+  [[ -z "$queue" || "$queue" == false || "$queue" == 0 ]] ||
+    die 'Concurrent dispatcher must remain disabled before first activation'
   for value in "$circuit" "$monitor"; do
     [[ -z "$value" || "$value" == false || "$value" == 0 ]] ||
       die 'Both circuit and monitor must be disabled before first activation'
