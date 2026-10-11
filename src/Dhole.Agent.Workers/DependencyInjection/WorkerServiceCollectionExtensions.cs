@@ -27,6 +27,7 @@ public static class WorkerServiceCollectionExtensions
         services.AddCustomCodeWorkers(configuration);
         services.AddSingleton<ScheduleCalculator>();
         services.AddHostedService<MaerskMonitoringBackgroundService>();
+        services.AddHostedService<ProductionGenerationDispatchBackgroundService>();
         services.AddCustomCodePeriodicWorker<AgentScheduleDispatcherWorker>();
         services.Configure<AgentQueueOptions>(configuration.GetSection(AgentQueueOptions.SectionName));
         // Exactly one dispatcher per worker process. Keep the original pump as
