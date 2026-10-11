@@ -79,7 +79,7 @@ internal static class ProductionGenerationEndpoints
     public static void MapProductionGenerationEndpoints(this RouteGroupBuilder root)
     {
         var group = root.MapGroup("/runtime-generations");
-        group.MapGet("/", async (ServiceDbContext db, CancellationToken ct) =>
+        group.MapGet("/", async (ServiceDbContext db, IConfiguration configuration, CancellationToken ct) =>
         {
             await EnsureSchemaAsync(db, ct);
             var active = await ScalarAsync(db,
@@ -117,6 +117,8 @@ internal static class ProductionGenerationEndpoints
             var result = new
             {
                 activeGeneration = active ?? "unknown",
+                githubDispatcherConfigured = configuration.GetValue<bool>("GenerationOrchestrator:Enabled")
+                    && !string.IsNullOrWhiteSpace(configuration["GenerationOrchestrator:GitHubToken"]),
                 authenticationIncidentCount = int.TryParse(authIncidents, out var authCount) ? authCount : 0,
                 generations = generationRows.Select(r => new {
                     name = r[0], browserState = "IsolatedPersistent", sharedDatabases = true,
