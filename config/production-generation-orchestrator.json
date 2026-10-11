@@ -2,7 +2,7 @@
   "schema_version": 1,
   "enabled": false,
   "allowed_destinations": [
-    "prod1"
+    "prod*"
   ],
   "default_destination": "prod1",
   "events": {
@@ -24,6 +24,7 @@
     "require_preprovisioned_destination": true,
     "require_explicit_submission_confirmation": true,
     "preserve_provider_circuit_restrictions": true,
-    "prohibit_session_replacement_on_access_denial": true
+    "prohibit_session_replacement_on_access_denial": true,
+    "registered_generation_required": true
   }
 }
