@@ -168,6 +168,12 @@ def main():
                 "CredentialProtection__KeyRingPath"):
         if not original_env.get(key) or original_env.get(key) != alternate_env.get(key):
             stop("source and destination must share identical " + key + " configuration")
+    for key in ("MaerskCircuit__Enabled", "MaerskMonitoring__Enabled"):
+        if original_env.get(key, "").lower() != "true" or alternate_env.get(key, "").lower() != "true":
+            stop("both Workers must have active Maersk circuit and monitoring")
+    if (original_env.get("AgentQueue__ConcurrentDispatcherEnabled", "").lower() !=
+            alternate_env.get("AgentQueue__ConcurrentDispatcherEnabled", "").lower()):
+        stop("source and destination queue dispatch mode must match")
     if mount_name(original, "/data/agent-keys") != mount_name(alternate, "/data/agent-keys"):
         stop("destination cannot decrypt existing Agent credentials")
     if mount_name(original, "/data/browser-profiles") == mount_name(alternate, "/data/browser-profiles"):
