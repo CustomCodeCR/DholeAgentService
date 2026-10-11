@@ -144,10 +144,20 @@ jobs:
           set -euo pipefail
           test -r "$DHOLE_ENV_FILE"
           if [[ -z "$GENERATION_ACTIONS_TOKEN" ]]; then
-            echo "GENERATION_ORCHESTRATOR_NOT_ACTIVE: add repository secret GENERATION_ORCHESTRATOR_GITHUB_TOKEN with Actions write permission"
+            echo "GENERATION_ORCHESTRATOR_NOT_ACTIVE: scoped Actions token is not configured"
             exit 0
           fi
-          if [[ "$GENERATION_ACTIONS_TOKEN" == *
+          chmod 600 "$DHOLE_ENV_FILE"
+          sed -i '/^GenerationOrchestrator__GitHubToken=/d' "$DHOLE_ENV_FILE"
+          echo "GenerationOrchestrator__GitHubToken=$GENERATION_ACTIONS_TOKEN" >> "$DHOLE_ENV_FILE"
+          if grep -q '^GenerationOrchestrator__Enabled=' "$DHOLE_ENV_FILE"; then
+            sed -i 's/^GenerationOrchestrator__Enabled=.*/GenerationOrchestrator__Enabled=true/' "$DHOLE_ENV_FILE"
+          else
+            echo 'GenerationOrchestrator__Enabled=true' >> "$DHOLE_ENV_FILE"
+          fi
+          echo "GENERATION_ORCHESTRATOR_DISPATCH_CONFIGURED"
+
+      - name: Require enabled Maersk circuit and monitoring
         shell: bash
         run: |
           set -euo pipefail
@@ -157,7 +167,6 @@ jobs:
               exit 1
             }
           done
-
       - name: Automated protected production backup after successful staging
         if: ${{ github.event_name == 'workflow_run' }}
         id: automatic_backup
