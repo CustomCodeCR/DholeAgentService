@@ -45,10 +45,26 @@ for attempt in $(seq 1 40); do
 done
 [[ "$ready" == true ]] || die "Disposable PostgreSQL 17 server did not become healthy"
 
-if ! docker exec "$container" pg_restore --no-owner --no-acl \
+# --clean --if-exists affects ONLY the freshly created, offline restore container.
+# PostgreSQL's preexisting public schema can otherwise conflict with full dumps.
+# Keep single transaction, fail on every constraint error, and never touch live DB.
+if ! docker exec "$container" pg_restore --no-owner --no-acl --clean --if-exists \
     --exit-on-error --single-transaction -U postgres -d postgres \
     /backup/agent.dump >"$log" 2>&1; then
-  die "Restoring backup into isolated PostgreSQL failed (details kept private)"
+  # Never print raw pg_restore logs: they may include private SQL identifiers.
+  # Emit stable, non-sensitive failure categories for controlled remediation.
+  if grep -qi 'violates foreign key constraint' "$log"; then
+    die 'PHASE8_RESTORE_REFERENCE_INTEGRITY_FAILED: preserved orphan references exist. Database and backup unchanged.'
+  elif grep -qiE 'already exists|duplicate key value violates unique constraint' "$log"; then
+    die 'PHASE8_RESTORE_OBJECT_CONFLICT: isolated restore has conflicting schema or duplicate objects.'
+  elif grep -qiE 'permission denied|must be owner' "$log"; then
+    die 'PHASE8_RESTORE_PERMISSION_FAILED: isolated restore lacks permissions for one or more objects.'
+  elif grep -qiE 'extension .* is not available|could not open extension' "$log"; then
+    die 'PHASE8_RESTORE_EXTENSION_MISSING: extension required by archived schema is unavailable.'
+  elif grep -qiE 'unsupported version|server version mismatch' "$log"; then
+    die 'PHASE8_RESTORE_VERSION_MISMATCH: backup format/server compatibility issue.'
+  fi
+  die 'PHASE8_RESTORE_UNCLASSIFIED: isolated restore failed. Source DB unchanged; inspect private runner diagnostics.'
 fi
 table_count="$(docker exec "$container" psql -At -U postgres -d postgres \
   -c "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname = 'agent';")"
