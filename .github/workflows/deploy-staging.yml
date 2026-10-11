@@ -1,6 +1,8 @@
 name: Deploy Dhole Agent - Staging
 
 on:
+  # Redeploy after the repository Actions secret GENERATION_ORCHESTRATOR_GITHUB_TOKEN
+  # was configured by the administrator. Retain existing protected release gates.
   # Release data-quality trigger acceptance through the same protected
   # staging and production promotion without weakening any authentication gate.
   # Final production-gated release: includes post-failure GitHub dispatch
