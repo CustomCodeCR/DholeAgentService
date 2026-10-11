@@ -53,8 +53,11 @@ class ProductionGenerationOrchestratorTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse(self.state.exists())
 
-    def test_unregistered_generation_rejected(self):
-        self.assertNotEqual(self.call("--target", "prod999").returncode, 0)
+    def test_nonproduction_generation_rejected(self):
+        self.assertNotEqual(self.call("--target", "other999").returncode, 0)
+
+    def test_unbounded_numbered_generation_is_valid_in_plan(self):
+        self.assertEqual(self.call("--target", "prod9999", "--mode", "plan").returncode, 0)
 
     def test_submit_requires_confirmation(self):
         self.readiness()
