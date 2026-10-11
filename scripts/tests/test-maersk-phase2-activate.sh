@@ -22,4 +22,11 @@ if bash "$script" staging /tmp whatever else BAD >/dev/null 2>&1; then
 fi
 grep -Fq 'staging_activation_run_id' "$workflow"
 grep -Fq 'github.sha' "$workflow"
+grep -Fq 'MAERSK_PENDING_AUTH_RECONCILED' "$script"
+grep -Fq 'maersk_authentication_edge_denied' "$script"
+grep -Fq 'maersk_hcaptcha_required' "$script"
+grep -Fq 'INSERT INTO agent.maersk_circuits' "$script"
+grep -Fq 'ON CONFLICT (provider_id) DO UPDATE' "$script"
+grep -Fq 'maersk_circuit_events' "$script"
+! grep -Fq 'Refuse first activation when old provider challenges' "$script"
 echo 'Maersk phase 2 activation safety gates passed.'
