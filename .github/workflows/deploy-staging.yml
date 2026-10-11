@@ -1,6 +1,8 @@
 name: Deploy Dhole Agent - Staging
 
 on:
+  # Release promotion retry: pin the already validated staging runtime to the
+  # current develop commit before master production promotion.
   # Only this workflow's explicitly authorized YAML change triggers the
   # guarded staging deploy; ordinary develop pushes remain validation-only.
   push:
