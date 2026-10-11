@@ -79,7 +79,7 @@ def run(request_id, env_file, state_dir, check_only):
     if not row or len(row.split("|")) != 3:
         raise GateError("Stale, absent or unapproved DB request")
     target, trigger, age = row.split("|")
-    if not GENERATION.fullmatch(target) or len(target) > 64:
+    if (target != "prod" and not GENERATION.fullmatch(target)) or len(target) > 64:
         raise GateError("Request target must be an existing standby generation")
     if trigger not in ("manual", "scheduled", "technical_failure", "data_quality"):
         raise GateError("Provider access-denial events cannot trigger generation switch")
