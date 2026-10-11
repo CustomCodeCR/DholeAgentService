@@ -66,6 +66,7 @@ jobs:
         env:
           STAGING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.staging_run_id }}
           AUTOMATED_RELEASE: ${{ github.event_name == 'workflow_run' && 'APPROVED' || 'MANUAL' }}
+          EXPECTED_STAGING_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -74,8 +75,9 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/CustomCodeCR/DholeAgentService/actions/runs/$STAGING_RUN_ID")"
-          # A historical push-based staging success is not sufficient:
-          # require a manually authorized release of the CURRENT develop commit.
+          # Automated promotion pins the exact successful staging run SHA:
+          # unrelated later develop commits must not retroactively invalidate it.
+          # Manual deployments still require the latest develop SHA.
           branch_payload="$(curl --fail --silent --show-error --retry 3 \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -87,17 +89,20 @@ jobs:
           from datetime import datetime, timedelta, timezone
           run = json.load(sys.stdin)
           age = datetime.now(timezone.utc) - datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+          target_sha = (os.environ["EXPECTED_STAGING_SHA"]
+                        if os.environ["AUTOMATED_RELEASE"] == "APPROVED"
+                        else os.environ["CURRENT_DEVELOP_SHA"])
           accepted = (run.get("name") == "Deploy Dhole Agent - Staging"
                       and run.get("head_branch") == "develop"
-                      and run.get("head_sha") == os.environ["CURRENT_DEVELOP_SHA"]
+                      and run.get("head_sha") == target_sha
                       and (run.get("event") == "workflow_dispatch" or
                            (run.get("event") == "push" and os.environ.get("AUTOMATED_RELEASE") == "APPROVED"))
                       and run.get("conclusion") == "success"
                       and timedelta(0) <= age < timedelta(hours=48))
           if not accepted:
-              print("Require a successful manually verified staging deploy of current develop within 48h", file=sys.stderr)
+              print("Require a successful recent staging deployment of the expected commit within 48h", file=sys.stderr)
               sys.exit(1)
-          print("Current develop manual staging acceptance verified.")
+          print("Exact successful staging run accepted for protected production promotion.")
           '
 
       - name: Load Dhole production infrastructure
