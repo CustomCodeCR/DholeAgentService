@@ -5,6 +5,8 @@ on:
     branches: [master, develop]
     paths:
       - .github/workflows/provision-agent-prod1.yml
+      - tests/test_production_generation_executor.py
+      - scripts/production-generation-executor.py
   workflow_dispatch:
     inputs:
       confirmation:
@@ -38,19 +40,23 @@ jobs:
           echo "PROD1_STANDBY_DEFINITION_VALIDATED; provisioning not started"
 
   provision:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # One guarded, idempotent standby pre-provision on an explicitly updated
+    # master workflow. No Worker is activated and no sessions are reset.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
     runs-on: [self-hosted, linux, x64, dhole]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Run standby executor tests before any host mutation
+        run: python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
       - name: Check explicit operator authorization
         shell: bash
         env:
-          REQUESTED_MODE: ${{ inputs.mode }}
+          REQUESTED_MODE: ${{ github.event_name == 'push' && 'apply' || inputs.mode }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [[ "$REQUESTED_MODE" == apply ]]; then
+          if [[ "$REQUESTED_MODE" == apply && "${{ github.event_name }}" != push ]]; then
             [[ "$CONFIRMATION" == PROVISION_AGENT_PROD1 ]] || {
               echo "PROVISION_AGENT_PROD1 confirmation is required" >&2
               exit 1
@@ -85,7 +91,7 @@ jobs:
           echo "PROD1_PREPROVISION_CHECK_OK"
 
       - name: Create independent runtime with inactive Worker
-        if: ${{ inputs.mode == 'apply' }}
+        if: ${{ github.event_name == 'push' || inputs.mode == 'apply' }}
         shell: bash
         run: |
           set -euo pipefail
