@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 set +x
 [ "$#" -ge 5 ] || { echo "Usage: <staging|production> <--check|--apply> <credential-uuid> <verified-backup-dir> <env-file> [confirmation]" >&2; exit 2; }
-environment="$1"; mode="$2"; credential_id="$3"; backup_dir="$4"; env_file="$5"; confirmation="$(printf '%s' "$*" | awk '{print $6}')"
+environment="$1"; mode="$2"; credential_id="$3"; backup_dir="$4"; env_file="$5"; confirmation="${6:-}"
 die() { echo "CORRUPT_PROFILE_PURGE_BLOCKED: $*" >&2; exit 1; }
 case "$environment" in
   production) project=dhole; network=dhole; expected=PURGE_CORRUPT_MAERSK_PROFILE_PRODUCTION ;;
@@ -26,6 +26,10 @@ grep -Fxq "environment=$environment" "$backup_dir/metadata.txt" || die 'Backup e
 grep -Fxq "compose_project=$project" "$backup_dir/metadata.txt" || die 'Backup project mismatch'
 grep -Fxq "profile_volume=$project"'_agent-browser-profiles' "$backup_dir/metadata.txt" ||
   die 'Backup profile volume mismatch'
+created="$(sed -n 's/^created_epoch=//p' "$backup_dir/metadata.txt" | head -n1)"
+now="$(date -u +%s)"
+[[ "$created" =~ ^[0-9]+$ ]] || die 'Backup creation timestamp is invalid'
+(( created <= now && now-created <= 86400 )) || die 'Backup must be less than 24 hours old'
 (cd "$backup_dir" && sha256sum -c --status SHA256SUMS) || die 'Invalid backup checksums'
 tar -tzf "$backup_dir/browser-profiles.tar.gz" >/dev/null || die 'Invalid profile backup'
 tar -tzf "$backup_dir/agent-keys.tar.gz" >/dev/null || die 'Invalid key backup'
