@@ -75,7 +75,8 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             UPDATE agent.runtime_generation_requests
             SET status='Failed', diagnostic_code='github_dispatch_deadline_exceeded',
                 completed_at_utc=now()
-            WHERE status='Processing' AND created_at_utc < now() - interval '4 minutes 45 seconds'
+            WHERE status='Processing' AND diagnostic_code='github_workflow_dispatched'
+              AND created_at_utc < now() - interval '4 minutes 45 seconds'
             RETURNING id::text
             """, ct);
     }
