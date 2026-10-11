@@ -197,6 +197,12 @@ jobs:
           bash -n scripts/maersk-phase2-activate.sh
           bash scripts/tests/test-maersk-phase2-activate.sh
 
+      - name: Chromium corrupted-profile cleanup safety regression
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-corrupt-profile-maintenance.sh
+          bash scripts/tests/test-maersk-corrupt-profile-maintenance.sh
+
       - name: Maersk runtime auto-recovery safety regression
         run: |
           set -euo pipefail
