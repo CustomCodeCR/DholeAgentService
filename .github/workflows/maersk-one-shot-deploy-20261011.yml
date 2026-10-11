@@ -1,5 +1,5 @@
 name: ONE-SHOT Guarded Agent Deploy - Staging Then Production
-# Retry after correcting PostgreSQL 17 backup client/server mismatch.
+# Retry: isolated PostgreSQL restore handles preexisting objects; validate all FK constraints.
 on:
   push:
     branches: [master]
