@@ -1,6 +1,8 @@
 name: Deploy Dhole Agent - Staging
 
 on:
+  # Final validated orchestration release: includes arbitrary prodN safe return
+  # and dispatch/deadline correctness fixes. Preserve every profile volume.
   # Authorized runtime orchestration release: DB-to-GitHub Worker dispatch,
   # safe operational rules, protected runner handoff and readiness checks.
   # The original database backup, queue drain and rollback stay mandatory.
