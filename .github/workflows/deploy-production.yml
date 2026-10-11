@@ -361,7 +361,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          SHA_TAG="${GITHUB_SHA::12}"
+          SHA_TAG="$(git rev-parse --short=12 HEAD)"
 
           # Stop before subsequent image builds if the first build consumed
           # unexpectedly high space. Protect running services and their data.
