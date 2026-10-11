@@ -2,6 +2,8 @@ name: Deploy Dhole Agent - Staging
 
 on:
   # Protected staging retry after bounded Agent task drain (570 seconds).
+  # Authorized 2026-10-11 deployment of validated dynamic prodN control-plane.
+  # Keep existing persistent profiles, backups, drain and rollback unchanged.
   # Protected Agent control-plane release: includes authenticated generation
   # read/rules/request endpoints and read-only Worker generation observation.
   # Keep phase-8 backups, schema checks and rollback unchanged.
