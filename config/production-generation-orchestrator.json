@@ -15,6 +15,9 @@
     "technical_failure": {
       "enabled": false,
       "requires_unhealthy_component": true
+    },
+    "data_quality": {
+      "enabled": false
     }
   },
   "cooldown_seconds": 1800,
