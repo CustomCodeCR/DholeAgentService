@@ -133,9 +133,9 @@ def validate(state_dir, request, config):
     if config.get("enabled") is not True:
         stop("orchestrator is not enabled")
     target = request.get("target")
-    if (not isinstance(target, str) or
-            not re.fullmatch(r"prod[1-9][0-9]*", target) or len(target) > 64):
-        stop("invalid standby generation")
+    if (not isinstance(target, str) or len(target) > 64 or
+            not (target == "prod" or re.fullmatch(r"prod[1-9][0-9]*", target))):
+        stop("invalid registered generation")
     allowed = config.get("allowed_destinations", [])
     if target not in allowed and "prod*" not in allowed:
         stop("destination is not permitted")
@@ -194,7 +194,8 @@ def main():
     target_project, target_api, target_worker, target_hermes = generation_services(target)
     alternate = inspect(target_project, target_worker)
     api = inspect(target_project, target_api)
-    hermes = inspect(target_project, target_hermes)
+    hermes = (inspect("dhole-infrastructure", "hermes-agent")
+              if target == "prod" else inspect(target_project, target_hermes))
     if not healthy(api) or not healthy(hermes):
         stop("standby API and Hermes must already be running and healthy")
     if alternate["State"]["Status"] not in ("created", "exited"):
