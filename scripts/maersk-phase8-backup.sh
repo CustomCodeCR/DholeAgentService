@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Offline, operator-invoked snapshot for a stopped Dhole Agent worker.
+# PostgreSQL 17 client supports PostgreSQL 16 and 17 servers; v16 pg_dump
+# refuses to dump the Argos PostgreSQL 17.11 server.
 # No credentials, cookies, or database rows are uploaded to GitHub.
 set -euo pipefail
 
@@ -45,7 +47,7 @@ docker volume inspect "$profile_volume" >/dev/null || die "Browser-profile volum
 docker volume inspect "$keys_volume" >/dev/null || die "Data-protection volume does not exist: $keys_volume"
 
 # Do not label a backup as consistent if an execution is still Running in SQL.
-running="$(docker run --rm --network "$network" -e PGPASSWORD="$password" postgres:16-alpine \
+running="$(docker run --rm --network "$network" -e PGPASSWORD="$password" postgres:17-alpine \
   psql -At -h "$host" -p "$port" -U "$username" -d "$database" \
   -c 'SELECT COUNT(*) FROM agent."AgentExecutions" WHERE status = '\''Running'\'';')"
 [[ "$running" == 0 ]] || die "There are $running Running executions; investigate before backup"
@@ -56,7 +58,7 @@ mkdir -p "$backup_root/$environment"
 mkdir -m 700 "$output" || die "Could not create unique backup location"
 
 docker run --rm --network "$network" -e PGPASSWORD="$password" \
-  -v "$output:/backup" postgres:16-alpine \
+  -v "$output:/backup" postgres:17-alpine \
   pg_dump -h "$host" -p "$port" -U "$username" -Fc -f /backup/agent.dump "$database"
 
 docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
