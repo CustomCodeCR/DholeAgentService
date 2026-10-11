@@ -1,0 +1,69 @@
+name: Maersk Provider Reference Comparison
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/maersk-provider-integrity-check-20261011.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-staging
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Read-only staging orphan versus production provider comparison
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: CustomCodeCR/DholeSystem
+          ref: master
+          path: .dhole-system
+      - name: Count missing parent providers without displaying credentials or IDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          scratch="$(mktemp -d)"
+          chmod 700 "$scratch"
+          trap 'rm -rf "$scratch"' EXIT
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$scratch" >/dev/null
+          database_query() {
+            local environment="$1" query="$2"
+            local env_file="$scratch/.env.$environment"
+            [[ -r "$env_file" ]] || exit 1
+            local conn host port database username password network
+            conn="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$env_file" | head -n1 | tr -d '\r')"
+            part() { printf '%s' "$conn" | tr ';' '\n' | sed -n "s/^$1=//p" | head -n1; }
+            host="$(part Host)"; host="${host:-postgres}"
+            port="$(part Port)"; port="${port:-5432}"
+            database="$(part Database)"; username="$(part Username)"; password="$(part Password)"
+            [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || exit 1
+            if [[ "$environment" == staging ]]; then network=dhole-staging; else network=dhole; fi
+            docker run --rm --network "$network" -e PGPASSWORD="$password" \
+              -e PGOPTIONS='-c default_transaction_read_only=on' postgres:17-alpine \
+              psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" \
+              -U "$username" -d "$database" -c "$query"
+          }
+          # IDs never leave the local runner; only aggregate counts are logged.
+          orphans="$(database_query staging \
+            'SELECT DISTINCT c.provider_id FROM agent."AgentCredentials" c LEFT JOIN agent."AgentProviders" p ON p.id=c.provider_id WHERE p.id IS NULL;')"
+          count=0
+          in_production=0
+          while IFS= read -r provider; do
+            [[ -n "$provider" ]] || continue
+            [[ "$provider" =~ ^[0-9a-fA-F-]{36}$ ]] || exit 1
+            count=$((count+1))
+            found="$(database_query production \
+              "SELECT COUNT(*) FROM agent.\"AgentProviders\" WHERE id='$provider'::uuid;")"
+            [[ "$found" == 0 || "$found" == 1 ]] || exit 1
+            in_production=$((in_production+found))
+          done <<< "$orphans"
+          echo "STAGING_ORPHAN_PROVIDER_COUNT=$count"
+          echo "STAGING_ORPHAN_PROVIDER_FOUND_IN_PRODUCTION=$in_production"
+          echo "STAGING_ORPHAN_PROVIDER_ABSENT_FROM_PRODUCTION=$((count-in_production))"
+          echo "READ_ONLY_VERIFICATION_OK: credentials and provider records were not modified"
