@@ -42,8 +42,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, linux, x64, dhole]
     steps:
-      - name: Checkout Agent
+      - name: Checkout approved Agent revision
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'develop' }}
 
       - name: Confirm phase 8 manual release
         shell: bash
