@@ -1,7 +1,12 @@
 name: Deploy Dhole Agent - Production
 
 on:
-  # Phase 8 guarded release: no implicit deployment from a Git push.
+  # A production rollout is allowed only after the specifically authorized
+  # staging workflow YAML change, not for an ordinary commit.
+  workflow_run:
+    workflows: ["Deploy Dhole Agent - Staging"]
+    types: [completed]
+    branches: [develop]
   workflow_dispatch:
     inputs:
       confirmation:
@@ -34,6 +39,7 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, linux, x64, dhole]
     steps:
       - name: Checkout Agent
@@ -45,12 +51,21 @@ jobs:
           RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_PRODUCTION" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "${{ github.event.workflow_run.name }}" == "Deploy Dhole Agent - Staging" &&
+               "${{ github.event.workflow_run.head_branch }}" == develop &&
+               "${{ github.event.workflow_run.event }}" == push &&
+               "${{ github.event.workflow_run.conclusion }}" == success ]] ||
+               { echo "Not an approved staging rollout" >&2; exit 1; }
+          else
+            [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_PRODUCTION" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
+          fi
 
       - name: Require successful recent staging acceptance
         shell: bash
         env:
-          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+          STAGING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.staging_run_id }}
+          AUTOMATED_RELEASE: ${{ github.event_name == 'workflow_run' && 'APPROVED' || 'MANUAL' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -75,7 +90,8 @@ jobs:
           accepted = (run.get("name") == "Deploy Dhole Agent - Staging"
                       and run.get("head_branch") == "develop"
                       and run.get("head_sha") == os.environ["CURRENT_DEVELOP_SHA"]
-                      and run.get("event") == "workflow_dispatch"
+                      and (run.get("event") == "workflow_dispatch" or
+                           (run.get("event") == "push" and os.environ.get("AUTOMATED_RELEASE") == "APPROVED"))
                       and run.get("conclusion") == "success"
                       and timedelta(0) <= age < timedelta(hours=48))
           if not accepted:
@@ -107,10 +123,20 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.production" >> "$GITHUB_ENV"
 
+      - name: Automated protected production backup after successful staging
+        if: ${{ github.event_name == 'workflow_run' }}
+        id: automatic_backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-snapshot.sh
+          bash scripts/maersk-one-shot-deployment-snapshot.sh production \
+            .dhole-system "$HOME/dhole-agent-protected-release-backups"
+
       - name: Phase 8 verify database and profile/key backups
         shell: bash
         env:
-          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+          PHASE8_BACKUP_DIR: ${{ github.event_name == 'workflow_run' && steps.automatic_backup.outputs.backup_dir || inputs.backup_dir }}
         run: |
           set -euo pipefail
           # Accept an active redeploy only when both circuit and monitoring are
@@ -121,7 +147,7 @@ jobs:
       - name: Phase 8 isolated PostgreSQL restoration drill
         shell: bash
         env:
-          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+          PHASE8_BACKUP_DIR: ${{ github.event_name == 'workflow_run' && steps.automatic_backup.outputs.backup_dir || inputs.backup_dir }}
         run: |
           set -euo pipefail
           bash scripts/maersk-phase8-restore-drill.sh "$PHASE8_BACKUP_DIR"
@@ -418,6 +444,17 @@ jobs:
           echo "Agent worker is running but queue pump did not start." >&2
           docker logs --tail 300 "$CONTAINER_ID" || true
           exit 1
+
+      - name: Resume original production Worker if guarded automated deploy failed
+        if: ${{ failure() && github.event_name == 'workflow_run' && steps.automatic_backup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -aq --filter label=com.docker.compose.project=dhole --filter label=com.docker.compose.service=dhole-agent-workers)"
+          test -n "$id"
+          if [[ "$(docker inspect --format '{{.State.Status}}' "$id")" != running ]]; then
+            docker start "$id"
+          fi
 
       - name: Restore previous Agent images on failed deployment
         if: ${{ failure() && steps.capture_images.outcome == 'success' }}
