@@ -236,7 +236,7 @@ public sealed class ProductionGenerationDispatchBackgroundService(
               LIMIT 1 FOR UPDATE SKIP LOCKED
             )
             UPDATE agent.runtime_generation_requests request
-            SET status='Processing', diagnostic_code='github_dispatch_pending'
+            SET status='Processing', diagnostic_code='github_workflow_dispatched'
             FROM candidate WHERE request.id=candidate.id
             RETURNING request.id::text,request.target_generation,request.trigger_code
             """, ct);
