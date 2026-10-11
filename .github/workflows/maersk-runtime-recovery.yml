@@ -1,0 +1,77 @@
+name: Maersk runtime technical recovery
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to inspect"
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  production:
+    if: ${{ github.event_name == 'schedule' || inputs.environment == 'production' || inputs.environment == 'both' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    concurrency:
+      group: dhole-agent-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout production infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+      - name: Prepare private runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/maersk-recovery"
+          chmod 700 "$RUNNER_TEMP/maersk-recovery"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/maersk-recovery" >/dev/null
+          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/maersk-recovery/.env.production" >> "$GITHUB_ENV"
+      - name: Recover unhealthy technical runtime without changing sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-runtime-recovery.sh
+          bash scripts/maersk-runtime-recovery.sh production --apply .dhole-system "$DHOLE_ENV_FILE"
+
+  staging:
+    if: ${{ github.event_name == 'schedule' || inputs.environment == 'staging' || inputs.environment == 'both' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    concurrency:
+      group: dhole-agent-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout staging infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch develop https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+      - name: Prepare private runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/maersk-recovery"
+          chmod 700 "$RUNNER_TEMP/maersk-recovery"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/maersk-recovery" >/dev/null
+          echo "DHOLE_ENV_FILE=$RUNNER_TEMP/maersk-recovery/.env.staging" >> "$GITHUB_ENV"
+      - name: Recover unhealthy technical runtime without changing sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-runtime-recovery.sh
+          bash scripts/maersk-runtime-recovery.sh staging --apply .dhole-system "$DHOLE_ENV_FILE"
