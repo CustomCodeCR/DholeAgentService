@@ -18,7 +18,7 @@ for workflow in "$staging" "$production"; do
     exit 1
   fi
   grep -Fq 'cancel-in-progress: false' "$workflow"
-  grep -Fq 'AGENT_QUEUE_PUMP_STARTED' "$workflow"
+  grep -Fq 'AGENT_QUEUE_(PUMP|CONCURRENT)_STARTED' "$workflow"
   grep -Fq 'Verify Agent worker queue pump' "$workflow"
   grep -Fq 'maersk-phase8-schema-check.sh' "$workflow"
   start="$(grep -n -m1 'Phase 8 verify migrated schema before workers' "$workflow" | cut -d: -f1)"
