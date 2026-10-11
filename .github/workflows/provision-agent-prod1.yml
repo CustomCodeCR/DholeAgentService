@@ -82,3 +82,27 @@ jobs:
           set -euo pipefail
           bash scripts/provision-production-generation.sh \
             "$GENERATION" "$REQUEST_MODE" .dhole-system "$PREPARED_AGENT_ENV"
+
+      - name: Persist successful infrastructure provisioning state
+        if: ${{ success() && inputs.mode == 'apply' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production-generation-provision-status.py \
+            --generation "$GENERATION" --status Provisioned \
+            --env-file "$PREPARED_AGENT_ENV"
+
+      - name: Persist provisioning failure without changing browser data
+        if: ${{ failure() && inputs.mode == 'apply' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PREPARED_AGENT_ENV:-}" && -r "${PREPARED_AGENT_ENV:-}" ]]; then
+            python3 scripts/production-generation-provision-status.py \
+              --generation "$GENERATION" --status Failed \
+              --env-file "$PREPARED_AGENT_ENV"
+          fi
