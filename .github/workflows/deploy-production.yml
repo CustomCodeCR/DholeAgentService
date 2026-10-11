@@ -429,9 +429,9 @@ jobs:
               exit 1
             fi
 
-            if docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -q 'AGENT_QUEUE_PUMP_STARTED'; then
-              echo "Agent queue pump is running."
-              docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -E 'AGENT_QUEUE_PUMP_(STARTED|HEARTBEAT)' | tail -n 20 || true
+            if docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -Eq 'AGENT_QUEUE_(PUMP|CONCURRENT)_STARTED'; then
+              echo "Agent queue dispatcher is running."
+              docker logs --since 2m "$CONTAINER_ID" 2>&1 | grep -E 'AGENT_QUEUE_(PUMP_(STARTED|HEARTBEAT)|CONCURRENT_STARTED)' | tail -n 20 || true
               exit 0
             fi
 
