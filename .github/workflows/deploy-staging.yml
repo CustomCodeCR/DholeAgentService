@@ -1,6 +1,9 @@
 name: Deploy Dhole Agent - Staging
 
 on:
+  # Authorized runtime orchestration release: DB-to-GitHub Worker dispatch,
+  # safe operational rules, protected runner handoff and readiness checks.
+  # The original database backup, queue drain and rollback stay mandatory.
   # Protected staging retry after bounded Agent task drain (570 seconds).
   # Authorized 2026-10-11 deployment of validated dynamic prodN control-plane.
   # Keep existing persistent profiles, backups, drain and rollback unchanged.
