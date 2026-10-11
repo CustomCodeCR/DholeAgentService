@@ -57,6 +57,9 @@ if ! docker exec "$container" pg_restore --no-owner --no-acl --clean --if-exists
   # Never print raw pg_restore logs: they may include private SQL identifiers.
   # Emit stable, non-sensitive failure categories for controlled remediation.
   if grep -qi 'violates foreign key constraint' "$log"; then
+    # Report only safe PostgreSQL relation/constraint names, never key values.
+    fk_location="$(sed -nE 's/.*(insert or update on table|update or delete on table) "([A-Za-z0-9_]+)" violates foreign key constraint "([A-Za-z0-9_]+)".*/table=\2 constraint=\3/p' "$log" | head -n 1)"
+    printf 'PHASE8_RESTORE_FK_LOCATION %s\n' "$fk_location" >&2
     die 'PHASE8_RESTORE_REFERENCE_INTEGRITY_FAILED: preserved orphan references exist. Database and backup unchanged.'
   elif grep -qiE 'already exists|duplicate key value violates unique constraint' "$log"; then
     die 'PHASE8_RESTORE_OBJECT_CONFLICT: isolated restore has conflicting schema or duplicate objects.'
