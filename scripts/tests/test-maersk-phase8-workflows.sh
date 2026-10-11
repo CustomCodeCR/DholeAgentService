@@ -23,9 +23,23 @@ for workflow in "$staging" "$production"; do
     echo "Schema check must precede launching the worker: $workflow" >&2
     exit 1
   }
-  if grep -Eq '^[[:space:]]+push:|^[[:space:]]+schedule:' "$workflow"; then
-    echo "Phase 8 release must not deploy on a push or cron event: $workflow" >&2
+  if grep -Eq '^[[:space:]]+schedule:' "$workflow"; then
+    echo "A protected production release must not run on cron: $workflow" >&2
     exit 1
+  fi
+  if grep -Eq '^[[:space:]]+push:' "$workflow"; then
+    [[ "$workflow" == "$staging" ]] || { echo "Only staging may use a narrowly scoped push trigger" >&2; exit 1; }
+    grep -Fq 'branches: [develop]' "$workflow"
+    grep -Fq '.github/workflows/deploy-staging.yml' "$workflow"
+    grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
+    grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
+  fi
+  if [[ "$workflow" == "$production" ]] && grep -Fq 'workflow_run:' "$workflow"; then
+    grep -Fq 'workflows: ["Deploy Dhole Agent - Staging"]' "$workflow"
+    grep -Fq 'branches: [develop]' "$workflow"
+    grep -Fq 'github.event.workflow_run.conclusion' "$workflow"
+    grep -Fq 'github.event.workflow_run.event' "$workflow"
+    grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
   fi
   if grep -Fq 'Release blocked Maersk queue once before builds' "$workflow"; then
     echo "Destructive queue release is forbidden: $workflow" >&2
