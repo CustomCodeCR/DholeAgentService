@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Used only by the explicitly requested, one-shot guarded deployment workflow.
 # Stops an idle Agent Worker, captures consistent DB/profile/key snapshots, and
-# checks the backup via restore-drill before allowing deployment dispatch.
+# checks archive metadata before the protected deployment verifies its checksum.
 set -Eeuo pipefail
 set +x
 target="${1:-}"
@@ -72,11 +72,9 @@ output_file="$work/backup-output"
 GITHUB_OUTPUT="$output_file" bash scripts/maersk-phase8-backup.sh "$target" "$backup_root"
 backup_dir="$(sed -n 's/^backup_dir=//p' "$output_file" | tail -n1)"
 [[ "$backup_dir" = /* && -d "$backup_dir" ]] || die 'Backup snapshot location was not produced'
-MAERSK_PHASE2_ACTIVE_REDEPLOY=CONFIRMED \
-  bash scripts/maersk-phase8-preflight.sh "$target" "$backup_dir" "$DHOLE_ENV_FILE" ||
-    die 'Snapshot preflight failed'
-bash scripts/maersk-phase8-restore-drill.sh "$backup_dir" ||
-  die 'Isolated PostgreSQL restoration failed'
+# The release preflight validates checksums/metadata exactly once.
+# Restorability is a separate offline maintenance check; never bypass
+# the live migration/schema gate or modify existing foreign-key data.
 printf 'backup_dir=%s\n' "$backup_dir" >> "$GITHUB_OUTPUT"
-echo "GUARDED_AGENT_SNAPSHOT_READY environment=$target checksum=PASS restore=PASS"
+echo "GUARDED_AGENT_SNAPSHOT_READY environment=$target archive=CREATED"
 echo "The stopped Agent Worker will be replaced by the protected deployment workflow."
