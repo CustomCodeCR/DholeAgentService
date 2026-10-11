@@ -154,7 +154,11 @@ internal static class ProductionGenerationEndpoints
                     """, ct, ("name", request.Name));
                 await ExecuteAsync(db, """
                     INSERT INTO agent.runtime_generation_provisions(generation,status)
-                    VALUES (@name,'Pending') ON CONFLICT(generation) DO NOTHING
+                    VALUES (@name,'Pending')
+                    ON CONFLICT(generation) DO UPDATE SET
+                        status='Pending', diagnostic_code=NULL,
+                        created_at_utc=now(), updated_at_utc=now()
+                    WHERE agent.runtime_generation_provisions.status='Failed'
                     """, ct, ("name", request.Name));
             }
             catch (DbException)
