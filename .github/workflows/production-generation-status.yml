@@ -1,0 +1,46 @@
+name: Observe active Agent production generation
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/production-generation-status.yml
+      - scripts/production-generation-status-sync.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n scripts/production-generation-status-sync.sh
+
+  observe:
+    if: ${{ github.event_name != 'push' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load independent production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/generation-status"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/generation-status" >/dev/null
+          echo "PRODUCTION_CONFIG=$RUNNER_TEMP/generation-status/.env.production" >> "$GITHUB_ENV"
+      - name: Reconcile active Worker identity with persisted control-plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/production-generation-status-sync.sh
+          bash scripts/production-generation-status-sync.sh "$PRODUCTION_CONFIG"
