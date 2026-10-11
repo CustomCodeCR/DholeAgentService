@@ -36,7 +36,7 @@ query="SELECT CASE WHEN
       AND column_name = 'next_attempt_at_utc'
   )
 THEN 'PHASE8_SCHEMA_READY' ELSE 'PHASE8_SCHEMA_MISSING' END;"
-result="$(docker run --rm --network "$network" -e PGPASSWORD="$password" postgres:16-alpine \
+result="$(docker run --rm --network "$network" -e PGPASSWORD="$password" postgres:17-alpine \
   psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$username" -d "$database" -c "$query")" \
   || die "Could not query Agent database"
 [[ "$result" == PHASE8_SCHEMA_READY ]] || die "Required lease/circuit/monitoring tables or execution column are absent"
