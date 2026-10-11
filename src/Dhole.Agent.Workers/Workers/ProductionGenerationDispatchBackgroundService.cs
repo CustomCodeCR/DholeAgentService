@@ -61,8 +61,9 @@ public sealed class ProductionGenerationDispatchBackgroundService(
 
     private static async Task<bool> ExistsAsync(ServiceDbContext db, CancellationToken ct)
     {
-        return await QueryAsync(db,
-            "SELECT to_regclass('agent.runtime_generation_requests') IS NOT NULL", ct) == "true";
+        return string.Equals(await QueryAsync(db,
+            "SELECT to_regclass('agent.runtime_generation_requests') IS NOT NULL", ct), "True",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task ExpireOverdueAsync(ServiceDbContext db, CancellationToken ct)
@@ -88,7 +89,7 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                 WHERE state <> 'Closed' OR requires_operator
             )
             """, ct);
-        if (authSafe != "true") return;
+        if (!string.Equals(authSafe, "True", StringComparison.OrdinalIgnoreCase)) return;
         var active = await QueryAsync(db, """
             SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true
             """, ct);
@@ -101,6 +102,12 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             LIMIT 1
             """, ct, ("active", active));
         if (string.IsNullOrEmpty(destination)) return;
+
+        var cooldown = await QueryAsync(db, """
+            SELECT updated_at_utc <= now() - interval '15 minutes'
+            FROM agent.runtime_generation_state WHERE singleton=true
+            """, ct);
+        if (!string.Equals(cooldown, "True", StringComparison.OrdinalIgnoreCase)) return;
 
         // Provider errors and CAPTCHA are excluded from every technical trigger.
         var eligible = await QueryRowsAsync(db, """
@@ -119,7 +126,7 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                 "scheduled" => await QueryAsync(db, """
                     SELECT updated_at_utc <= now() - make_interval(mins => @minutes)
                     FROM agent.runtime_generation_state WHERE singleton=true
-                    """, ct, ("minutes", minutes)) == "true",
+                    """, ct, ("minutes", minutes)).Equals("True", StringComparison.OrdinalIgnoreCase),
                 "technical_failure" => await CountTechnicalAsync(db, minutes, ct) >= threshold,
                 // Failed output/partial extraction, NOT authentication challenge.
                 "data_quality" => int.TryParse(await QueryAsync(db, """
