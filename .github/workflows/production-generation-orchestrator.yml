@@ -1,0 +1,88 @@
+name: Production generation orchestrator
+on:
+  workflow_dispatch:
+    inputs:
+      event:
+        description: "Event source"
+        type: choice
+        required: true
+        default: manual
+        options:
+          - manual
+          - technical_failure
+      target:
+        description: "Registered, pre-provisioned generation"
+        type: string
+        default: prod1
+        required: true
+      mode:
+        description: "Plan only or submit guarded request"
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - submit
+      component:
+        description: "Container name to verify for a technical failure"
+        type: string
+        default: ""
+        required: false
+      confirmation:
+        description: "AUTHORIZE_GENERATION_EVENT is required for submission"
+        type: string
+        required: false
+      reason:
+        description: "Operational maintenance reason (no credentials)"
+        type: string
+        required: false
+  # Adjust this cron to choose when to submit a scheduled event.
+  # Scheduling is inactive until enabled in config/production-generation-orchestrator.json.
+  schedule:
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  request-generation:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate orchestrator unit tests
+        run: python3 -m unittest discover -s tests -p 'test_production_generation_orchestrator.py' -v
+      - name: Publish guarded orchestration event
+        shell: bash
+        env:
+          EVENT_KIND: ${{ github.event_name == 'schedule' && 'scheduled' || inputs.event }}
+          TARGET_GENERATION: ${{ github.event_name == 'schedule' && 'prod1' || inputs.target }}
+          SUBMISSION_MODE: ${{ github.event_name == 'schedule' && 'submit' || inputs.mode }}
+          EVENT_CONFIRMATION: ${{ github.event_name == 'schedule' && 'AUTHORIZE_GENERATION_EVENT' || inputs.confirmation }}
+          COMPONENT_NAME: ${{ inputs.component }}
+          OPERATION_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # A disabled scheduled source is a no-op, not an erroneous deployment.
+          if [[ "$EVENT_KIND" == scheduled ]] && ! python3 -c '
+          import json
+          c=json.load(open("config/production-generation-orchestrator.json"))
+          raise SystemExit(0 if c.get("enabled") and c.get("events", {}).get("scheduled", {}).get("enabled") else 1)
+          '; then
+            echo 'GENERATION_EVENT_SCHEDULE_DISABLED'
+            exit 0
+          fi
+          python3 scripts/production-generation-orchestrator.py \
+            --config config/production-generation-orchestrator.json \
+            --state-dir "$HOME/.local/state/dhole-production-generation" \
+            --event "$EVENT_KIND" \
+            --target "$TARGET_GENERATION" \
+            --mode "$SUBMISSION_MODE" \
+            --component "$COMPONENT_NAME" \
+            --confirmation "$EVENT_CONFIRMATION" \
+            --reason "$OPERATION_REASON"
+          echo 'Event submission does not activate or create any Docker generation.'
