@@ -1,9 +1,19 @@
 name: Production generation orchestrator
+
 on:
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/production-generation-orchestrator.yml
+      - scripts/production-generation-orchestrator.py
+      - scripts/production-generation-executor.py
+      - tests/test_production_generation_orchestrator.py
+      - tests/test_production_generation_executor.py
+      - config/production-generation-orchestrator.json
   workflow_dispatch:
     inputs:
       event:
-        description: "Event source"
+        description: "Operational event (never use provider access denial)"
         type: choice
         required: true
         default: manual
@@ -11,33 +21,32 @@ on:
           - manual
           - technical_failure
       target:
-        description: "Registered, pre-provisioned generation"
+        description: "Previously authorized standby"
         type: string
         default: prod1
         required: true
       mode:
-        description: "Plan only or submit guarded request"
+        description: "Plan, queue, or execute a verified worker handoff"
         type: choice
         required: true
         default: plan
         options:
           - plan
           - submit
+          - execute
       component:
-        description: "Container name to verify for a technical failure"
+        description: "Existing unhealthy Docker container for technical failure"
         type: string
         default: ""
         required: false
       confirmation:
-        description: "AUTHORIZE_GENERATION_EVENT is required for submission"
+        description: "For execute: AUTHORIZE_VERIFIED_WORKER_HANDOFF"
         type: string
         required: false
       reason:
-        description: "Operational maintenance reason (no credentials)"
+        description: "Maintenance reason (never include secrets)"
         type: string
         required: false
-  # Adjust this cron to choose when to submit a scheduled event.
-  # Scheduling is inactive until enabled in config/production-generation-orchestrator.json.
   schedule:
     - cron: "0 8 * * *"
 
@@ -49,40 +58,101 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  request-generation:
-    runs-on: [self-hosted, linux, x64, dhole]
+  validate:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate orchestrator unit tests
-        run: python3 -m unittest discover -s tests -p 'test_production_generation_orchestrator.py' -v
-      - name: Publish guarded orchestration event
+      - name: Validate production orchestrator without contacting the live server
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
+          python3 -m json.tool config/production-generation-orchestrator.json >/dev/null
+          echo "GENERATION_ORCHESTRATOR_VALIDATED; no production switch was initiated"
+
+  request-generation:
+    if: ${{ github.event_name != 'push' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate orchestration regression tests
+        run: python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
+
+      - name: Publish guarded generation event
+        id: request
         shell: bash
         env:
           EVENT_KIND: ${{ github.event_name == 'schedule' && 'scheduled' || inputs.event }}
           TARGET_GENERATION: ${{ github.event_name == 'schedule' && 'prod1' || inputs.target }}
-          SUBMISSION_MODE: ${{ github.event_name == 'schedule' && 'submit' || inputs.mode }}
-          EVENT_CONFIRMATION: ${{ github.event_name == 'schedule' && 'AUTHORIZE_GENERATION_EVENT' || inputs.confirmation }}
+          SELECTED_MODE: ${{ github.event_name == 'schedule' && 'submit' || inputs.mode }}
+          EVENT_CONFIRMATION: ${{ inputs.confirmation }}
           COMPONENT_NAME: ${{ inputs.component }}
           OPERATION_REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
-          # A disabled scheduled source is a no-op, not an erroneous deployment.
           if [[ "$EVENT_KIND" == scheduled ]] && ! python3 -c '
           import json
           c=json.load(open("config/production-generation-orchestrator.json"))
           raise SystemExit(0 if c.get("enabled") and c.get("events", {}).get("scheduled", {}).get("enabled") else 1)
           '; then
-            echo 'GENERATION_EVENT_SCHEDULE_DISABLED'
+            echo "GENERATION_EVENT_SCHEDULE_DISABLED"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python3 scripts/production-generation-orchestrator.py \
+          if [[ "$SELECTED_MODE" == execute ]]; then
+            [[ "$EVENT_CONFIRMATION" == AUTHORIZE_VERIFIED_WORKER_HANDOFF ]] || {
+              echo "Explicit execute confirmation required" >&2
+              exit 1
+            }
+            publisher_mode=submit
+          else
+            publisher_mode="$SELECTED_MODE"
+          fi
+          if [[ "$publisher_mode" == submit ]]; then
+            publisher_confirmation=AUTHORIZE_GENERATION_EVENT
+          else
+            publisher_confirmation=''
+          fi
+          outcome="$(python3 scripts/production-generation-orchestrator.py \
             --config config/production-generation-orchestrator.json \
             --state-dir "$HOME/.local/state/dhole-production-generation" \
             --event "$EVENT_KIND" \
             --target "$TARGET_GENERATION" \
-            --mode "$SUBMISSION_MODE" \
+            --mode "$publisher_mode" \
             --component "$COMPONENT_NAME" \
-            --confirmation "$EVENT_CONFIRMATION" \
-            --reason "$OPERATION_REASON"
-          echo 'Event submission does not activate or create any Docker generation.'
+            --confirmation "$publisher_confirmation" \
+            --reason "$OPERATION_REASON")"
+          echo "$outcome"
+          echo "execution_mode=$SELECTED_MODE" >> "$GITHUB_OUTPUT"
+          if [[ "$publisher_mode" == submit ]]; then
+            event_id="$(printf '%s' "$outcome" | python3 -c 'import sys,json; print(json.load(sys.stdin)["event_id"])')"
+            echo "event_id=$event_id" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load production configuration for explicitly approved handoff
+        if: ${{ steps.request.outputs.execution_mode == 'execute' && steps.request.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/agent-prod1-env"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/agent-prod1-env" >/dev/null
+          echo "PRODUCTION_ENV_FILE=$RUNNER_TEMP/agent-prod1-env/.env.production" >> "$GITHUB_ENV"
+
+      - name: Execute verified standby worker handoff with rollback
+        if: ${{ steps.request.outputs.execution_mode == 'execute' && steps.request.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          EVENT_ID: ${{ steps.request.outputs.event_id }}
+          EVENT_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production-generation-executor.py \
+            --config config/production-generation-orchestrator.json \
+            --state-dir "$HOME/.local/state/dhole-production-generation" \
+            --env-file "$PRODUCTION_ENV_FILE" \
+            --request-id "$EVENT_ID" \
+            --mode apply \
+            --confirmation "$EVENT_CONFIRMATION"
