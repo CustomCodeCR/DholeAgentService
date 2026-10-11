@@ -67,7 +67,7 @@ echo "MAERSK_GUARDED_DEPLOY_RUN=$run_id"
 echo "MAERSK_GUARDED_DEPLOY_URL=https://github.com/$repo/actions/runs/$run_id"
 for attempt in $(seq 1 180); do
   info="$(gh api "repos/$repo/actions/runs/$run_id" \
-    --jq '[.status,.conclusion,.head_sha] | join(" ")')" ||
+    --jq '[.status,(.conclusion // "pending"),.head_sha] | join(" ")')" ||
       die "Cannot verify workflow $run_id"
   read -r status conclusion actual_sha <<< "$info"
   [[ "$actual_sha" == "$expected" ]] ||
