@@ -55,13 +55,23 @@ username="$(value Username)"
 password="$(value Password)"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && "$port" =~ ^[0-9]{1,5}$ &&
    -n "$username" && -n "$password" ]] || die 'Invalid Agent database'
-running="$(docker run --rm --network "$network" \
-  -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
-  postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -At \
-  -h "$host" -p "$port" -U "$username" -d "$database" \
-  -c 'SELECT COUNT(*) FROM agent."AgentExecutions" WHERE status='\''Running'\'';')" ||
-    die 'Cannot inspect active jobs'
-[[ "$running" == 0 ]] || die "$running Agent executions are Running; will not interrupt"
+# An active Agent execution may legitimately outlive the build request.
+# Wait for a bounded drain; NEVER cancel, requeue or interrupt a Running job.
+drain_deadline=$(( $(date -u +%s) + 570 ))
+while :; do
+  running="$(docker run --rm --network "$network" \
+    -e PGPASSWORD="$password" -e PGOPTIONS='-c default_transaction_read_only=on' \
+    postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -At \
+    -h "$host" -p "$port" -U "$username" -d "$database" \
+    -c 'SELECT COUNT(*) FROM agent."AgentExecutions" WHERE status='\''Running'\'';')" ||
+      die 'Cannot inspect active jobs'
+  [[ "$running" =~ ^[0-9]+$ ]] || die 'Invalid active job count'
+  if [[ "$running" == 0 ]]; then break; fi
+  echo "AGENT_DEPLOY_WAIT_FOR_IDLE: $running active job(s), preserving running workers"
+  (( $(date -u +%s) < drain_deadline )) ||
+    die 'Timed out waiting for active Agent jobs; no running task was stopped'
+  sleep 15
+done
 
 # Do not terminate live jobs. Stop the selected environment's sole idle Worker.
 docker stop --time 60 "$worker_id" >/dev/null || die 'Could not stop idle Worker'
