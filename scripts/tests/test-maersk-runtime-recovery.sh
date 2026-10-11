@@ -57,10 +57,10 @@ FAKE_DOCKER
 chmod +x "$tmp/bin/docker"
 export PATH="$tmp/bin:$PATH"
 export AGENT_RUNTIME_RECOVERY_STATE_DIR="$tmp/state"
-FAKE_CIRCUIT=off bash "$script" production --check "$tmp" "$tmp/runtime.env" \
-  | grep -Fq 'AGENT_RUNTIME_RECOVERY_INACTIVE'
-bash "$script" production --check "$tmp" "$tmp/runtime.env" \
-  | grep -Fq 'AGENT_RUNTIME_RECOVERY_NO_ACTION'
-FAKE_UNHEALTHY=yes bash "$script" staging --check "$tmp" "$tmp/runtime.env" \
-  | grep -Fq 'AGENT_RUNTIME_RECOVERY_CANDIDATE: staging/dhole-agent-workers'
+inactive_output="$(FAKE_CIRCUIT=off bash "$script" production --check "$tmp" "$tmp/runtime.env")"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_INACTIVE' <<< "$inactive_output"
+healthy_output="$(bash "$script" production --check "$tmp" "$tmp/runtime.env")"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_NO_ACTION' <<< "$healthy_output"
+unhealthy_output="$(FAKE_UNHEALTHY=yes bash "$script" staging --check "$tmp" "$tmp/runtime.env")"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_CANDIDATE: staging/dhole-agent-workers' <<< "$unhealthy_output"
 echo 'Guarded runtime recovery smoke tests passed.'
