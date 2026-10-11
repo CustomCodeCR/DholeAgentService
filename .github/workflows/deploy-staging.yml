@@ -1,7 +1,12 @@
 name: Deploy Dhole Agent - Staging
 
 on:
-  # Phase 8 guarded release: no implicit deployment from a Git push.
+  # Only this workflow's explicitly authorized YAML change triggers the
+  # guarded staging deploy; ordinary develop pushes remain validation-only.
+  push:
+    branches: [develop]
+    paths:
+      - .github/workflows/deploy-staging.yml
   workflow_dispatch:
     inputs:
       confirmation:
@@ -41,7 +46,12 @@ jobs:
           RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_STAGING" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
+          if [[ "${{ github.event_name }}" == push ]]; then
+            [[ "${{ github.ref }}" == refs/heads/develop ]] ||
+              { echo "Not the explicitly requested develop deployment" >&2; exit 1; }
+          else
+            [[ "$RELEASE_CONFIRMATION" == "DEPLOY_AGENT_STAGING" ]] || { echo "Explicit release confirmation required" >&2; exit 1; }
+          fi
 
       - name: Load Dhole staging infrastructure
         shell: bash
@@ -67,10 +77,20 @@ jobs:
           echo "AGENT_NOVNC_HOST_PORT=6081" >> "$RUNNER_TEMP/dhole-env/.env.staging"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
 
+      - name: Automated protected staging backup
+        if: ${{ github.event_name == 'push' }}
+        id: automatic_backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-snapshot.sh
+          bash scripts/maersk-one-shot-deployment-snapshot.sh staging \
+            .dhole-system "$HOME/dhole-agent-protected-release-backups"
+
       - name: Phase 8 verify database and profile/key backups
         shell: bash
         env:
-          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+          PHASE8_BACKUP_DIR: ${{ github.event_name == 'push' && steps.automatic_backup.outputs.backup_dir || inputs.backup_dir }}
         run: |
           set -euo pipefail
           # Only existing verified active rollouts may keep flags on during
@@ -82,7 +102,7 @@ jobs:
       - name: Phase 8 isolated PostgreSQL restoration drill
         shell: bash
         env:
-          PHASE8_BACKUP_DIR: ${{ inputs.backup_dir }}
+          PHASE8_BACKUP_DIR: ${{ github.event_name == 'push' && steps.automatic_backup.outputs.backup_dir || inputs.backup_dir }}
         run: |
           set -euo pipefail
           bash scripts/maersk-phase8-restore-drill.sh "$PHASE8_BACKUP_DIR"
@@ -309,6 +329,17 @@ jobs:
           echo "Agent worker is running but queue pump did not start." >&2
           docker logs --tail 300 "$CONTAINER_ID" || true
           exit 1
+
+      - name: Resume original staging Worker if guarded deploy failed
+        if: ${{ failure() && github.event_name == 'push' && steps.automatic_backup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -aq --filter label=com.docker.compose.project=dhole-staging --filter label=com.docker.compose.service=dhole-agent-workers)"
+          test -n "$id"
+          if [[ "$(docker inspect --format '{{.State.Status}}' "$id")" != running ]]; then
+            docker start "$id"
+          fi
 
       - name: Restore previous Agent images on failed deployment
         if: ${{ failure() && steps.capture_images.outcome == 'success' }}
