@@ -67,6 +67,17 @@ jobs:
           echo "AGENT_NOVNC_HOST_PORT=6081" >> "$RUNNER_TEMP/dhole-env/.env.staging"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.staging" >> "$GITHUB_ENV"
 
+      - name: Require enabled Maersk circuit and monitoring
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled; do
+            grep -Fxq "$key=true" "$DHOLE_ENV_FILE" || {
+              echo "Protected release requires $key=true in the prepared runtime config." >&2
+              exit 1
+            }
+          done
+
       - name: Phase 8 verify database and profile/key backups
         shell: bash
         env:
