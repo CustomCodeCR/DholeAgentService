@@ -104,7 +104,7 @@ internal static class ProductionGenerationEndpoints
             RequestGeneration request, HttpContext context, ServiceDbContext db, CancellationToken ct) =>
         {
             var actor = context.GetCurrentUserId();
-            if (actor is null or { } && actor == Guid.Empty)
+            if (actor is null || actor.Value == Guid.Empty)
                 return Results.Unauthorized();
             if (request.TargetGeneration is not ("prod" or "prod1") ||
                 !KnownTriggers.Contains(request.Trigger) ||
