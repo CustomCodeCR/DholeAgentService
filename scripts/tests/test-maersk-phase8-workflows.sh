@@ -34,7 +34,7 @@ for workflow in "$staging" "$production"; do
     grep -Fq 'branches: [develop]' "$workflow"
     grep -Fq '.github/workflows/deploy-staging.yml' "$workflow"
     grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
-    grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
+    grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
   fi
   if [[ "$workflow" == "$production" ]] && grep -Fq 'workflow_run:' "$workflow"; then
     grep -Fq 'workflows: ["Deploy Dhole Agent - Staging"]' "$workflow"
