@@ -130,6 +130,17 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/dhole-env"
           echo "DHOLE_ENV_FILE=$RUNNER_TEMP/dhole-env/.env.production" >> "$GITHUB_ENV"
 
+      - name: Require enabled Maersk circuit and monitoring
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in MaerskCircuit__Enabled MaerskMonitoring__Enabled; do
+            grep -Fxq "$key=true" "$DHOLE_ENV_FILE" || {
+              echo "Protected release requires $key=true in the prepared runtime config." >&2
+              exit 1
+            }
+          done
+
       - name: Automated protected production backup after successful staging
         if: ${{ github.event_name == 'workflow_run' }}
         id: automatic_backup
