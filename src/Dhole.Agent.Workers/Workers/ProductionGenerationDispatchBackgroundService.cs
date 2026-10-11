@@ -123,10 +123,10 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             var minutes = int.Parse(rule[2], System.Globalization.CultureInfo.InvariantCulture);
             bool due = code switch
             {
-                "scheduled" => await QueryAsync(db, """
+                "scheduled" => string.Equals(await QueryAsync(db, """
                     SELECT updated_at_utc <= now() - make_interval(mins => @minutes)
                     FROM agent.runtime_generation_state WHERE singleton=true
-                    """, ct, ("minutes", minutes)).Equals("True", StringComparison.OrdinalIgnoreCase),
+                    """, ct, ("minutes", minutes)), "True", StringComparison.OrdinalIgnoreCase),
                 "technical_failure" => await CountTechnicalAsync(db, minutes, ct) >= threshold,
                 // Failed output/partial extraction, NOT authentication challenge.
                 "data_quality" => int.TryParse(await QueryAsync(db, """
