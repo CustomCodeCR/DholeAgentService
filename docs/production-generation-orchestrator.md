@@ -60,4 +60,25 @@ python3 scripts/production-generation-orchestrator.py \
   --confirmation AUTHORIZE_GENERATION_EVENT
 ```
 
-**Not yet implemented:** production standby provisioning, destination authentication validation, consumption/execution of queued requests, Docker routing changes, live rollback and end-to-end deployment. Those steps require separate validation and must not be inferred from event-publisher success.
+## Pre-provisioning, controlled handoff and GitHub Actions
+
+- `.github/workflows/provision-agent-prod1.yml`: a protected **manual** workflow with `check` and `apply` modes. The apply mode uses the `DholeSystem/master` standby manifest, starts only its Hermes and API and **creates but does not start** its Worker. Production's current containers stay running. Images/keys/network/disk and HTTP health must pass.
+- `scripts/production-generation-executor.py`: processes a specific pending event only after checking a separately authorized, recent destination attestation; a stopped pre-provisioned Worker; matching production image IDs, PostgreSQL/Redis, encryption keys and circuit settings; and the live shared database for open Maersk circuit restrictions or Running executions.
+- `.github/workflows/production-generation-orchestrator.yml`: push triggers **validation jobs only** on both branches. A manual `workflow_dispatch` provides `plan`, `submit` and `execute`. A scheduled invocation submits a request only if explicitly enabled in the configuration (no automatic executable cutover by default).
+- On an approved handoff, stop the original idle Worker, re-check database restrictions, start the pre-existing standby Worker and require a queue pump ready signal; if the standby fails to start, stop it and restart the original Worker. Preserve every existing browser volume and all business data.
+
+### Operational sequence
+
+1. Use the `Provision isolated Agent prod1 standby` GitHub Action, mode `check` then `apply`, with confirmation `PROVISION_AGENT_PROD1`.
+2. Independently authenticate and verify authorized provider access in the pre-existing standby environment. Docker and API health do **not** establish provider login success.
+3. Record a fresh operator-signed/controlled readiness attestation under the runner's private state directory in `ready/prod1.json`. The executor requires `generation: "prod1"`, `ready: true`, `provider_authorized: true`, `verified_by` and an ISO UTC `verified_at_utc` within the configured maximum age. Do not create this attestation merely from Docker health.
+4. Explicitly enable the desired event source in `config/production-generation-orchestrator.json`. It starts with `enabled: false` and scheduled/technical sources off by default.
+5. Use the `Production generation orchestrator` workflow's `plan` mode, then `submit` (confirmation `AUTHORIZE_GENERATION_EVENT`) or `execute` (confirmation `AUTHORIZE_VERIFIED_WORKER_HANDOFF`). `execute` creates the request and attempts a Worker handoff. It fails closed if destination or provider clearance is not verified.
+
+### Important limitations
+
+This is a guarded handoff of the **Worker processing owner**, not a public API gateway cutover. The primary public Agent API stays the stable ingress; the standby Agent API and Hermes are independently provisioned. Only `prod1` has a Compose manifest; further generations need individually reviewed manifests and their own authorized sessions.
+
+An open provider circuit, CAPTCHA, 401/403, rate limit or missing provider authentication blocks a switch. The workflow cannot create, discard or rotate sessions to evade authentication restrictions.
+
+**Deployment state is distinct from repository state:** publishing these workflows does not prove a self-hosted run completed, and provisioning the standby does not mean a production handoff occurred. Inspect the matching workflow run and Agent queue/application health before declaring success.
