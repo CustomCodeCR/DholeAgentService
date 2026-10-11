@@ -38,7 +38,29 @@ root_available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
 # prevents Compose from quietly changing an existing browser/runtime identity.
 old="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
 if [[ -n "$old" ]]; then
-  echo "GENERATION_ALREADY_EXISTS: existing containers are not replaced"
+  # Existing generations are immutable; verify the *actual* services before
+  # considering the infrastructure provisioned. A partial/legacy environment
+  # must never be marked ready based on its project label alone.
+  for service in hermes-agent dhole-agent-api dhole-agent-workers; do
+    ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service")"
+    [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
+      echo "GENERATION_EXISTING_INCOMPLETE: $service" >&2
+      exit 1
+    }
+    status="$(docker inspect -f '{{.State.Status}}' "$ids")"
+    if [[ "$service" == dhole-agent-workers ]]; then
+      [[ "$status" == created || "$status" == exited ]] || {
+        echo "GENERATION_EXISTING_WORKER_MUST_BE_STOPPED" >&2
+        exit 1
+      }
+    else
+      [[ "$status" == running ]] || {
+        echo "GENERATION_EXISTING_SERVICE_UNHEALTHY: $service" >&2
+        exit 1
+      }
+    fi
+  done
+  echo "GENERATION_EXISTING_VERIFIED: $generation; sessions and volumes untouched"
   exit 0
 fi
 if [[ "$mode" == check ]]; then
