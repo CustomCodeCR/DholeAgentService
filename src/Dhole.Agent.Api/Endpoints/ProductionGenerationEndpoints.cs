@@ -158,7 +158,7 @@ internal static class ProductionGenerationEndpoints
                     ON CONFLICT(generation) DO UPDATE SET
                         status='Pending', diagnostic_code=NULL,
                         created_at_utc=now(), updated_at_utc=now()
-                    WHERE agent.runtime_generation_provisions.status='Failed'
+                    WHERE runtime_generation_provisions.status='Failed'
                     """, ct, ("name", request.Name));
             }
             catch (DbException)
