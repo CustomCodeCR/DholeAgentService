@@ -1,0 +1,161 @@
+name: ONE-SHOT Guarded Agent Deploy - Staging Then Production
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/maersk-one-shot-deploy-20261011.yml
+
+# Only the deployment authorization requested for this release.
+# Existing deploy workflows remain manual and enforce their original gates.
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: maersk-one-shot-staging-then-production-20261011
+  cancel-in-progress: false
+
+jobs:
+  staging_backup:
+    name: Backup staging and verify restore
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    concurrency:
+      group: dhole-agent-staging
+      cancel-in-progress: false
+    outputs:
+      backup_dir: ${{ steps.snapshot.outputs.backup_dir }}
+    steps:
+      - name: Checkout backed-up Agent tooling
+        uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Checkout DholeSystem develop infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: CustomCodeCR/DholeSystem
+          ref: develop
+          path: .dhole-system
+      - name: Drain idle Worker and make recoverable staging snapshot
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-snapshot.sh
+          bash scripts/maersk-one-shot-deployment-snapshot.sh staging \
+            .dhole-system "$HOME/dhole-agent-protected-release-backups"
+
+  staging_deploy:
+    name: Deploy develop to staging via protected workflow
+    needs: [staging_backup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch and verify real staging deployment
+        id: dispatch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_DIR: ${{ needs.staging_backup.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-dispatch.sh
+          bash scripts/maersk-one-shot-deployment-dispatch.sh staging "$BACKUP_DIR"
+
+  staging_restore_on_failure:
+    name: Resume original staging Worker if deployment fails
+    needs: [staging_backup, staging_deploy]
+    if: ${{ always() && needs.staging_backup.result == 'success' && needs.staging_deploy.result != 'success' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    concurrency:
+      group: dhole-agent-staging
+      cancel-in-progress: false
+    steps:
+      - name: Ensure staging Worker can resume after failed deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -aq \
+            --filter label=com.docker.compose.project=dhole-staging \
+            --filter label=com.docker.compose.service=dhole-agent-workers)"
+          test -n "$id"
+          if [[ "$(docker inspect --format '{{.State.Status}}' "$id")" != running ]]; then
+            docker start "$id" >/dev/null
+          fi
+          echo STAGING_WORKER_RECOVERED_OR_ALREADY_RUNNING
+
+  production_backup:
+    name: Backup production only after successful staging deploy
+    needs: [staging_deploy]
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    concurrency:
+      group: dhole-agent-production
+      cancel-in-progress: false
+    outputs:
+      backup_dir: ${{ steps.snapshot.outputs.backup_dir }}
+    steps:
+      - name: Checkout backed-up Agent tooling
+        uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Checkout DholeSystem master infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: CustomCodeCR/DholeSystem
+          ref: master
+          path: .dhole-system
+      - name: Drain idle Worker and make recoverable production snapshot
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-snapshot.sh
+          bash scripts/maersk-one-shot-deployment-snapshot.sh production \
+            .dhole-system "$HOME/dhole-agent-protected-release-backups"
+
+  production_deploy:
+    name: Deploy master to production via protected workflow
+    needs: [staging_deploy, production_backup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch and verify real production deployment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_DIR: ${{ needs.production_backup.outputs.backup_dir }}
+          STAGING_RUN: ${{ needs.staging_deploy.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-one-shot-deployment-dispatch.sh
+          bash scripts/maersk-one-shot-deployment-dispatch.sh \
+            production "$BACKUP_DIR" "$STAGING_RUN"
+
+  production_restore_on_failure:
+    name: Resume original production Worker if deployment fails
+    needs: [production_backup, production_deploy]
+    if: ${{ always() && needs.production_backup.result == 'success' && needs.production_deploy.result != 'success' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    concurrency:
+      group: dhole-agent-production
+      cancel-in-progress: false
+    steps:
+      - name: Ensure production Worker can resume after failed deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -aq \
+            --filter label=com.docker.compose.project=dhole \
+            --filter label=com.docker.compose.service=dhole-agent-workers)"
+          test -n "$id"
+          if [[ "$(docker inspect --format '{{.State.Status}}' "$id")" != running ]]; then
+            docker start "$id" >/dev/null
+          fi
+          echo PRODUCTION_WORKER_RECOVERED_OR_ALREADY_RUNNING
