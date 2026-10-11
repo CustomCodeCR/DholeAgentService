@@ -2,6 +2,9 @@ name: Deploy Dhole Agent - Staging
 
 on:
   # Protected staging retry after bounded Agent task drain (570 seconds).
+  # Production-generation orchestrator release (2026-10-11):
+  # explicitly trigger one guarded staging deployment for the current develop SHA.
+  # Do not remove the database backup, schema gate, queue drain or rollback.
   # Release promotion retry: pin the already validated staging runtime to the
   # current develop commit before master production promotion.
   # Only this workflow's explicitly authorized YAML change triggers the
