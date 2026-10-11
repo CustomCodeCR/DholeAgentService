@@ -2,6 +2,9 @@ name: Deploy Dhole Agent - Staging
 
 on:
   # Protected staging retry after bounded Agent task drain (570 seconds).
+  # Protected Agent control-plane release: includes authenticated generation
+  # read/rules/request endpoints and read-only Worker generation observation.
+  # Keep phase-8 backups, schema checks and rollback unchanged.
   # Production-generation orchestrator release (2026-10-11):
   # final protected retry after passing Python generation-suite fixes and
   # publishing the dormant standby provisioning workflow on both branches.
