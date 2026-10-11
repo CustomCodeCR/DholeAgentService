@@ -111,6 +111,12 @@ jobs:
             publisher_mode="$SELECTED_MODE"
           fi
           if [[ "$publisher_mode" == submit ]]; then
+            if [[ "$SELECTED_MODE" != execute && "$EVENT_KIND" != scheduled ]]; then
+              [[ "$EVENT_CONFIRMATION" == AUTHORIZE_GENERATION_EVENT ]] || {
+                echo "Explicit event submission confirmation required" >&2
+                exit 1
+              }
+            fi
             publisher_confirmation=AUTHORIZE_GENERATION_EVENT
           else
             publisher_confirmation=''
