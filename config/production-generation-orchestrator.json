@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "allowed_destinations": [
+    "prod1"
+  ],
+  "default_destination": "prod1",
+  "events": {
+    "manual": {
+      "enabled": true
+    },
+    "scheduled": {
+      "enabled": false
+    },
+    "technical_failure": {
+      "enabled": false,
+      "requires_unhealthy_component": true
+    }
+  },
+  "cooldown_seconds": 1800,
+  "pending_event_limit": 1,
+  "readiness_max_age_seconds": 3600,
+  "policy": {
+    "require_preprovisioned_destination": true,
+    "require_explicit_submission_confirmation": true,
+    "preserve_provider_circuit_restrictions": true,
+    "prohibit_session_replacement_on_access_denial": true
+  }
+}
