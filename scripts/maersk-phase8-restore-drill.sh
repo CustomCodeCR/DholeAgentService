@@ -46,7 +46,7 @@ for attempt in $(seq 1 40); do
   fi
   sleep 2
 done
-[[ "$ready" == true ]] || die "Disposable PostgreSQL 16 server did not become healthy"
+[[ "$ready" == true ]] || die "Disposable PostgreSQL 17 server did not become healthy"
 
 if ! docker exec "$container" pg_restore --no-owner --no-acl \
     --exit-on-error --single-transaction -U postgres -d postgres \
