@@ -52,7 +52,10 @@ done
 grep -Fq 'staging_run_id:' "$production"
 grep -Fq 'Require successful recent staging acceptance' "$production"
 grep -Fq 'run.get("event") == "workflow_dispatch"' "$production"
-grep -Fq 'run.get("head_sha") == os.environ["CURRENT_DEVELOP_SHA"]' "$production"
+grep -Fq 'EXPECTED_STAGING_SHA:' "$production"
+grep -Fq 'github.event.workflow_run.head_sha' "$production"
+grep -Fq 'else os.environ["CURRENT_DEVELOP_SHA"]' "$production"
+grep -Fq 'run.get("head_sha") == target_sha' "$production"
 grep -Fq 'DEPLOY_AGENT_PRODUCTION' "$production"
 grep -Fq 'DEPLOY_AGENT_STAGING' "$staging"
 [[ -s "$backup" ]] || { echo "Missing guarded manual backup workflow" >&2; exit 1; }
