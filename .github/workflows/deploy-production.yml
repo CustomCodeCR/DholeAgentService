@@ -107,6 +107,12 @@ jobs:
           print("Exact successful staging run accepted for protected production promotion.")
           '
 
+      - name: Validate production generation safety tests for approved source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_production_generation_*.py' -v
+
       - name: Load Dhole production infrastructure
         shell: bash
         run: |
