@@ -26,7 +26,7 @@ command -v docker >/dev/null || die 'Docker is unavailable'
 command -v flock >/dev/null || die 'flock is unavailable'
 
 # Lock per environment. Concurrency with deploys is handled by Actions too.
-state_dir="/opt/dhole/.maersk-runtime-recovery"
+state_dir="${AGENT_RUNTIME_RECOVERY_STATE_DIR:-/opt/dhole/.maersk-runtime-recovery}"
 mkdir -p "$state_dir"
 chmod 700 "$state_dir"
 exec 9>"$state_dir/$environment.lock"
