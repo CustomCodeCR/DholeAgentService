@@ -57,8 +57,12 @@ grep -Fq 'up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-ag
 
 # Verify previous tags remain protected and both deployments can revert on failure.
 for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/workflows/deploy-production.yml"; do
-  grep -Fq 'Phase 8 isolated PostgreSQL restoration drill' "$workflow"
-  grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"
+  # A deployment must validate the snapshot and migrated schema. The
+  # destructive full-database restore drill is exercised in the separate,
+  # operator-controlled backup workflow against an isolated database.
+  grep -Fq 'Phase 8 verify database and profile/key backups' "$workflow"
+  grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
+  grep -Fq 'maersk-phase8-schema-check.sh' "$workflow"
   grep -Fq 'Protect previous Agent images for rollback' "$workflow"
   grep -Fq 'Mark phase 8 deployment started' "$workflow"
   grep -Fq 'Restore previous Agent images on failed deployment' "$workflow"
@@ -68,6 +72,10 @@ for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/work
     exit 1
   fi
 done
+
+# Backup workflow retains the separate full restore verification; this must
+# never be mistaken for an image-deployment precondition.
+grep -Fq 'maersk-phase8-restore-drill.sh' "$repo/.github/workflows/maersk-phase8-backup.yml"
 
 # A second/overlapping restore run must never delete a container it does
 # not own. Conversely, a newly created drill container must be removed.
