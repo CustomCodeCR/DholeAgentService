@@ -16,7 +16,8 @@ class Prod2ApiHotfixTests(unittest.TestCase):
         self.assertIn("--force-recreate dhole-agent-api", self.script)
         self.assertNotIn("up -d --no-deps --no-build --pull never --force-recreate dhole-agent-workers", self.script)
         self.assertIn("prod2 Worker must not be active", self.script)
-        self.assertIn('[[ "$(state "$prod1")" == running && "$(state "$prod")" != running ]]', self.script)
+        self.assertIn('m.find_running_generation()[0]=="prod1"', self.script)
+        self.assertIn('[[ "$(state "$prod1")" == running && -z "$legacy_running" ]]', self.script)
 
     def test_stable_image_digest_and_config_are_checked(self):
         self.assertIn('docker image inspect', self.script)

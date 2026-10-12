@@ -22,11 +22,18 @@ state(){ docker inspect -f '{{.State.Status}}' "$1"; }
 digest(){ docker inspect -f '{{.Image}}' "$1"; }
 mount(){ docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$2\"}}{{.Name}}{{end}}{{end}}" "$1"; }
 prod1="$(id dhole-agent-prod1 dhole-agent-workers-prod1)"
-prod="$(id dhole dhole-agent-workers)"
+# Missing legacy prod container is safe; a running legacy prod Worker is not.
+legacy_running="$(docker ps -q --filter 'label=com.docker.compose.project=dhole' --filter 'label=com.docker.compose.service=dhole-agent-workers')"
+python3 - <<'PY'
+import importlib.util
+spec=importlib.util.spec_from_file_location("owner","scripts/production-generation-executor.py")
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+assert m.find_running_generation()[0]=="prod1", "prod1 must be the sole active Agent Worker"
+PY
 main_api="$(id dhole dhole-agent-api)"
 prod1_api="$(id dhole-agent-prod1 dhole-agent-api-prod1)"
 old_api="$(id "$project" dhole-agent-api)"
-[[ "$(state "$prod1")" == running && "$(state "$prod")" != running ]] || die "prod1 sole-worker requirement failed"
+[[ "$(state "$prod1")" == running && -z "$legacy_running" ]] || die "prod1 sole-worker requirement failed"
 [[ "$(state "$old_api")" == running ]] || die "prod2 existing API not running"
 other_workers="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers")"
 [[ -z "$other_workers" ]] || die "prod2 Worker must not be active"
@@ -98,7 +105,8 @@ changed=1
 new_api="$(id "$project" dhole-agent-api)"
 [[ "$(state "$new_api")" == running && "$(digest "$new_api")" == "$fixed" ]] || die "new prod2 API image mismatch"
 [[ "$(mount "$new_api" /data/agent-keys)" == "$old_keys" ]] || die "key volume changed"
-[[ "$(state "$prod1")" == running && "$(state "$prod")" != running ]] || die "Worker ownership changed"
+legacy_running="$(docker ps -q --filter 'label=com.docker.compose.project=dhole' --filter 'label=com.docker.compose.service=dhole-agent-workers')"
+[[ "$(state "$prod1")" == running && -z "$legacy_running" ]] || die "Worker ownership changed"
 [[ -z "$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers")" ]] || die "standby Worker started"
 ok=0
 for attempt in $(seq 1 25); do

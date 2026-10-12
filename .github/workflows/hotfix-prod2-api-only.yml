@@ -1,4 +1,5 @@
 name: Hotfix prod2 Agent API reset failure (API only)
+# Legacy primary Worker may already be absent; only a running duplicate is forbidden.
 on:
   push:
     branches: [master]
