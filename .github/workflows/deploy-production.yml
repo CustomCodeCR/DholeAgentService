@@ -41,7 +41,7 @@ jobs:
   deploy:
     # This approved hotfix is promoted by a dedicated, single-owner prod1
     # release. Do not invoke the legacy prod Worker rollout for that staging SHA.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha != '6cfb7bf50bcd345a1eff553a71cf5ce3e17517c3') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha != '655201501ac9a9bcfa27c7f9191da3f95f35739c') }}
     runs-on: [self-hosted, linux, x64, dhole]
     steps:
       - name: Checkout approved Agent revision
