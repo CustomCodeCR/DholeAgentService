@@ -1,0 +1,119 @@
+name: Deploy Dhole Agent - Production from master (prod1)
+
+# Master-native deployment. The legacy production job assumes 'prod' owns the
+# queue; this workflow updates the currently active prod1 without starting prod.
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/deploy-master-prod1.yml
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DEPLOY_MASTER_ACTIVE_PROD1 to confirm this production deployment"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact master source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm master source and explicit release
+        shell: bash
+        env:
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_KIND: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || {
+            echo 'MASTER_PROD1_RELEASE_REFUSED: protected master branch required' >&2
+            exit 2
+          }
+          if [[ "$EVENT_KIND" == workflow_dispatch ]]; then
+            [[ "$OPERATOR_CONFIRMATION" == DEPLOY_MASTER_ACTIVE_PROD1 ]] || {
+              echo 'MASTER_PROD1_RELEASE_REFUSED: explicit operator approval required' >&2
+              exit 2
+            }
+          else
+            [[ "$EVENT_KIND" == push && "$GITHUB_SHA" == "$(git rev-parse HEAD)" ]] || exit 2
+          fi
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh
+          bash -n scripts/maersk-phase8-backup.sh
+          python3 -m py_compile scripts/production-generation-executor.py scripts/production-generation-apply-request.py
+          echo "MASTER_PROD1_RELEASE_SOURCE_VERIFIED sha=$GITHUB_SHA"
+
+      - name: Prepare production infrastructure without changing containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/master-prod1-release"
+          chmod 700 "$RUNNER_TEMP/master-prod1-release"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/master-prod1-release" >/dev/null
+          chmod 600 "$RUNNER_TEMP/master-prod1-release/.env.production"
+          echo "MASTER_PROD1_ENV=$RUNNER_TEMP/master-prod1-release/.env.production" >> "$GITHUB_ENV"
+
+      - name: Build API and Worker from master SHA (do not replace latest yet)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$GITHUB_TOKEN" ]] || {
+            echo 'MASTER_PROD1_RELEASE_REFUSED: package token unavailable' >&2
+            exit 2
+          }
+          free_space="$(df -Pk / | awk 'NR==2{print $4}')"
+          [[ "$free_space" =~ ^[0-9]+$ && "$free_space" -ge 5242880 ]] || {
+            echo 'MASTER_PROD1_RELEASE_REFUSED: less than 5 GiB build headroom' >&2
+            exit 2
+          }
+          tag="$(git rev-parse --short=12 HEAD)"
+          echo "MASTER_PROD1_BUILD_REVISION=$tag"
+          docker build --pull --target api-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-api:master-$tag" .
+          free_space="$(df -Pk / | awk 'NR==2{print $4}')"
+          [[ "$free_space" =~ ^[0-9]+$ && "$free_space" -ge 2097152 ]] || {
+            echo 'MASTER_PROD1_RELEASE_REFUSED: less than 2 GiB remaining' >&2
+            exit 2
+          }
+          docker build --pull --target worker-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-workers:master-$tag" .
+          docker image inspect "dhole/agent-api:master-$tag" >/dev/null
+          docker image inspect "dhole/agent-workers:master-$tag" >/dev/null
+          echo "MASTER_PROD1_IMAGES_BUILT_FROM_MASTER sha=$GITHUB_SHA"
+
+      - name: Protect prod1 and deploy exact master-built images
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/deploy-active-prod1-npgsql-hotfix.sh \
+            "$GITHUB_SHA" .dhole-system "$MASTER_PROD1_ENV" \
+            "$HOME/dhole-agent-protected-release-backups"
+          echo "MASTER_PROD1_DEPLOYMENT_CONFIRMED sha=$GITHUB_SHA"
+
+      - name: Record master release result
+        shell: bash
+        run: |
+          echo "DEPLOY_MASTER_COMPLETED master_sha=$GITHUB_SHA active_worker=prod1"
