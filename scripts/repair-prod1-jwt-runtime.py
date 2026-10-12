@@ -100,6 +100,7 @@ def main():
                 raise RuntimeError("Another production generation owns a running Worker")
 
     original = {}
+    already_healthy = True
     for service in SERVICES:
         cid = find(PROJECT, service)
         info = inspect(cid)
@@ -108,7 +109,17 @@ def main():
         if info["Image"] != expected:
             raise RuntimeError("Refusing image change for " + service)
         original[service] = {"mounts": mounts(info), "image": info["Image"]}
+        current = environment(info)
+        already_healthy &= (info["State"]["Status"] == "running"
+                            and all(current.get(key) == environment(primary).get(key)
+                                    for key in JWT)
+                            and current.get("MaerskCircuit__Enabled", "").lower() == "false")
         print("PROD1_JWT_REPAIR_PREFLIGHT", service, "state=" + info["State"]["Status"])
+
+    if already_healthy:
+        print("PROD1_JWT_REPAIR_ALREADY_HEALTHY: both services running, JWT verified,"
+              " circuit disabled; no container changed")
+        return
 
     assert_drain(primary)
     with tempfile.TemporaryDirectory(prefix="prod1-jwt-repair-",
@@ -156,7 +167,11 @@ def main():
                     break
             time.sleep(3)
         if not healthy:
-            raise RuntimeError("prod1 API or Worker did not become healthy")
+            states = ",".join(service + "=" + inspect(new[service])["State"]["Status"]
+                              for service in SERVICES)
+            print("PROD1_JWT_REPAIR_HEALTH_TIMEOUT statuses=" + states,
+                  file=sys.stderr)
+            raise RuntimeError("prod1 API or Worker HTTP health did not become healthy")
         time.sleep(7)
         if not all(inspect(cid)["State"]["Status"] == "running" for cid in new.values()):
             raise RuntimeError("prod1 failed stable-running recheck")
