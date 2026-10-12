@@ -48,7 +48,7 @@ docker run --rm --entrypoint /bin/sh \
 # Recreate ONLY stateless API. Hermes and browser volume remain untouched.
 "${compose[@]}" up -d --no-deps --no-build --pull never --force-recreate dhole-agent-api-prod1
 if [[ -z "$worker" ]]; then
-  "${compose[@]}" create --no-deps --no-build --pull never dhole-agent-workers-prod1
+  "${compose[@]}" create --no-build --pull never dhole-agent-workers-prod1
 fi
 worker="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter 'label=com.docker.compose.service=dhole-agent-workers-prod1')"
 [[ -n "$worker" ]] || { echo "PROD1_WORKER_MISSING"; exit 1; }
