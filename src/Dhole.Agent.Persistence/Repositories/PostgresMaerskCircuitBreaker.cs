@@ -20,7 +20,7 @@ public sealed class PostgresMaerskCircuitBreaker(
     public async Task<MaerskCircuitSnapshot> GetAsync(Guid providerId, CancellationToken ct = default)
     {
         if (!_options.Enabled)
-            return MaerskCircuitSnapshot.Disabled(providerId);
+            return MaerskCircuitSnapshot.Closed(providerId);
         ValidateProvider(providerId);
         _options.Validate();
         var row = await db.Set<MaerskCircuitRecord>().AsNoTracking()
@@ -72,47 +72,30 @@ public sealed class PostgresMaerskCircuitBreaker(
 
         var policy = MaerskFailureClassifier.Classify(errorCode);
         var requiresOperator = policy.ShouldOpenCircuit || policy.RequiresOperator;
+        // Do not open the provider circuit because of local browser/worker
+        // errors, malformed inputs or aggregate search failures.
         var providerTransient = policy.Category == FailureCategory.ProviderOrUiTimeout
             && !policy.RequiresOperator
             && policy.CanonicalErrorCode is "maersk_offer_timeout"
                 or "maersk_provider_service_unavailable"
                 or "maersk_authentication_service_error";
 
-        // The DB transaction serializes changes by provider. When the same
-        // execution is redelivered, its failure is counted exactly once.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
         await EnsureRowAsync(providerId, ct);
-        var previousRow = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
-            $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
-            .AsNoTracking().SingleAsync(ct);
-
-        if (previousRow.RequiresOperator
-            || (!requiresOperator && !providerTransient && previousRow.State != "HalfOpen"))
-        {
-            await tx.CommitAsync(ct);
+        var previous = await GetAsync(providerId, ct);
+        // An existing verification restriction remains the authoritative cause
+        // until a human confirms clearance, even if another call later times out.
+        if (previous.RequiresOperator) return;
+        if (!requiresOperator && !providerTransient && previous.State != "HalfOpen")
             return;
-        }
-
-        var normalized = policy.CanonicalErrorCode.Length > 120
-            ? "maersk_unclassified_error" : policy.CanonicalErrorCode;
-        var observed = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-            INSERT INTO agent.maersk_circuit_events
-                (id,provider_id,execution_id,event_type,reason_code)
-            VALUES ({Guid.NewGuid()},{providerId},{executionId},'FailureObserved',{normalized})
-            ON CONFLICT (provider_id,execution_id,event_type,reason_code)
-                WHERE execution_id IS NOT NULL DO NOTHING
-            """, ct);
-        if (observed == 0)
-        {
-            await tx.CommitAsync(ct);
-            return;
-        }
 
         var threshold = _options.TransientFailureThreshold;
         var technicalCooldown = _options.TechnicalCooldownSeconds;
         var providerCooldown = _options.ProviderCooldownSeconds;
+        var normalized = policy.CanonicalErrorCode.Length > 120
+            ? "maersk_unclassified_error" : policy.CanonicalErrorCode;
 
+        // A newly observed CAPTCHA/access denial latches RequiresOperator until
+        // an explicit verified reset. A probe that fails remains Open.
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE agent.maersk_circuits
@@ -140,12 +123,10 @@ public sealed class PostgresMaerskCircuitBreaker(
             WHERE provider_id = {providerId}
             """, ct);
 
-        var current = await db.Set<MaerskCircuitRecord>().AsNoTracking()
-            .SingleAsync(x => x.ProviderId == providerId, ct);
-        if (current.State == "Open"
-            && (previousRow.State != "Open" || previousRow.ReasonCode != current.ReasonCode))
+        var current = await GetAsync(providerId, ct);
+        if (current.State == "Open" && (previous.State != "Open"
+            || previous.ReasonCode != current.ReasonCode))
             await AuditAsync(providerId, "Opened", normalized, null, null, ct);
-        await tx.CommitAsync(ct);
     }
 
     public async Task RecordSuccessAsync(Guid providerId, Guid executionId, CancellationToken ct = default)
@@ -184,6 +165,11 @@ public sealed class PostgresMaerskCircuitBreaker(
             throw new ArgumentException(
                 "An authenticated operator, documented reason and verified provider clearance are required.");
 
+        // EF Core's Npgsql retrying strategy requires the entire explicit transaction
+        // to run as one retriable unit (including the FOR UPDATE lock and audit).
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var current = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
             $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
@@ -242,6 +228,7 @@ public sealed class PostgresMaerskCircuitBreaker(
             await AuditAsync(providerId, "OperatorReset", null, actorId, reason.Trim(), ct);
         await tx.CommitAsync(ct);
         return affected == 1;
+        });
     }
 
     private async Task EnsureRowAsync(Guid providerId, CancellationToken ct)

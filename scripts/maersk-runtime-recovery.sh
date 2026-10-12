@@ -58,11 +58,36 @@ for id in "$api_id" "$worker_id"; do
   fi
 done
 
+# The primary `prod` Worker is intentionally stopped while a verified prodN
+# generation owns the queue. Recovery must NOT resurrect it: that would create
+# two independent consumers and defeat the protected one-owner handoff.
+# Read Docker's actual running Workers, never only the generation DB label.
+standby_worker_active=0
+if [[ "$environment" == production ]]; then
+  while IFS= read -r running_id; do
+    [[ -n "$running_id" ]] || continue
+    labels="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$running_id")"
+    generation_project="${labels%%|*}"
+    generation_service="${labels#*|}"
+    if [[ "$generation_project" =~ ^dhole-agent-prod[1-9][0-9]*$ &&
+          ( "$generation_service" == dhole-agent-workers ||
+            "$generation_service" == dhole-agent-workers-prod1 ) ]]; then
+      standby_worker_active=1
+      echo "AGENT_RUNTIME_RECOVERY_ACTIVE_STANDBY_PROTECTED generation=$generation_project"
+      break
+    fi
+  done < <(docker ps -q --filter 'label=com.docker.compose.project')
+fi
+
 services=(dhole-agent-api dhole-agent-workers "$hermes_service")
 projects=("$project" "$project" "$infra")
 candidates=()
 for index in 0 1 2; do
   service="${services[$index]}"
+  if [[ "$service" == dhole-agent-workers && "$standby_worker_active" == 1 ]]; then
+    echo 'AGENT_RUNTIME_RECOVERY_INACTIVE_PRIMARY_WORKER_PRESERVED'
+    continue
+  fi
   target_project="${projects[$index]}"
   id="$(container_id "$target_project" "$service")"
   [[ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" -eq 1 ]] ||
