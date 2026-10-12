@@ -212,8 +212,8 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
-            // First search will navigate to /book. Avoid duplicate reload.
-
+            // Authentication success is recorded only after the login service
+            // has actually verified the original Maersk session.
             if (browserProfile is not null)
             {
                 browserProfile.Authenticate(DateTime.UtcNow);
