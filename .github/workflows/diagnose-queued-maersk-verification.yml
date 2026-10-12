@@ -37,9 +37,8 @@ jobs:
           log=out.stdout+"\n"+out.stderr
           for marker in ("AGENT_QUEUE_CONCURRENT_STARTED","AGENT_QUEUE_DISPATCH_ERROR","AGENT_QUEUE_CLAIMED","AGENT_QUEUE_JOB_FAILED","AGENT_EXECUTION_RUNNING","MAERSK_CIRCUIT_DISPATCH_PAUSED","AGENT_QUEUE_TRANSIENT_BACKOFF"):
               print("MAERSK_VERIFY_LOG_COUNTER",marker,log.count(marker))
-          for l in log.splitlines():
-              if PREFIX in l:
-                  print("MAERSK_VERIFY_EXECUTION_LOG",("claimed" if "CLAIM" in l else "running" if "RUNNING" in l else "paused" if "PAUSED" in l else "other"),"error="+str("error" in l.lower()))
+          for kind in ("AGENT_QUEUE_DISPATCH","AGENT_EXECUTION_RUNNING","AGENT_QUEUE_CLAIMED","MAERSK_CIRCUIT_DISPATCH_PAUSED"):
+              print("MAERSK_VERIFY_TARGET_EVENT",kind,sum(1 for line in log.splitlines() if PREFIX in line and kind in line))
           main=service("dhole","dhole-agent-api")
           env=dict(x.split("=",1) for x in main["Config"]["Env"] if "=" in x)
           conn=env.get("Postgres__ConnectionString") or env.get("AGENT_POSTGRES_CONNECTION_STRING")
@@ -56,15 +55,18 @@ jobs:
               for line in p.stdout.splitlines()[:15]:
                   if len(line)<280 and re.fullmatch(r"[\w. :|+\-/]+",line):
                       print("MAERSK_VERIFY_DB",label,line)
-          q("verification",f"""SELECT e.id::text,e.status,e.attempt,e.max_attempts,e.priority,e.execution_type,
-               coalesce(e.next_attempt_at_utc::text,'none'),d.code,d.action_type,e.input_json
-               FROM agent."AgentExecutions" e JOIN agent."AgentDefinitions" d ON e.agent_definition_id=d."Id"
-               WHERE e.id::text LIKE '{PREFIX}%' LIMIT 2""")
-          q("queued_manual",f"""SELECT d.code,e.status,e.attempt,e.priority,count(*)
-               FROM agent."AgentExecutions" e
-               JOIN agent."AgentDefinitions" d ON e.agent_definition_id=d."Id"
-               WHERE e.status='Queued' AND e.execution_type='Manual'
-               GROUP BY d.code,e.status,e.attempt,e.priority ORDER BY count(*) DESC LIMIT 12""")
+          q("verification",f"""SELECT status,attempt,max_attempts,priority,execution_type,
+              coalesce(error_code,'none'),
+              coalesce(started_at::text,'none'),
+              coalesce(next_attempt_at_utc::text,'none'),
+              CASE WHEN input_json::jsonb = '{{"maerskSessionVerification":true}}'::jsonb THEN 'marker_valid' ELSE 'marker_other' END
+              FROM agent."AgentExecutions" WHERE id::text LIKE '{PREFIX}%' LIMIT 2""")
+          q("queued_manual",f"""SELECT status,attempt,priority,count(*)
+              FROM agent."AgentExecutions"
+              WHERE status='Queued' AND execution_type='Manual'
+              GROUP BY status,attempt,priority ORDER BY count(*) DESC LIMIT 12""")
+          q("profile",f"""SELECT status,count(*),count(*) FILTER (WHERE last_login_at IS NOT NULL)
+              FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}' AND is_active GROUP BY status""")
           q("lease",f"""SELECT lease_scope,execution_id::text,owner_id::text,expires_at_utc>now()
                FROM agent.execution_leases WHERE lease_scope LIKE 'maersk:%' LIMIT 5""")
           q("active",f"""SELECT count(*) FROM agent."AgentExecutions"
