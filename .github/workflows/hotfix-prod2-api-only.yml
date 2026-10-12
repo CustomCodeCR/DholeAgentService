@@ -1,5 +1,6 @@
 name: Hotfix prod2 Agent API reset failure (API only)
 # Legacy primary Worker may already be absent; only a running duplicate is forbidden.
+# Retry with a local rollback image snapshot if Docker has pruned the old image ID.
 on:
   push:
     branches: [master]
