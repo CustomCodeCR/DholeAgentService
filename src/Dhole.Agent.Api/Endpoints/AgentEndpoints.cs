@@ -11,6 +11,8 @@ using Dhole.Agent.Application.ExtractionProfiles;
 using Dhole.Agent.Contracts.Agents;
 using Dhole.Agent.Contracts.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
+using Dhole.Agent.Persistence.DbContexts;
+using Microsoft.EntityFrameworkCore;
 
 namespace Dhole.Agent.Api.Endpoints;
 
@@ -101,7 +103,7 @@ public static class AgentEndpoints
         circuit.MapPost("/{providerId:guid}/reset", async (Guid providerId,
             ResetMaerskCircuitRequest request, HttpContext context,
             IAgentProviderRepository providers, IMaerskCircuitBreaker breaker,
-            CancellationToken ct) =>
+            ServiceDbContext db, CancellationToken ct) =>
         {
             var actorId = context.GetCurrentUserId();
             if (actorId is null || actorId.Value == Guid.Empty)
@@ -112,6 +114,46 @@ public static class AgentEndpoints
             if (!request.VerifiedWithProvider || string.IsNullOrWhiteSpace(request.Reason)
                 || request.Reason.Trim().Length < 12 || request.Reason.Length > 1000)
                 return Results.BadRequest(new { error = "Explicit verified provider clearance and a reason of 12–1000 characters are required." });
+            // Never bypass provider restrictions or reset without authenticated
+            // browser evidence. A missing profile is a normal, actionable 409.
+            // The transactional breaker revalidates these gates on the actual reset.
+            var circuitState = await breaker.GetAsync(providerId, ct);
+            if (circuitState.State is "Open" or "HalfOpen"
+                && circuitState.RequiresOperator)
+            {
+                var registered = await db.BrowserProfiles.AsNoTracking().AnyAsync(
+                    p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive, ct);
+                if (!registered)
+                    return Results.Conflict(new
+                    {
+                        code = "maersk_circuit_reset_profile_missing",
+                        error = "No active persistent browser profile is registered for Maersk. Authenticate the original provider session and register the verified profile before resetting the circuit."
+                    });
+
+                var restrictedAt = await db.MaerskCircuits.AsNoTracking()
+                    .Where(x => x.ProviderId == providerId)
+                    .Select(x => x.UpdatedAtUtc)
+                    .SingleOrDefaultAsync(ct);
+                var now = DateTime.UtcNow;
+                var verified = await db.BrowserProfiles.AsNoTracking().AnyAsync(
+                    p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive
+                         && p.Status == BrowserProfileStatus.Authenticated
+                         && p.LastLoginAt.HasValue
+                         && p.LastLoginAt.Value > restrictedAt
+                         && p.LastLoginAt.Value <= now
+                         && (!p.SessionExpiresAt.HasValue || p.SessionExpiresAt.Value > now), ct);
+                var unsafeProfile = await db.BrowserProfiles.AsNoTracking().AnyAsync(
+                    p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive
+                         && (p.Status == BrowserProfileStatus.Blocked
+                             || p.Status == BrowserProfileStatus.Expired
+                             || p.Status == BrowserProfileStatus.ResetRequested), ct);
+                if (!verified || unsafeProfile)
+                    return Results.Conflict(new
+                    {
+                        code = "maersk_circuit_reset_verification_pending",
+                        error = "An original Maersk browser profile has not been authenticated since the restriction, or another active profile remains blocked."
+                    });
+            }
             var reset = await breaker.ResetByOperatorAsync(
                 providerId, actorId.Value, request.Reason, request.VerifiedWithProvider, ct);
             return reset
