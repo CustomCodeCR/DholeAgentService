@@ -62,9 +62,9 @@ import re,sys
 types=set()
 frames=set()
 for line in sys.stdin:
-    m=re.search(r"(?<![\\w.])((?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[\\w.]*Exception)",line)
+    m=re.search(r"(?<![\w.])((?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[\w.]*Exception)",line)
     if m: types.add(m.group(1))
-    f=re.search(r"\\bat ([A-Za-z_][\\w.]*)\\(",line)
+    f=re.search(r"\bat ([A-Za-z_][\w.]*)\(",line)
     if f and re.match(r"^(?:Dhole|Microsoft|Npgsql|CustomCodeFramework)[.]",f.group(1)):
         frames.add(f.group(1))
 for value in sorted(types)[:8]: print("GENERATION_DIAG_EXCEPTION_TYPE="+value)
