@@ -35,6 +35,8 @@ jobs:
 
       - name: Validate operator-only, read-only technical checks
         shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           python3 -m py_compile scripts/operator-attest-generation-readiness.py scripts/production-generation-executor.py
@@ -42,6 +44,11 @@ jobs:
             echo 'GENERATION_READINESS_REFUSED: manual_master_operator_workflow_required' >&2
             exit 2
           }
+          if [[ "$CONFIRMATION" != I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS ]]; then
+            echo 'GENERATION_READINESS_REFUSED: independent_provider_verification_not_attested' >&2
+            echo 'Operator must independently confirm authorized provider access and provide the exact confirmation field.' >&2
+            exit 2
+          fi
           echo 'GENERATION_READINESS_WORKFLOW_VALIDATED'
 
       - name: Prepare protected, existing production database connection
