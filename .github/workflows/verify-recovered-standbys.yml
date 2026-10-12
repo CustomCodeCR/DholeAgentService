@@ -1,0 +1,74 @@
+name: Verify recovered Agent prod1/prod2 standbys (read only)
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/verify-recovered-standbys.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Check sustained API/Hermes health and standby isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe() {
+            docker run --rm --network dhole curlimages/curl:8.12.1 \
+              -s -o /dev/null --connect-timeout 3 --max-time 5 \
+              -w '%{http_code}' "$1"
+          }
+          for target in prod1 prod2; do
+            project="dhole-agent-$target"
+            if [[ "$target" == prod1 ]]; then
+              api_service=dhole-agent-api-prod1
+              worker_service=dhole-agent-workers-prod1
+              api_host=dhole-agent-api-prod1
+              hermes_host=hermes-agent-prod1
+              expected_keys=dhole_agent_prod1_keys
+              expected_profiles=dhole-agent-prod1_agent-browser-profiles-prod1
+            else
+              api_service=dhole-agent-api
+              worker_service=dhole-agent-workers
+              api_host=agent-api-prod2
+              hermes_host=hermes-agent-prod2
+              expected_keys=dhole_agent_prod2_keys
+              expected_profiles=dhole-agent-prod2_browser-profiles
+            fi
+            api="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$api_service")"
+            worker="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$worker_service")"
+            [[ "$(printf '%s\n' "$api" | sed '/^$/d' | wc -l)" -eq 1 ]] || exit 1
+            [[ "$(printf '%s\n' "$worker" | sed '/^$/d' | wc -l)" -eq 1 ]] || exit 1
+            state="$(docker inspect -f '{{.State.Status}}' "$worker")"
+            [[ "$state" == created || "$state" == exited ]] || {
+              echo "GENERATION_VERIFICATION_STANDBY_ACTIVE_REFUSED: $target"; exit 1;
+            }
+            keys="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/agent-keys"}}{{.Name}}{{end}}{{end}}' "$api")"
+            profile="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/browser-profiles"}}{{.Name}}{{end}}{{end}}' "$worker")"
+            [[ "$keys" == "$expected_keys" && "$profile" == "$expected_profiles" ]] || {
+              echo "GENERATION_VERIFICATION_VOLUME_MISMATCH: $target"; exit 1;
+            }
+            for attempt in 1 2 3 4; do
+              [[ "$(docker inspect -f '{{.State.Status}}' "$api")" == running ]] || exit 1
+              [[ "$(docker inspect -f '{{.RestartCount}}' "$api")" == 0 ]] || {
+                echo "GENERATION_VERIFICATION_API_RESTARTED: $target"; exit 1;
+              }
+              [[ "$(probe "http://$api_host:8080/health")" == 200 ]] || {
+                echo "GENERATION_VERIFICATION_API_UNHEALTHY: $target"; exit 1;
+              }
+              [[ "$(probe "http://$hermes_host:8642/health")" == 200 ]] || {
+                echo "GENERATION_VERIFICATION_HERMES_UNHEALTHY: $target"; exit 1;
+              }
+              if [[ "$attempt" != 4 ]]; then sleep 15; fi
+            done
+            echo "GENERATION_STANDBY_VERIFIED: $target API/Hermes healthy; worker stopped; keys/profiles isolated"
+          done
