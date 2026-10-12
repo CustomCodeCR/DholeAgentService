@@ -122,3 +122,31 @@ jobs:
                           for frame in frames[:4]:print("RESET_ROUTE_FRAME",service,frame[:150])
           print("RESET_ROUTE_DIAG_FINISHED")
           PY
+
+      - name: Verify prod2 API image drift and retry-strategy error (no secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json
+          def call(args):
+              p=subprocess.run(args,capture_output=True,text=True,timeout=40)
+              return p.stdout.strip()
+          def info(project,service):
+              ids=call(["docker","ps","-aq","--filter","label=com.docker.compose.project="+project,"--filter","label=com.docker.compose.service="+service]).splitlines()
+              if len(ids)!=1:return None
+              return json.loads(call(["docker","inspect",ids[0]]))[0]
+          for project,service in (("dhole","dhole-agent-api"),("dhole-agent-prod1","dhole-agent-api-prod1"),("dhole-agent-prod2","dhole-agent-api"),("dhole-agent-prod2","dhole-agent-workers")):
+              item=info(project,service)
+              if item is None:print("DRIFT_SERVICE_MISSING",project,service);continue
+              env=dict(k.split("=",1) for k in item["Config"].get("Env",[]) if "=" in k)
+              print("DRIFT_SERVICE",project,service,"state="+item["State"]["Status"],"image="+item["Image"][:22])
+              print("DRIFT_CONFIG",project,"has_database="+str("Postgres__ConnectionString" in env),"has_auth_authority="+str("Auth__Authority" in env))
+              if project=="dhole-agent-prod2" and service=="dhole-agent-api":
+                  logs=call(["docker","logs","--since","8h","--tail","20000",item["Id"]])
+                  print("DRIFT_NPGSQL_USER_TRANSACTION",logs.lower().count("does not support user-initiated transactions"))
+                  print("DRIFT_NPGSQL_RETRYING",logs.count("NpgsqlRetryingExecutionStrategy"))
+          for image in ("dhole/agent-api:master-4bea7dfabeb7","dhole/agent-api:latest"):
+              data=call(["docker","image","inspect","--format","{{.Id}}",image])
+              print("DRIFT_PINNED_IMAGE",image,"image="+data[:22] if data else "missing")
+          PY
