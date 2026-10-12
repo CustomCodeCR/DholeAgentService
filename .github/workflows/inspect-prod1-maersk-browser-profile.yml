@@ -1,0 +1,69 @@
+name: Inspect existing Maersk browser profile on prod1 (read-only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/inspect-prod1-maersk-browser-profile.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 4
+    steps:
+      - name: Verify persisted profile mount and existing Chromium metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,subprocess,os
+          project="dhole-agent-prod1"
+          service="dhole-agent-workers-prod1"
+          credential="70ccf773-c95a-4ed8-9905-8df77cd1c126"
+          provider="2155f49f-ef15-43a5-9cc1-55203598af59"
+          def call(a,**kw):
+              return subprocess.run(a,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=40,**kw)
+          ids=call(["docker","ps","-q","--filter",f"label=com.docker.compose.project={project}","--filter",f"label=com.docker.compose.service={service}"]).stdout.splitlines()
+          assert len(ids)==1,"Expected exactly one running prod1 worker"
+          worker=json.loads(call(["docker","inspect",ids[0]]).stdout)[0]
+          print("PROFILE_DIAG_WORKER_STATE",worker["State"]["Status"])
+          mounts=[m for m in worker["Mounts"] if m["Destination"]=="/data/browser-profiles"]
+          assert len(mounts)==1 and mounts[0]["Type"]=="volume","Expected exact named profile volume"
+          print("PROFILE_DIAG_VOLUME_ATTACHED",bool(mounts))
+          print("PROFILE_DIAG_VOLUME_NAME",mounts[0]["Name"])
+          profile="/data/browser-profiles/MAERSK/"+credential.replace("-","")
+          cmd="""set -eu
+          p="$1"
+          test -d "$p" && echo PROFILE_DIAG_PATH_EXISTS=true || { echo PROFILE_DIAG_PATH_EXISTS=false; exit 0; }
+          for item in "Local State" "Default/Preferences" "Default/Cookies" "Default/Network/Cookies" "Default/Local Storage" "Default/Session Storage"; do
+            if test -e "$p/$item"; then
+              echo "PROFILE_DIAG_ARTIFACT_$(printf '%s' "$item" | tr ' /' '__')=present"
+            else echo "PROFILE_DIAG_ARTIFACT_$(printf '%s' "$item" | tr ' /' '__')=absent"
+            fi
+          done
+          find "$p" -maxdepth 1 -mindepth 1 -type d | wc -l | awk '{print "PROFILE_DIAG_SUBDIR_COUNT="$1}'
+          """
+          out=call(["docker","exec",ids[0],"bash","-c",cmd,"--",profile])
+          assert out.returncode==0,"Profile inspection failed"
+          for line in out.stdout.splitlines():
+              if line.startswith("PROFILE_DIAG_"): print(line)
+          source=call(["docker","ps","-q","--filter","label=com.docker.compose.project=dhole","--filter","label=com.docker.compose.service=dhole-agent-api"]).stdout.splitlines()
+          assert len(source)==1,"Expected one primary API"
+          api=json.loads(call(["docker","inspect",source[0]]).stdout)[0]
+          env=dict(v.split("=",1) for v in api["Config"]["Env"] if "=" in v)
+          value=env.get("Postgres__ConnectionString") or env.get("AGENT_POSTGRES_CONNECTION_STRING")
+          assert value,"DB config missing"
+          conn=dict(x.split("=",1) for x in value.split(";") if "=" in x)
+          assert all(conn.get(k) for k in ("Database","Username","Password")),"DB connection incomplete"
+          sql=f"""SELECT 'credential_exists',COUNT(*)::text FROM agent."AgentCredentials" WHERE id='{credential}' AND provider_id='{provider}' UNION ALL SELECT 'registered_profiles',COUNT(*)::text FROM agent."BrowserProfiles" WHERE provider_id='{provider}' UNION ALL SELECT 'active_profiles',COUNT(*)::text FROM agent."BrowserProfiles" WHERE provider_id='{provider}' AND is_active=true AND NOT is_deleted;"""
+          env2=os.environ.copy();env2["PGPASSWORD"]=conn["Password"];env2["PGOPTIONS"]="-c default_transaction_read_only=on"
+          db=call(["docker","run","--rm","--pull","never","--network","dhole","-e","PGPASSWORD","-e","PGOPTIONS","postgres:17-alpine","psql","-X","-A","-t","-F","=","-v","ON_ERROR_STOP=1","-h",conn.get("Host","postgres"),"-p",conn.get("Port","5432"),"-U",conn["Username"],"-d",conn["Database"],"-c",sql],env=env2)
+          assert db.returncode==0,"Read-only database check failed"
+          for line in db.stdout.splitlines():
+              if line.startswith(("credential_exists=","registered_profiles=","active_profiles=")):
+                  print("PROFILE_DIAG_DB",line)
+          print("PROFILE_DIAG_DONE_READ_ONLY")
+          PY
