@@ -1,0 +1,87 @@
+name: Diagnose prod1 noVNC and Chromium session (read-only)
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/diagnose-prod1-novnc-session.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-prod1-novnc-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 4
+    steps:
+      - name: Inspect original prod1 Worker VNC and Chromium without changing state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,urllib.request,socket,base64,os
+          def run(a, timeout=25):
+              return subprocess.run(a,text=True,capture_output=True,timeout=timeout)
+          ids=run(["docker","ps","-q","--filter","label=com.docker.compose.project=dhole-agent-prod1","--filter","label=com.docker.compose.service=dhole-agent-workers-prod1"]).stdout.splitlines()
+          if len(ids)!=1:
+              print("NOVNC_DIAG_OWNER_INVALID",len(ids));raise SystemExit(1)
+          worker=json.loads(run(["docker","inspect",ids[0]]).stdout)[0]
+          print("NOVNC_DIAG_WORKER_RUNNING",worker["State"]["Status"]=="running")
+          ports=worker.get("HostConfig",{}).get("PortBindings",{}).get("6080/tcp") or []
+          for p in ports:
+              print("NOVNC_DIAG_PORT_BINDING",p.get("HostIp"),p.get("HostPort"))
+          print("NOVNC_DIAG_PORT_EXPECTED_6082",any(p.get("HostPort")=="6082" and p.get("HostIp") in ("127.0.0.1","::1") for p in ports))
+          env=dict(s.split("=",1) for s in worker["Config"].get("Env",[]) if "=" in s)
+          for name in ("AGENT_NOVNC_ENABLED","AGENT_NOVNC_PORT","DISPLAY","Browser__Headless"):
+              print("NOVNC_DIAG_CONFIG",name,env.get(name,"unset"))
+          script=r"""
+          set -u
+          for item in Xvfb x11vnc websockify chromium chrome dotnet; do
+            ids=$(pgrep -fa "$item" 2>/dev/null | grep -v -E 'bash -c|pgrep -fa' || true)
+            if [ -n "$ids" ]; then
+              echo "NOVNC_DIAG_PROCESS $item present"
+            else
+              echo "NOVNC_DIAG_PROCESS $item absent"
+            fi
+          done
+          for port in 5900 6080; do
+            if timeout 2 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+              echo "NOVNC_DIAG_INTERNAL_PORT $port open"
+            else
+              echo "NOVNC_DIAG_INTERNAL_PORT $port closed"
+            fi
+          done
+          if [ -S /tmp/.X11-unix/X99 ]; then echo 'NOVNC_DIAG_X11_SOCKET ready'; else echo 'NOVNC_DIAG_X11_SOCKET missing'; fi
+          for file in /tmp/agent-xvfb.log /tmp/agent-x11vnc.log /tmp/agent-novnc.log; do
+            if [ -f "$file" ]; then
+              bytes=$(wc -c < "$file")
+              echo "NOVNC_DIAG_COMPONENT_LOG $(basename "$file") bytes=$bytes"
+            fi
+          done
+          """
+          p=run(["docker","exec",ids[0],"bash","-c",script])
+          for line in p.stdout.splitlines():
+              if line.startswith("NOVNC_DIAG_"):print(line)
+          print("NOVNC_DIAG_WORKER_INSPECT_EXIT",p.returncode)
+          if any(p.get("HostPort")=="6082" for p in ports):
+              try:
+                  req=urllib.request.Request("http://127.0.0.1:6082/vnc.html",headers={"User-Agent":"local-novnc-probe"})
+                  with urllib.request.urlopen(req,timeout=7) as resp:
+                      print("NOVNC_DIAG_HTML_STATUS",resp.status,"content_type",resp.headers.get("Content-Type","unknown"))
+              except Exception as ex:
+                  print("NOVNC_DIAG_HTML_ERROR",type(ex).__name__)
+              try:
+                  s=socket.create_connection(("127.0.0.1",6082),timeout=5)
+                  s.sendall(b"GET /websockify HTTP/1.1\r\nHost: localhost:6082\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+                  response=s.recv(512).decode("latin-1","replace").split("\r\n")[0]
+                  print("NOVNC_DIAG_WEBSOCKET_STATUS",response[:95])
+                  s.close()
+              except Exception as ex:
+                  print("NOVNC_DIAG_WEBSOCKET_ERROR",type(ex).__name__)
+          logs=run(["docker","logs","--since","20m","--tail","1200",ids[0]])
+          all_logs=logs.stdout+"\n"+logs.stderr
+          for marker in ("AGENT_WORKER_XVFB_READY","AGENT_WORKER_X11VNC_READY","AGENT_WORKER_NOVNC_READY","AGENT_WORKER_DOTNET_STARTING","AGENT_EXECUTION_RUNNING","AGENT_QUEUE_CLAIMED"):
+              print("NOVNC_DIAG_MARKER",marker,all_logs.count(marker))
+          print("NOVNC_DIAG_COMPLETE_READ_ONLY")
+          PY
