@@ -31,6 +31,8 @@ on:
   # Preserve protected backups, schema gates, worker drain and rollback on both environments.
   # Authorized 2026-10-12 retry-safe Npgsql hotfix; deploy staged Agent API and
   # Worker before the generation-aware prod1 release. Keep full snapshot gates.
+  # Final retry-safe Maersk circuit release: restore atomic failure deduplication
+  # in develop and verify under enabled PostgreSQL retrying execution strategy.
   # Only this workflow's explicitly authorized YAML change triggers the
   # guarded staging deploy; ordinary develop pushes remain validation-only.
   push:
