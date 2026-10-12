@@ -35,6 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Standby operator readiness safety regression
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/operator-attest-generation-readiness.py
+          python3 -m unittest discover -s tests -p test_operator_standby_readiness.py -v
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
