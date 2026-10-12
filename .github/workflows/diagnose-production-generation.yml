@@ -1,5 +1,6 @@
 name: Diagnose Agent generation health (read-only)
 
+# Second read-only run: classify prod2 API restart and missing config keys.
 on:
   push:
     branches: [master, develop]
