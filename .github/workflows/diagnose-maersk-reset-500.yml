@@ -21,7 +21,7 @@ jobs:
           python3 - <<'PY'
           import subprocess,json,re,os,sys
           PROVIDER="2155f49f-ef15-43a5-9cc1-55203598af59"
-          MARKERS=("0HNP81I5M5H1F","0HNP660QNPS1M","ResetByOperatorAsync","/maersk-circuit/","maersk-circuit","PostgresMaerskCircuitBreaker")
+          MARKERS=("0HNP81I5M5H1H","0HNP660QNPSCD","ResetByOperatorAsync","/maersk-circuit/","maersk-circuit","PostgresMaerskCircuitBreaker")
           def command(args,**kw):
               return subprocess.run(args,capture_output=True,text=True,timeout=45,**kw)
           rows={}
@@ -56,7 +56,7 @@ jobs:
               out=command(["docker","logs","--since","40m",ids])
               log=(out.stdout+"\\n"+out.stderr)
               types={}
-              for exc in re.findall(r"\\b(?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[.][\\w.]*Exception\\b",log):
+              for exc in re.findall(r"\b(?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[.][\w.]*Exception\b",log):
                   types[exc]=types.get(exc,0)+1
               for exc,n in sorted(types.items(),key=lambda x:-x[1])[:12]:
                   print("RESET_DIAG_RECENT_EXCEPTION_TYPE",key[0],key[1],exc,n)
