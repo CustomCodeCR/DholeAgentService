@@ -1,4 +1,5 @@
 using Dhole.Agent.Domain.Agents;
+using System.Text.Json;
 
 namespace Dhole.Agent.Application.Runtime;
 
@@ -22,5 +23,37 @@ public static class MaerskSessionVerification
            && execution.ProviderId == provider.Id
            && execution.ExecutionType == AgentExecutionType.Manual
            && execution.MaxAttempts == 1
-           && string.Equals(execution.InputJson, InputJson, StringComparison.Ordinal);
+           && HasExactVerificationMarker(execution.InputJson);
+
+    // EF Core stores execution.input_json as PostgreSQL jsonb. PostgreSQL
+    // normalizes whitespace/key layout (for example, {"flag": true}), so an
+    // ordinal string comparison to serialized JSON would reject legitimate
+    // operator-requested verification tasks forever while the circuit is Open.
+    // Parse the semantic marker instead, but reject any additional input
+    // fields to keep this strictly authentication-only.
+    private static bool HasExactVerificationMarker(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var properties = doc.RootElement.EnumerateObject();
+            if (!properties.MoveNext()) return false;
+            var property = properties.Current;
+            if (property.Name != "maerskSessionVerification"
+                || property.Value.ValueKind != JsonValueKind.True)
+                return false;
+
+            // A second property (including duplicate marker keys) disqualifies
+            // any job from bypassing the normal provider circuit pause.
+            return !properties.MoveNext();
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }

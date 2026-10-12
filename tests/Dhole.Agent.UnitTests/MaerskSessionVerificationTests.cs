@@ -24,6 +24,29 @@ public sealed class MaerskSessionVerificationTests
         Assert.IsTrue(MaerskSessionVerification.IsExplicit(
             Make(AgentExecutionType.Manual, MaerskSessionVerification.InputJson),
             definition, provider));
+        // PostgreSQL jsonb normalizes the stored JSON. A byte-for-byte
+        // string compare used to leave this legitimate auth job Queued at 0/1.
+        Assert.IsTrue(MaerskSessionVerification.IsExplicit(
+            Make(AgentExecutionType.Manual, "{ \"maerskSessionVerification\" : true }"),
+            definition, provider));
+        Assert.IsTrue(MaerskSessionVerification.IsExplicit(
+            Make(AgentExecutionType.Manual, "{\n  \"maerskSessionVerification\": true\n}"),
+            definition, provider));
+        foreach (var malformedOrUnsafe in new[]
+        {
+            "{\"maerskSessionVerification\":false}",
+            "{\"maerskSessionVerification\":\"true\"}",
+            "{\"maerskSessionVerification\":true,\"commodity\":\"TIRES\"}",
+            "{\"maerskSessionVerification\":true,\"maerskSessionVerification\":true}",
+            "{\"maerskSessionVerification\":true",
+            "{}",
+            "null"
+        })
+        {
+            Assert.IsFalse(MaerskSessionVerification.IsExplicit(
+                Make(AgentExecutionType.Manual, malformedOrUnsafe),
+                definition, provider), malformedOrUnsafe);
+        }
         Assert.IsFalse(MaerskSessionVerification.IsExplicit(
             Make(AgentExecutionType.Scheduled, MaerskSessionVerification.InputJson),
             definition, provider));
