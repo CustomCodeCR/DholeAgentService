@@ -1,0 +1,74 @@
+name: Diagnose queued Maersk verification (read-only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-queued-maersk-verification.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect active Worker, verification DB row and queue lease without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,os,re
+          PROVIDER="2155f49f-ef15-43a5-9cc1-55203598af59"
+          PREFIX="1458fd4a"
+          def cmd(args,env=None,timeout=50):
+              p=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,timeout=timeout)
+              if p.returncode:raise RuntimeError("DIAG_COMMAND_FAILED code="+str(p.returncode)+" op="+args[0])
+              return p.stdout.strip()
+          def service(project,name):
+              ids=cmd(["docker","ps","-q","--filter",f"label=com.docker.compose.project={project}","--filter",f"label=com.docker.compose.service={name}"]).splitlines()
+              if len(ids)!=1:raise RuntimeError("DIAG_UNEXPECTED_CONTAINERS "+project+"/"+name+" "+str(len(ids)))
+              return json.loads(cmd(["docker","inspect",ids[0]]))[0]
+          w=service("dhole-agent-prod1","dhole-agent-workers-prod1")
+          print("MAERSK_VERIFY_WORKER","running="+str(w["State"]["Status"]=="running"),"image="+w["Image"][:22])
+          e=dict(x.split("=",1) for x in w["Config"].get("Env",[]) if "=" in x)
+          for k in ("AgentQueue__ConcurrentDispatcherEnabled","AgentQueue__MaxConcurrentExecutions","AgentQueue__MaxConcurrentMaersk","AgentQueue__PollIntervalSeconds","MaerskCircuit__Enabled"):
+              value=e.get(k,"missing")
+              print("MAERSK_VERIFY_OPTION",k,value if re.fullmatch(r"(true|false|\d+|missing)",value,re.I) else "redacted")
+          out=subprocess.run(["docker","logs","--since","90m","--tail","10000",w["Id"]],capture_output=True,text=True,timeout=45)
+          log=out.stdout+"\n"+out.stderr
+          for marker in ("AGENT_QUEUE_CONCURRENT_STARTED","AGENT_QUEUE_DISPATCH_ERROR","AGENT_QUEUE_CLAIMED","AGENT_QUEUE_JOB_FAILED","AGENT_EXECUTION_RUNNING","MAERSK_CIRCUIT_DISPATCH_PAUSED","AGENT_QUEUE_TRANSIENT_BACKOFF"):
+              print("MAERSK_VERIFY_LOG_COUNTER",marker,log.count(marker))
+          for l in log.splitlines():
+              if PREFIX in l:
+                  print("MAERSK_VERIFY_EXECUTION_LOG",("claimed" if "CLAIM" in l else "running" if "RUNNING" in l else "paused" if "PAUSED" in l else "other"),"error="+str("error" in l.lower()))
+          main=service("dhole","dhole-agent-api")
+          env=dict(x.split("=",1) for x in main["Config"]["Env"] if "=" in x)
+          conn=env.get("Postgres__ConnectionString") or env.get("AGENT_POSTGRES_CONNECTION_STRING")
+          if not conn:raise RuntimeError("NO_DB_CONFIG")
+          c=dict(x.split("=",1) for x in conn.split(";") if "=" in x)
+          if not all(c.get(k) for k in ("Database","Username","Password")):raise RuntimeError("NO_DB_KEYS")
+          penv=os.environ.copy();penv["PGPASSWORD"]=c["Password"];penv["PGOPTIONS"]="-c default_transaction_read_only=on"
+          base=["docker","run","--rm","--pull","never","--network","dhole","-e","PGPASSWORD","-e","PGOPTIONS","postgres:17-alpine","psql","-X","-t","-A","-F","|","-v","ON_ERROR_STOP=1","-h",c.get("Host","postgres"),"-p",c.get("Port","5432"),"-U",c["Username"],"-d",c["Database"]]
+          def q(label,statement):
+              p=subprocess.run(base+["-c",statement],env=penv,capture_output=True,text=True,timeout=50)
+              if p.returncode:
+                  print("MAERSK_VERIFY_DB_QUERY_ERROR",label,"code="+str(p.returncode))
+                  return
+              for line in p.stdout.splitlines()[:15]:
+                  if len(line)<280 and re.fullmatch(r"[\w. :|+\-/]+",line):
+                      print("MAERSK_VERIFY_DB",label,line)
+          q("verification",f"""SELECT e.id::text,e.status,e.attempt,e.max_attempts,e.priority,e.execution_type,
+               coalesce(e.next_attempt_at_utc::text,'none'),d.code,d.action_type,e.input_json
+               FROM agent."AgentExecutions" e JOIN agent."AgentDefinitions" d ON e.agent_definition_id=d."Id"
+               WHERE e.id::text LIKE '{PREFIX}%' LIMIT 2""")
+          q("queued_manual",f"""SELECT d.code,e.status,e.attempt,e.priority,count(*)
+               FROM agent."AgentExecutions" e
+               JOIN agent."AgentDefinitions" d ON e.agent_definition_id=d."Id"
+               WHERE e.status='Queued' AND e.execution_type='Manual'
+               GROUP BY d.code,e.status,e.attempt,e.priority ORDER BY count(*) DESC LIMIT 12""")
+          q("lease",f"""SELECT lease_scope,execution_id::text,owner_id::text,expires_at_utc>now()
+               FROM agent.execution_leases WHERE lease_scope LIKE 'maersk:%' LIMIT 5""")
+          q("active",f"""SELECT count(*) FROM agent."AgentExecutions"
+                WHERE provider_id='{PROVIDER}' AND status='Running'""")
+          q("circuit",f"""SELECT state,requires_operator FROM agent.maersk_circuits WHERE provider_id='{PROVIDER}'""")
+          print("MAERSK_VERIFY_DIAG_READ_ONLY_FINISHED")
+          PY
