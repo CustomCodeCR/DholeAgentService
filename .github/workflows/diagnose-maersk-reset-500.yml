@@ -48,6 +48,22 @@ jobs:
                       frame=re.search(r"(?:at |   at )((?:Dhole|Microsoft[.]EntityFrameworkCore|Npgsql)[\w.]+)\(",line)
                       if frame: print("RESET_DIAG_STACK",project,service,frame.group(1)[:170])
                   for exc in sorted(found_types):print("RESET_DIAG_EXCEPTION",project,service,exc)
+          # An upstream gateway may strip method names from log messages; collect
+          # only exception *types* and SQLSTATE codes across recent API logs.
+          for key,container in rows.items():
+              if "api" not in key[1]:continue
+              ids=container.get("Id")
+              out=command(["docker","logs","--since","40m",ids])
+              log=(out.stdout+"\\n"+out.stderr)
+              types={}
+              for exc in re.findall(r"\\b(?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[.][\\w.]*Exception\\b",log):
+                  types[exc]=types.get(exc,0)+1
+              for exc,n in sorted(types.items(),key=lambda x:-x[1])[:12]:
+                  print("RESET_DIAG_RECENT_EXCEPTION_TYPE",key[0],key[1],exc,n)
+              for code in sorted(set(re.findall(r"(?i)(?:sqlstate|sql state)[\\s:=\\\"]+([0-9A-Z]{5})",log))):
+                  print("RESET_DIAG_RECENT_SQLSTATE",key[0],code)
+              for phrase in ("An unhandled exception","ExceptionHandlerMiddleware","Request finished","DbUpdateException","PostgresException","InvalidOperationException","The LINQ expression","Connection is already open"):
+                  print("RESET_DIAG_RECENT_TERM",key[0],phrase.replace(" ","_"),log.lower().count(phrase.lower()))
           source=rows.get(("dhole","dhole-agent-api"))
           if not source:raise SystemExit("RESET_DIAG_NO_API")
           env=dict(x.split("=",1) for x in source["Config"].get("Env",[]) if "=" in x)
@@ -69,6 +85,7 @@ jobs:
                           print("RESET_DIAG_DB",name,line)
           query("circuit",f"""SELECT state,requires_operator,reason_code,updated_at_utc FROM agent.maersk_circuits WHERE provider_id='{PROVIDER}'""")
           query("profiles",f"""SELECT status,count(*),count(*) FILTER (WHERE last_login_at IS NOT NULL AND last_login_at>(SELECT updated_at_utc FROM agent.maersk_circuits WHERE provider_id='{PROVIDER}')) AS verified_after_block FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}' AND NOT is_deleted AND is_active GROUP BY status ORDER BY status""")
+          query("profile_summary",f"""SELECT count(*),count(*) FILTER (WHERE is_active AND NOT is_deleted),count(*) FILTER (WHERE status='Authenticated' AND is_active AND NOT is_deleted),count(*) FILTER (WHERE is_active AND NOT is_deleted AND status IN ('Blocked','Expired','ResetRequested')) FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}'""")
           query("running",f"""SELECT count(*) FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND status='Running'""")
           print("RESET_DIAG_FINISHED_READ_ONLY")
           PY
