@@ -1,0 +1,39 @@
+name: Diagnose generation SQL timeout (read-only)
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-generation-sql-timeout.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Prepare protected production DB environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/gen-sql-diagnostic"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/gen-sql-diagnostic" >/dev/null
+          chmod 600 "$RUNNER_TEMP/gen-sql-diagnostic/.env.production"
+          echo "GEN_SQL_PRIVATE_ENV=$RUNNER_TEMP/gen-sql-diagnostic/.env.production" >> "$GITHUB_ENV"
+      - name: Probe cached postgres Docker images and read-only DB latency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/diagnose-generation-sql-timeout.py
+          python3 scripts/diagnose-generation-sql-timeout.py --env-file "$GEN_SQL_PRIVATE_ENV"
