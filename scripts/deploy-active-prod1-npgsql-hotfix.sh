@@ -2,18 +2,18 @@
 # Single-owner production hotfix for already ACTIVE prod1. Never starts prod.
 set -Eeuo pipefail
 set +x
-sha="\${1:?Approved staging SHA required}"
-system="\${2:?DholeSystem checkout required}"
-runtime="\${3:?Protected production env required}"
-backup_root="\${4:?Durable backup root required}"
+sha="${1:?Approved staging SHA required}"
+system="${2:?DholeSystem checkout required}"
+runtime="${3:?Protected production env required}"
+backup_root="${4:?Durable backup root required}"
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$backup_root" == /* ]] || exit 2
-[[ "\${GITHUB_REF:-}" == refs/heads/master && "\${GITHUB_EVENT_NAME:-}" == push ]] || exit 2
+[[ "${GITHUB_REF:-}" == refs/heads/master && "${GITHUB_EVENT_NAME:-}" == push ]] || exit 2
 [[ -r "$runtime" && -f "$system/deploy/docker-compose.agent-prod1.yml" ]] || exit 2
 export DHOLE_ENV_FILE="$runtime" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest AGENT_GENERATION=prod1
 primary=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.services.yml" -p dhole)
 active=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.agent-prod1.yml" -p dhole-agent-prod1 --profile activated)
-"\${primary[@]}" config -q
-"\${active[@]}" config -q
+"${primary[@]}" config -q
+"${active[@]}" config -q
 fail(){ echo "PROD1_HOTFIX_REFUSED: $*" >&2; exit 1; }
 id(){
   local ids
@@ -40,7 +40,7 @@ spec=importlib.util.spec_from_file_location("owner",Path("scripts/production-gen
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 assert m.find_running_generation()[0]=="prod1"
 PY
-short="\${sha:0:12}"
+short="${sha:0:12}"
 for n in agent-api agent-workers; do
   docker image inspect "dhole/$n:staging-$short" >/dev/null || fail "missing validated stage artifact $n"
 done
@@ -58,7 +58,7 @@ old_api_keys="$(mount "$api" /data/agent-keys)"
   fail 'persistent mounts mismatch'
 [[ "$old_browser" != "$(mount "$main_worker" /data/browser-profiles)" ]] ||
   fail 'browser profile isolation failed'
-suffix="\${GITHUB_RUN_ID:-hotfix}"
+suffix="${GITHUB_RUN_ID:-hotfix}"
 docker image tag "$old_worker" "dhole/agent-workers:rollback-prod1-$suffix"
 docker image tag "$old_api" "dhole/agent-api:rollback-prod1-$suffix"
 docker image tag "$old_main_api" "dhole/agent-api:rollback-prod-$suffix"
@@ -75,10 +75,10 @@ rollback(){
     if [[ "$changed" == 1 ]]; then
       docker image tag "dhole/agent-workers:rollback-prod1-$suffix" dhole/agent-workers:latest
       docker image tag "dhole/agent-api:rollback-prod1-$suffix" dhole/agent-api:latest
-      "\${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api-prod1
-      "\${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-workers-prod1
+      "${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api-prod1
+      "${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-workers-prod1
       docker image tag "dhole/agent-api:rollback-prod-$suffix" dhole/agent-api:latest
-      "\${primary[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api
+      "${primary[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api
     else
       docker start "$worker"
     fi
@@ -125,9 +125,9 @@ echo 'PROD1_HOTFIX_PROTECTED_BACKUPS_VERIFIED'
 changed=1
 docker image tag "dhole/agent-api:staging-$short" dhole/agent-api:latest
 docker image tag "dhole/agent-workers:staging-$short" dhole/agent-workers:latest
-"\${primary[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api
-"\${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api-prod1
-"\${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-workers-prod1
+"${primary[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api
+"${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api-prod1
+"${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-workers-prod1
 new_worker="$(id dhole-agent-prod1 dhole-agent-workers-prod1)"
 new_api="$(id dhole-agent-prod1 dhole-agent-api-prod1)"
 new_primary_api="$(id dhole dhole-agent-api)"
