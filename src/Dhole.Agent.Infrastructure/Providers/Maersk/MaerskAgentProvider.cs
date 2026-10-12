@@ -76,7 +76,11 @@ public sealed class MaerskAgentProvider(
 
         await using var heldProfileLock = profileLock;
 
-        var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
+        var verificationOnly = MaerskSessionVerification.IsExplicit(
+            context.Execution, context.Definition, context.Provider);
+        var plan = verificationOnly
+            ? new PlanResolution(true, null, null, CurrentMaerskBookingUrl, null, null, null, null)
+            : BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
 
