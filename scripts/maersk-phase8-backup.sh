@@ -10,8 +10,9 @@ backup_root="${2:?Durable backup root required}"
 die() { printf 'Phase 8 backup failed: %s\n' "$*" >&2; exit 1; }
 
 case "$environment" in
-  staging) project="dhole-staging"; network="dhole-staging" ;;
-  production) project="dhole"; network="dhole" ;;
+  staging) project="dhole-staging"; network="dhole-staging"; worker_service="dhole-agent-workers" ;;
+  production) project="dhole"; network="dhole"; worker_service="dhole-agent-workers" ;;
+  prod1) project="dhole-agent-prod1"; network="dhole"; worker_service="dhole-agent-workers-prod1" ;;
   *) die "Invalid environment" ;;
 esac
 
@@ -24,7 +25,7 @@ command -v docker >/dev/null || die "Docker is required"
 # Do not copy a live Chromium profile, and never interrupt a running execution.
 # Operators must drain the job queue and stop just this worker beforehand.
 worker="$(docker ps -q --filter "label=com.docker.compose.project=$project" \
-  --filter "label=com.docker.compose.service=dhole-agent-workers" | head -n 1)"
+  --filter "label=com.docker.compose.service=$worker_service" | head -n 1)"
 [[ -z "$worker" ]] || die "Agent worker is running; drain jobs and stop it before taking a consistent profile snapshot"
 
 connection="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$DHOLE_ENV_FILE" | head -n 1 | tr -d '\r')"
@@ -41,8 +42,19 @@ host="${host:-postgres}"
 port="${port:-5432}"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || die "Invalid database configuration"
 
-profile_volume="${project}_agent-browser-profiles"
-keys_volume="${project}_agent-data-protection-keys"
+if [[ "$environment" == prod1 ]]; then
+  # Discover persistent volume names from the already-provisioned prod1
+  # container; never guess paths or copy profiles from the primary generation.
+  worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+    --filter "label=com.docker.compose.service=$worker_service")"
+  [[ -n "$worker_container" ]] || die 'Existing prod1 Worker container missing'
+  profile_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/browser-profiles"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
+  keys_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/agent-keys"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
+  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing prod1 persistent mount'
+else
+  profile_volume="${project}_agent-browser-profiles"
+  keys_volume="${project}_agent-data-protection-keys"
+fi
 docker volume inspect "$profile_volume" >/dev/null || die "Browser-profile volume does not exist: $profile_volume"
 docker volume inspect "$keys_volume" >/dev/null || die "Data-protection volume does not exist: $keys_volume"
 
