@@ -1,0 +1,92 @@
+name: Refresh dormant Agent standby images safely
+
+# Explicit one-time operator-requested production repair, triggered by publishing
+# this reviewed workflow on master. Future ordinary code/deploy pushes do not
+# trigger a standby refresh. Manual repeats require an exact confirmation.
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/refresh-dormant-standby-images.yml
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: "Stopped standby generation to refresh"
+        type: choice
+        options: [prod1, prod2]
+        required: true
+      confirmation:
+        description: "Type SYNC_DORMANT_STANDBY_IMAGES; previous provider attestation will be invalidated"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - name: Checkout reviewed standby repair
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Validate protected production repair intent
+        shell: bash
+        env:
+          GENERATION: ${{ github.event_name == 'push' && 'prod1' || inputs.generation }}
+          CONFIRMATION: ${{ github.event_name == 'push' && 'SYNC_DORMANT_STANDBY_IMAGES' || inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || {
+            echo 'GENERATION_STANDBY_SYNC_REFUSED: protected_master_required' >&2
+            exit 2
+          }
+          [[ "$GENERATION" == prod1 || "$GENERATION" == prod2 ]] || exit 2
+          [[ "$CONFIRMATION" == SYNC_DORMANT_STANDBY_IMAGES ]] || {
+            echo 'GENERATION_STANDBY_SYNC_REFUSED: confirmation_required' >&2
+            exit 2
+          }
+          python3 -m py_compile scripts/synchronize-dormant-generation-images.py
+          python3 -m unittest discover -s tests -p test_dormant_standby_image_sync.py -v
+          echo "GENERATION_STANDBY_SYNC_WORKFLOW_VERIFIED"
+          echo "STANDBY_GENERATION=$GENERATION" >> "$GITHUB_ENV"
+
+      - name: Load protected production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/dormant-standby-image-sync"
+          chmod 700 "$RUNNER_TEMP/dormant-standby-image-sync"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/dormant-standby-image-sync" >/dev/null
+          chmod 600 "$RUNNER_TEMP/dormant-standby-image-sync/.env.production"
+          echo "STANDBY_SYNC_ENV=$RUNNER_TEMP/dormant-standby-image-sync/.env.production" >> "$GITHUB_ENV"
+
+      - name: Preflight stopped standby and image provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/synchronize-dormant-generation-images.py \
+            --mode check --generation "$STANDBY_GENERATION" \
+            --system .dhole-system --env-file "$STANDBY_SYNC_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
+
+      - name: Refresh only dormant standby API and inactive Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/synchronize-dormant-generation-images.py \
+            --mode apply --generation "$STANDBY_GENERATION" \
+            --confirmation SYNC_DORMANT_STANDBY_IMAGES \
+            --system .dhole-system --env-file "$STANDBY_SYNC_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
+          # This workflow does NOT switch Worker ownership or authorize Maersk.
