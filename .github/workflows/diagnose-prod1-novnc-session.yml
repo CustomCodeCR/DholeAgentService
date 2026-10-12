@@ -64,6 +64,15 @@ jobs:
           for line in p.stdout.splitlines():
               if line.startswith("NOVNC_DIAG_"):print(line)
           print("NOVNC_DIAG_WORKER_INSPECT_EXIT",p.returncode)
+          # A local-only bind must be reached through SSH forwarding; a remote
+          # user's localhost:6080 is NOT this prod1 service.
+          for binding in ports:
+              host=binding.get("HostPort","")
+              interface=binding.get("HostIp","")
+              if host.isdigit() and interface in ("127.0.0.1","::1"):
+                  print("NOVNC_DIAG_SERVER_LOOPBACK_PORT",host)
+                  print("NOVNC_DIAG_ACCESS_MODE","SSH_LOCAL_PORT_FORWARD_REQUIRED")
+          print("NOVNC_DIAG_HEADLESS_SESSION_NOTE","VNC desktop may be empty if Chromium is not running")
           if any(p.get("HostPort")=="6082" for p in ports):
               try:
                   req=urllib.request.Request("http://127.0.0.1:6082/vnc.html",headers={"User-Agent":"local-novnc-probe"})
