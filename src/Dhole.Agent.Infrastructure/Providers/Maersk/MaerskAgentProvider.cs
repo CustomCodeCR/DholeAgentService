@@ -245,6 +245,16 @@ public sealed class MaerskAgentProvider(
                 ex.Message);
         }
 
+        if (verificationOnly)
+        {
+            // No search parameters, offers, UI search, or provider replay.
+            // The circuit remains open until a separate operator reset.
+            return AgentProviderExecutionResult.Completed(
+                "{\"verificationOnly\":true,\"provider\":\"MAERSK\",\"sessionVerified\":true}",
+                "MaerskSessionVerification", "1.0",
+                "{\"verificationOnly\":true,\"sessionVerified\":true}");
+        }
+
         var results = new List<object>();
         var errors = new List<object>();
         var completed = 0;
