@@ -45,7 +45,7 @@ jobs:
                     "oom="+str(state.get("OOMKilled","?")),
                     "error_type="+str(bool(state.get("Error"))),
                     "restarts="+str(info.get("RestartCount","?")))
-              result=subprocess.run(["docker","logs","--since","15m","--tail","1500",info["Id"]],
+              result=subprocess.run(["docker","logs","--since","3m","--tail","1500",info["Id"]],
                                      capture_output=True,text=True,timeout=50)
               logs=(result.stdout+"\\n"+result.stderr).splitlines()
               marker_terms=("AGENT_WORKER_", "AGENT_QUEUE_", "Unhandled exception", "ExceptionHandler",
@@ -91,6 +91,13 @@ jobs:
           env_source=dict(line.split("=",1) for line in raw if "=" in line and not line.startswith("#"))
           for key in auth_keys:
               print("MAERSK_DIAG_SOURCE_KEY",key,"present="+str(bool(env_source.get(key,"").strip())))
+          for project,service,info in containers:
+              if project!="dhole-agent-prod1":continue
+              env=dict(item.split("=",1) for item in info["Config"].get("Env",[]) if "=" in item)
+              print("MAERSK_DIAG_POST_REPAIR",service,
+                    "status="+str(info["State"]["Status"]),
+                    "jwt_ready="+str(all(bool(env.get(k)) for k in ("Auth__Jwt__Issuer","Auth__Jwt__Audience","Auth__Jwt__SecretKey"))),
+                    "circuit="+str(env.get("MaerskCircuit__Enabled","missing")))
           workers=[i for p,s,i in containers if "workers" in s and i.get("State",{}).get("Status")=="running"]
           print("MAERSK_DIAG_ACTIVE_WORKER_COUNT",len(workers))
           if len(workers)!=1:
