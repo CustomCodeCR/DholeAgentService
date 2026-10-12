@@ -1,4 +1,5 @@
 name: Diagnose generation dispatch (read-only)
+# Inspect request queue and actual Worker owner after SQL helper repair.
 on:
   push:
     branches: [master, develop]
