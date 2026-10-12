@@ -1,0 +1,95 @@
+name: Repair shared Agent API DNS alias (prod2 only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/repair-agent-dns-collision.yml]
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Remove only duplicate prod2 API network alias with safe rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master && "$GITHUB_EVENT_NAME" == push ]] || exit 2
+          python3 - <<'PY'
+          import json,subprocess,time,sys
+          NETWORK="dhole"
+          PRIMARY_ALIAS="dhole-agent-api"
+          PROD2_ALIAS="agent-api-prod2"
+          PROD2_CONTAINER_ALIAS="dhole-agent-prod2-dhole-agent-api-1"
+          def run(*args,check=True):
+              x=subprocess.run(args,capture_output=True,text=True,timeout=30)
+              if check and x.returncode:
+                  raise RuntimeError("AGENT_DNS_COMMAND_FAILED operation="+str(args[:2])+" exit="+str(x.returncode))
+              return x.stdout.strip()
+          def container(project,service,running=True):
+              ids=run("docker","ps","-q" if running else "-aq",
+                  "--filter","label=com.docker.compose.project="+project,
+                  "--filter","label=com.docker.compose.service="+service).splitlines()
+              if len(ids)!=1:raise RuntimeError("AGENT_DNS_SERVICE_COUNT_INVALID "+project+"/"+service)
+              d=json.loads(run("docker","inspect",ids[0]))[0]
+              return d
+          main=container("dhole","dhole-agent-api")
+          standby=container("dhole-agent-prod2","dhole-agent-api")
+          owner=container("dhole-agent-prod1","dhole-agent-workers-prod1")
+          assert owner["State"]["Status"]=="running","prod1 Worker not running"
+          for project,service in (("dhole","dhole-agent-workers"),("dhole-agent-prod2","dhole-agent-workers")):
+              active=run("docker","ps","-q","--filter","label=com.docker.compose.project="+project,
+                 "--filter","label=com.docker.compose.service="+service)
+              assert not active,"Second Worker running"
+          assert main["State"]["Status"]=="running" and standby["State"]["Status"]=="running"
+          main_n=main["NetworkSettings"]["Networks"][NETWORK]
+          standby_n=standby["NetworkSettings"]["Networks"][NETWORK]
+          before=set(standby_n.get("Aliases") or [])
+          assert PRIMARY_ALIAS in (main_n.get("Aliases") or []),"Primary API alias missing"
+          assert PROD2_ALIAS in before,"prod2 unique alias missing"
+          primary_ip=main_n["IPAddress"]
+          assert primary_ip,"Primary API address missing"
+          gateway=container("dhole","api-gateway")
+          def resolution():
+              result=run("docker","exec",gateway["Id"],"getent","ahostsv4",PRIMARY_ALIAS,check=False)
+              return {line.split()[0] for line in result.splitlines() if line.strip()}
+          initial=resolution()
+          print("AGENT_DNS_BEFORE count="+str(len(initial))+" colliding="+str(primary_ip in initial and standby_n["IPAddress"] in initial))
+          if PRIMARY_ALIAS not in before and initial=={primary_ip}:
+              print("AGENT_DNS_ALREADY_REPAIRED");sys.exit(0)
+          assert primary_ip in initial and standby_n["IPAddress"] in initial,"Unexpected DNS state; refusing mutation"
+          changed=False
+          try:
+              run("docker","network","disconnect",NETWORK,standby["Id"])
+              changed=True
+              run("docker","network","connect","--alias",PROD2_ALIAS,
+                  "--alias",PROD2_CONTAINER_ALIAS,NETWORK,standby["Id"])
+              recovered=json.loads(run("docker","inspect",standby["Id"]))[0]
+              aliases=set(recovered["NetworkSettings"]["Networks"][NETWORK].get("Aliases") or [])
+              assert PRIMARY_ALIAS not in aliases,"Duplicate primary API alias remains"
+              assert PROD2_ALIAS in aliases,"Unique prod2 API alias missing"
+              clean=False
+              for _ in range(12):
+                  if resolution()=={primary_ip}:clean=True;break
+                  time.sleep(1)
+              assert clean,"Gateway still resolves multiple Agent API instances"
+              assert container("dhole-agent-prod1","dhole-agent-workers-prod1")["State"]["Status"]=="running"
+              assert not run("docker","ps","-q","--filter","label=com.docker.compose.project=dhole-agent-prod2",
+                             "--filter","label=com.docker.compose.service=dhole-agent-workers")
+              print("AGENT_DNS_COLLISION_RESOLVED gateway_target=primary_only active_worker=prod1")
+              print("AGENT_DNS_PROD2_API_PRESERVED unique_alias="+PROD2_ALIAS)
+              print("AGENT_DNS_PERSISTENT_VOLUMES_UNCHANGED")
+          except Exception:
+              if changed:
+                  try:
+                      run("docker","network","disconnect",NETWORK,standby["Id"],check=False)
+                      run("docker","network","connect","--alias",PRIMARY_ALIAS,"--alias",PROD2_ALIAS,
+                          "--alias",PROD2_CONTAINER_ALIAS,NETWORK,standby["Id"])
+                      print("AGENT_DNS_ROLLBACK_ATTEMPTED")
+                  except Exception:
+                      print("AGENT_DNS_ROLLBACK_NEEDS_MANUAL_REVIEW")
+              raise
+          PY
