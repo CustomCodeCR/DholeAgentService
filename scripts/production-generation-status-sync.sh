@@ -42,7 +42,7 @@ if (( active_count != 1 )); then
 fi
 query="UPDATE agent.runtime_generation_state
   SET active_generation='$generation', updated_at_utc=NOW()
-  WHERE singleton=true;"
+  WHERE singleton=true AND active_generation IS DISTINCT FROM '$generation';"
 docker run --rm --network dhole \
   -e PGPASSWORD="$password" postgres:17-alpine \
   psql -X -q -v ON_ERROR_STOP=1 \
