@@ -1,0 +1,71 @@
+name: Operator-verify standby provider readiness
+
+# No push/schedule trigger. Authorization to the external provider is an
+# independent human verification, never inferred from Docker health.
+on:
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: "Already-provisioned standby independently verified by the operator"
+        type: choice
+        options: [prod1, prod2]
+        required: true
+      confirmation:
+        description: "Only after checking authorized provider access on this specific standby (not CAPTCHA/429/denied): enter I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted production verification logic
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Validate operator-only, read-only technical checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/operator-attest-generation-readiness.py scripts/production-generation-executor.py
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/master ]] || {
+            echo 'GENERATION_READINESS_REFUSED: manual_master_operator_workflow_required' >&2
+            exit 2
+          }
+          echo 'GENERATION_READINESS_WORKFLOW_VALIDATED'
+
+      - name: Prepare protected, existing production database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/operator-generation-readiness"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/operator-generation-readiness" >/dev/null
+          chmod 700 "$RUNNER_TEMP/operator-generation-readiness"
+          chmod 600 "$RUNNER_TEMP/operator-generation-readiness/.env.production"
+          echo "GENERATION_PRIVATE_ENV=$RUNNER_TEMP/operator-generation-readiness/.env.production" >> "$GITHUB_ENV"
+
+      - name: Validate standby and record explicit human authorization attestation
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/operator-attest-generation-readiness.py \
+            --generation "$GENERATION" \
+            --confirmation "$CONFIRMATION" \
+            --env-file "$GENERATION_PRIVATE_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
+          # This job NEVER starts a standby Worker or switches generations.
