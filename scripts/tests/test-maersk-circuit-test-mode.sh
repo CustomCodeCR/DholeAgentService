@@ -65,12 +65,7 @@ case "$1" in
     if [[ "$arguments" == *' config -q'* ]]; then
       [[ "$arguments" == *docker-compose.services.yml* || "$arguments" == *docker-compose.agent-prod1.yml* ]] || exit 3
     elif [[ "$arguments" == *' up -d '* ]]; then
-      grep -Eq '^MaerskCircuit__Enabled=(true|false)
-  echo "Mismatched branch unexpectedly accepted" >&2
-  exit 1
-fi
-echo "Maersk circuit test-mode safety checks passed."
- "$DHOLE_ENV_FILE" || exit 3
+      grep -Eq '^MaerskCircuit__Enabled=(true|false)$' "$DHOLE_ENV_FILE" || exit 3
       sed -n 's/^MaerskCircuit__Enabled=//p' "$DHOLE_ENV_FILE" > "$MOCK_CIRCUIT_FILE"
     else
       echo 'Unexpected Compose operation' >&2; exit 3
@@ -79,6 +74,7 @@ echo "Maersk circuit test-mode safety checks passed."
     echo 'Unexpected Docker operation' >&2; exit 3 ;;
 esac
 FAKE_DOCKER
+bash -n "$tmp/bin/docker"
 chmod +x "$tmp/bin/docker"
 export MOCK_CIRCUIT_FILE="$tmp/state/circuit"
 export RUNNER_TEMP="$tmp/state"
