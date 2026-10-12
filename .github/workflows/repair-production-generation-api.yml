@@ -1,0 +1,89 @@
+name: Repair pre-existing Agent generation API
+
+on:
+  # One guarded repair of prod2 after the previously observed API restart loop.
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/repair-production-generation-api.yml
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: "Existing generation (e.g. prod2)"
+        required: true
+        type: string
+        default: prod2
+      mode:
+        description: "Read-only check or API-only recovery"
+        required: true
+        type: choice
+        default: check
+        options: [check, apply]
+      confirmation:
+        description: "For apply enter REPAIR_EXISTING_AGENT_API"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    # This push run explicitly recovers prod2 only. Normal develop pushes
+    # never touch production. Manual apply requires separate confirmation.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify scoped repair intent
+        shell: bash
+        env:
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.generation || 'prod2' }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'apply' }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET" =~ ^prod[1-9][0-9]*$ && "${#TARGET}" -le 64 ]] || exit 2
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "$MODE" == apply ]]; then
+            [[ "$CONFIRMATION" == REPAIR_EXISTING_AGENT_API ]] || exit 2
+          fi
+          bash -n scripts/provision-production-generation.sh
+          bash -n scripts/diagnose-production-generation.sh
+          echo 'GENERATION_API_REPAIR_INTENT_VERIFIED'
+      - name: Load protected production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/repair-prodN-api"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/repair-prodN-api" >/dev/null
+          echo "DHOLE_REPAIR_ENV=$RUNNER_TEMP/repair-prodN-api/.env.production" >> "$GITHUB_ENV"
+      - name: Repair only the existing standby Agent API
+        shell: bash
+        env:
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.generation || 'prod2' }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'apply' }}
+        run: |
+          set -euo pipefail
+          bash scripts/provision-production-generation.sh \
+            "$TARGET" "$MODE" .dhole-system "$DHOLE_REPAIR_ENV"
+          if [[ "$MODE" == apply ]]; then
+            python3 scripts/production-generation-provision-status.py \
+              --generation "$TARGET" --status Provisioned --env-file "$DHOLE_REPAIR_ENV"
+          fi
+      - name: Independently confirm API and Hermes health, without reading sessions
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.generation || 'prod2' }}
+        run: |
+          set -euo pipefail
+          bash scripts/diagnose-production-generation.sh "$TARGET"
