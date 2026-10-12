@@ -35,6 +35,11 @@ public sealed class PostgresMaerskMonitoring(
         var findings = MaerskMonitoringPolicy.Evaluate(metrics.Signals, _options);
         var active = findings.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
 
+        // Retry the complete unit, never start a user transaction outside
+        // the configured Npgsql execution strategy.
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         foreach (var finding in findings)
         {
@@ -74,6 +79,7 @@ public sealed class PostgresMaerskMonitoring(
                     .SetProperty(x => x.ResolvedAtUtc, now), ct);
         }
         await transaction.CommitAsync(ct);
+        });
         if (findings.Count > 0)
             logger.LogWarning(
                 "MAERSK_MONITOR_ALERTS provider={ProviderId} activeCodes={Codes} queuedOld={QueuedOld} runningOld={RunningOld} recentFailures={Failures}",

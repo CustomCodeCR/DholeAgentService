@@ -39,6 +39,15 @@ public sealed class MaerskExecutionResumeService(
         // Disabled/unknown protection cannot be considered a Closed circuit.
         if (!options.Value.Enabled) return MaerskResumeOutcome.CircuitUnavailable;
 
+        // The lock, verification, state transition, outbox and audit are one
+        // retriable transaction. On a genuine retry clear rolled-back tracked
+        // changes so domain events are not replayed from stale EF entities.
+        var strategy = db.Database.CreateExecutionStrategy();
+        var attempt = 0;
+        return await strategy.ExecuteAsync(async () =>
+        {
+        if (attempt++ > 0)
+            db.ChangeTracker.Clear();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var execution = await db.AgentExecutions
             .SingleOrDefaultAsync(x => x.Id == executionId, ct);
@@ -117,5 +126,6 @@ public sealed class MaerskExecutionResumeService(
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return MaerskResumeOutcome.Resumed;
+        });
     }
 }

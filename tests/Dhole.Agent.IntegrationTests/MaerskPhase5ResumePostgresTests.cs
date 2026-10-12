@@ -25,7 +25,7 @@ public sealed class MaerskPhase5ResumePostgresTests
     }
 
     private static ServiceDbContext Db(string connection)
-        => new(new DbContextOptionsBuilder<ServiceDbContext>().UseNpgsql(connection).Options);
+        => new(new DbContextOptionsBuilder<ServiceDbContext>().UseNpgsql(connection, npgsql => npgsql.EnableRetryOnFailure()).Options);
 
     private static PostgresMaerskCircuitBreaker Circuit(ServiceDbContext db)
         => new(db, Options.Create(new MaerskCircuitOptions { Enabled = true }));
