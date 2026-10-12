@@ -212,6 +212,13 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
+            if (verificationOnly
+                && !await MaerskLoginService.HasVerifiedBookingSessionAsync(page, cancellationToken))
+                throw new MaerskAuthenticationException(
+                    "maersk_authentication_verification_required",
+                    "The original Maersk session did not display an authenticated account at /book. " +
+                    "The browser profile and circuit were preserved; verify access interactively.");
+
             // Authentication success is recorded only after the login service
             // has actually verified the original Maersk session.
             if (browserProfile is not null)
