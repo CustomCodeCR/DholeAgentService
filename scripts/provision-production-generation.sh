@@ -34,68 +34,100 @@ root_available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
 [[ "$root_available" =~ ^[0-9]+$ && "$root_available" -ge 5242880 ]] || {
   echo "GENERATION_INSUFFICIENT_ROOT_SPACE" >&2; exit 2;
 }
-# No reprovision if any old version exists: preserves original volumes and
-# prevents Compose from quietly changing an existing browser/runtime identity.
-old="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
-if [[ -n "$old" ]]; then
-  # Existing generations are immutable; verify the *actual* services before
-  # considering the infrastructure provisioned. A partial/legacy environment
-  # must never be marked ready based on its project label alone.
-  for service in hermes-agent dhole-agent-api dhole-agent-workers; do
-    ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service")"
-    [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
-      echo "GENERATION_EXISTING_INCOMPLETE: $service" >&2
+# A previous failed attempt may have left containers and persistent
+# volumes. Never discard those; only the *stateless standby API* may be
+# recreated using the reviewed generic compose definition.
+existing="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
+if [[ -n "$existing" ]]; then
+  for service in hermes-config-init hermes-agent dhole-agent-api dhole-agent-workers; do
+    ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+      --filter "label=com.docker.compose.service=$service")"
+    [[ "$(printf '%s\\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
+      printf 'GENERATION_EXISTING_INCOMPLETE: service=%s\\n' "$service" >&2
       exit 1
     }
-    status="$(docker inspect -f '{{.State.Status}}' "$ids")"
+    state="$(docker inspect -f '{{.State.Status}}' "$ids")"
     if [[ "$service" == dhole-agent-workers ]]; then
-      [[ "$status" == created || "$status" == exited ]] || {
-        echo "GENERATION_EXISTING_WORKER_MUST_BE_STOPPED" >&2
+      [[ "$state" == created || "$state" == exited ]] || {
+        echo 'GENERATION_ACTIVE_WORKER_PROTECTED: refusing modifications' >&2
         exit 1
       }
-    else
-      [[ "$status" == running ]] || {
-        echo "GENERATION_EXISTING_SERVICE_UNHEALTHY: $service" >&2
+    elif [[ "$service" == hermes-agent ]]; then
+      [[ "$state" == running ]] || {
+        echo 'GENERATION_HERMES_NOT_RUNNING: inspect existing container before recovery' >&2
         exit 1
       }
     fi
   done
-  echo "GENERATION_EXISTING_VERIFIED: $generation; sessions and volumes untouched"
-  exit 0
-fi
-if [[ "$mode" == check ]]; then
-  echo "GENERATION_PREPROVISION_CHECK_OK: $generation; no changes made"
-  exit 0
-fi
-# The one-time copy is only encryption-key material for *shared encrypted DB
-# credentials*, not Chromium cookies, profile, login or Hermes session state.
-docker volume create "$keys" >/dev/null
-docker run --rm --entrypoint /bin/sh \
-  -v "$original_keys:/source:ro" -v "$keys:/destination" alpine:3.20 -ec '
-    if [ -z "$(ls -A /destination)" ]; then
-      cp -a /source/. /destination/
-    fi
-    test -n "$(ls -A /destination)"
-    chmod 700 /destination
-  '
-# Herm es and API are isolated and dormant Worker is only CREATED, never started.
-"${compose[@]}" up -d --no-build --pull never \
-  hermes-config-init hermes-agent dhole-agent-api
-"${compose[@]}" create --no-build --pull never dhole-agent-workers
-worker="$("${compose[@]}" ps -aq dhole-agent-workers)"
-[[ -n "$worker" ]] || { echo "GENERATION_WORKER_MISSING" >&2; exit 1; }
-state="$(docker inspect -f '{{.State.Status}}' "$worker")"
-[[ "$state" == created || "$state" == exited ]] || { echo "GENERATION_WORKER_UNEXPECTEDLY_ACTIVE" >&2; exit 1; }
-for attempt in $(seq 1 30); do
-  if docker run --rm --network dhole curlimages/curl:8.12.1 --fail --silent --show-error \
-      --max-time 4 "http://agent-api-$generation:8080/health" >/dev/null 2>&1 \
-    && docker run --rm --network dhole curlimages/curl:8.12.1 --fail --silent --show-error \
-      --max-time 4 "http://hermes-agent-$generation:8642/health" >/dev/null 2>&1; then
-    echo "GENERATION_INFRASTRUCTURE_READY: $generation; standby Worker inactive"
-    echo "GENERATION_PROVIDER_AUTHORIZATION_NOT_VERIFIED"
+  if [[ "$mode" == apply ]]; then
+    # The prior prodN API lacked Auth__Authority/Auth__Audience and could
+    # restart indefinitely. Replace only this *stateless* container; Compose
+    # retains the existing keyring mount, Chromium profiles and Hermes data.
+    echo "GENERATION_EXISTING_API_REPAIR: $generation (API only)"
+    "${compose[@]}" up -d --no-deps --no-build --pull never \
+      --force-recreate dhole-agent-api
+  fi
+else
+  if [[ "$mode" == check ]]; then
+    echo "GENERATION_PREPROVISION_CHECK_OK: $generation; no changes made"
     exit 0
+  fi
+  # One-time copy of *encryption key material*, never browser sessions.
+  docker volume create "$keys" >/dev/null
+  docker run --rm --entrypoint /bin/sh \
+    -v "$original_keys:/source:ro" -v "$keys:/destination" alpine:3.20 -ec '
+      if [ -z "$(ls -A /destination)" ]; then
+        cp -a /source/. /destination/
+      fi
+      test -n "$(ls -A /destination)"
+      chmod 700 /destination
+    '
+  "${compose[@]}" up -d --no-build --pull never \
+    hermes-config-init hermes-agent dhole-agent-api
+  "${compose[@]}" create --no-build --pull never dhole-agent-workers
+fi
+worker="$("${compose[@]}" ps -aq dhole-agent-workers)"
+[[ -n "$worker" ]] || { echo 'GENERATION_WORKER_MISSING' >&2; exit 1; }
+state="$(docker inspect -f '{{.State.Status}}' "$worker")"
+[[ "$state" == created || "$state" == exited ]] || {
+  echo 'GENERATION_WORKER_UNEXPECTEDLY_ACTIVE' >&2
+  exit 1
+}
+probe() {
+  # Silence response body/error text; report only numeric status and curl exit.
+  docker run --rm --network dhole curlimages/curl:8.12.1 \
+    --silent --output /dev/null --connect-timeout 3 --max-time 5 \
+    --write-out '%{http_code}|%{exitcode}' "$1" 2>/dev/null || true
+}
+api_result='not-tested'
+hermes_result='not-tested'
+for attempt in $(seq 1 30); do
+  api_result="$(probe "http://agent-api-$generation:8080/health")"
+  hermes_result="$(probe "http://hermes-agent-$generation:8642/health")"
+  if [[ "$api_result" == '200|0' && "$hermes_result" == '200|0' ]]; then
+    api_id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+      --filter 'label=com.docker.compose.service=dhole-agent-api')"
+    api_state="$(docker inspect -f '{{.State.Status}}' "$api_id")"
+    if [[ "$api_state" == running ]]; then
+      echo "GENERATION_INFRASTRUCTURE_READY: $generation; standby Worker inactive"
+      echo 'GENERATION_PROVIDER_AUTHORIZATION_NOT_VERIFIED'
+      exit 0
+    fi
   fi
   sleep 4
 done
+# No log bodies or environment variables: safe operational diagnostics only.
+for service in hermes-agent dhole-agent-api dhole-agent-workers; do
+  id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+    --filter "label=com.docker.compose.service=$service" | head -n1)"
+  if [[ -n "$id" ]]; then
+    status="$(docker inspect -f '{{.State.Status}}' "$id")"
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-defined{{end}}' "$id")"
+    restarts="$(docker inspect -f '{{.RestartCount}}' "$id")"
+    printf 'GENERATION_HEALTH_DETAIL service=%s state=%s health=%s restarts=%s\\n' \
+      "$service" "$status" "$health" "$restarts"
+  fi
+done
+printf 'GENERATION_HEALTH_HTTP api=%s hermes=%s\\n' "$api_result" "$hermes_result"
 echo "GENERATION_INFRASTRUCTURE_HEALTH_FAILED: $generation" >&2
 exit 1
