@@ -30,7 +30,7 @@ public sealed class MaerskSessionVerificationTests
             Make(AgentExecutionType.Manual, "{ \"maerskSessionVerification\" : true }"),
             definition, provider));
         Assert.IsTrue(MaerskSessionVerification.IsExplicit(
-            Make(AgentExecutionType.Manual, "{\\n  \\"maerskSessionVerification\\": true\\n}"),
+            Make(AgentExecutionType.Manual, "{\n  \"maerskSessionVerification\": true\n}"),
             definition, provider));
         foreach (var malformedOrUnsafe in new[]
         {
