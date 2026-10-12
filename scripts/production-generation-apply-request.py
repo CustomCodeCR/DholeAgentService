@@ -69,19 +69,29 @@ def parse_db(path):
     return values
 
 
-def sql(db, query):
+def sql(db, query, *, stage="query"):
+    # Never pull an unavailable image during the 5-minute handoff window.
+    # Production runs PostgreSQL 17; this image is pre-cached on the runner.
+    # All queries still run against the protected production connection.
     env = os.environ.copy()
     env["PGPASSWORD"] = db["Password"]
+    env["PGCONNECT_TIMEOUT"] = "5"
+    env["PGOPTIONS"] = "-c statement_timeout=10s -c lock_timeout=5s"
     cmd = [
-        "docker", "run", "--rm", "--network", "dhole", "-e", "PGPASSWORD",
-        "postgres:16-alpine", "psql", "-X", "-q", "-At",
+        "docker", "run", "--pull=never", "--rm", "--network", "dhole",
+        "-e", "PGPASSWORD", "-e", "PGCONNECT_TIMEOUT", "-e", "PGOPTIONS",
+        "postgres:17-alpine", "psql", "-X", "-q", "-At",
         "-v", "ON_ERROR_STOP=1", "-h", db.get("Host", "postgres"),
         "-p", db.get("Port", "5432"), "-U", db["Username"],
         "-d", db["Database"], "-c", query
     ]
-    outcome = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
+    try:
+        outcome = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=35, env=env)
+    except subprocess.TimeoutExpired as exc:
+        raise GateError("PostgreSQL client timeout at " + stage) from exc
     if outcome.returncode:
-        raise GateError("PostgreSQL state verification failed")
+        raise GateError("PostgreSQL state verification failed at " + stage)
     return outcome.stdout.strip()
 
 
