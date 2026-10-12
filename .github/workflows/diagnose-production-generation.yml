@@ -2,6 +2,7 @@ name: Diagnose Agent generation health (read-only)
 
 # Second read-only run: classify prod2 API restart and missing config keys.
 # Third read-only run: inspect fixed .NET exception-class sanitizer after API repair.
+# Fourth read-only run: compare prod2 API runtime option keys with working primary.
 on:
   push:
     branches: [master, develop]
