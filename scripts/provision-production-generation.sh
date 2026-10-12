@@ -26,15 +26,6 @@ original_keys=dhole_agent-data-protection-keys
 keys="dhole_agent_${generation}_keys"
 docker network inspect dhole >/dev/null
 docker volume inspect "$original_keys" >/dev/null
-# Agent API requires the same trusted application JWT issuer/signing metadata
-# as the primary deployment. Keep the six values only in the runner-private
-# prepared .env file; never share Chromium profiles or provider sessions.
-auth_prep="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/prepare-generation-agent-auth.py"
-if [[ "$mode" == apply ]]; then
-  python3 "$auth_prep" --prepared-env "$environment"
-else
-  python3 "$auth_prep" --prepared-env "$environment" --check-only
-fi
 for image in dhole/agent-api dhole/agent-workers dhole/hermes-agent; do
   docker image inspect "$image:$DHOLE_IMAGE_TAG" >/dev/null
 done
