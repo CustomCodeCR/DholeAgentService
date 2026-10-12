@@ -4,6 +4,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # queue; this workflow updates the currently active prod1 without starting prod.
 # Release 2026-10-12: verified Maersk reset rejection (HTTP 409) PR #114.
 # Release 2026-10-12: original Maersk session verification deadlock fix PR #119.
+# Retry verified original-session release with absent legacy-worker preflight PR #121.
 on:
   push:
     branches: [master]
