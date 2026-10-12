@@ -2,6 +2,7 @@ name: Repair pre-existing Agent generation API
 
 on:
   # One guarded repair of prod2 after the previously observed API restart loop.
+  # Re-run using corrected Bash existing-container counting and HTTP health gates.
   push:
     branches: [master, develop]
     paths:
