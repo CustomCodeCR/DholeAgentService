@@ -47,6 +47,12 @@ jobs:
           python3 -m py_compile scripts/synchronize-dormant-generation-images.py
           python3 -m unittest discover -s tests -p test_dormant_standby_image_sync.py -v
 
+      - name: Verify master-built prod1 deployment and owner safety
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh
+          python3 -m unittest discover -s tests -p test_master_prod1_release.py -v
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"

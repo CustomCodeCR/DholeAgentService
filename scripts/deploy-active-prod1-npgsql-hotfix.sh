@@ -2,12 +2,14 @@
 # Single-owner production hotfix for already ACTIVE prod1. Never starts prod.
 set -Eeuo pipefail
 set +x
-sha="${1:?Approved staging SHA required}"
+sha="${1:?Approved master SHA required}"
 system="${2:?DholeSystem checkout required}"
 runtime="${3:?Protected production env required}"
 backup_root="${4:?Durable backup root required}"
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$backup_root" == /* ]] || exit 2
-[[ "${GITHUB_REF:-}" == refs/heads/master && "${GITHUB_EVENT_NAME:-}" == workflow_run ]] || exit 2
+# Never deploy an unrelated SHA, even if a previous Docker image carries its tag.
+[[ "${GITHUB_SHA:-}" == "$sha" ]] || { echo 'PROD1_HOTFIX_REFUSED: checkout SHA differs from approved master commit' >&2; exit 2; }
+[[ "${GITHUB_REF:-}" == refs/heads/master && ( "${GITHUB_EVENT_NAME:-}" == push || "${GITHUB_EVENT_NAME:-}" == workflow_dispatch ) ]] || exit 2
 [[ -r "$runtime" && -f "$system/deploy/docker-compose.agent-prod1.yml" ]] || exit 2
 export DHOLE_ENV_FILE="$runtime" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest AGENT_GENERATION=prod1
 primary=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.services.yml" -p dhole)
@@ -42,7 +44,7 @@ assert m.find_running_generation()[0]=="prod1"
 PY
 short="${sha:0:12}"
 for n in agent-api agent-workers; do
-  docker image inspect "dhole/$n:staging-$short" >/dev/null || fail "missing validated stage artifact $n"
+  docker image inspect "dhole/$n:master-$short" >/dev/null || fail "missing approved master artifact $n"
 done
 [[ "$(df -Pk / | awk 'NR==2{print $4}')" -ge 2097152 ]] || fail 'root filesystem too full'
 mkdir -p "$backup_root"; chmod 700 "$backup_root"
@@ -123,8 +125,8 @@ tar -tzf "$backup_dir/browser-profiles.tar.gz" >/dev/null || fail 'browser archi
 tar -tzf "$backup_dir/agent-keys.tar.gz" >/dev/null || fail 'keyring archive invalid'
 echo 'PROD1_HOTFIX_PROTECTED_BACKUPS_VERIFIED'
 changed=1
-docker image tag "dhole/agent-api:staging-$short" dhole/agent-api:latest
-docker image tag "dhole/agent-workers:staging-$short" dhole/agent-workers:latest
+docker image tag "dhole/agent-api:master-$short" dhole/agent-api:latest
+docker image tag "dhole/agent-workers:master-$short" dhole/agent-workers:latest
 "${primary[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api
 "${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-api-prod1
 "${active[@]}" up -d --no-deps --force-recreate --pull never dhole-agent-workers-prod1
@@ -167,6 +169,6 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 assert m.find_running_generation()[0]=="prod1"
 PY
 completed=1
-echo "PROD1_NPGSQL_HOTFIX_DEPLOYED staging_sha=$sha active_worker=prod1"
+echo "PROD1_NPGSQL_HOTFIX_DEPLOYED master_sha=$sha active_worker=prod1"
 echo "PROD1_HOTFIX_BACKUP_LOCATION=$backup_dir"
 echo 'PROD1_HOTFIX_SINGLE_OWNER_AND_VOLUMES_VERIFIED'
