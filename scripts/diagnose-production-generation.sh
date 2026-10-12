@@ -57,6 +57,30 @@ if [[ -n "$api_id" ]]; then
     printf 'GENERATION_DIAG_CONFIG key=%s primary_present=%s standby_present=%s\n' \
       "$key" "$in_primary" "$in_alt"
   done
+  if [[ -n "$prod_id" ]]; then
+    # Print only missing configuration KEY NAMES and value equality; never
+    # print credentials, URLs, identifiers, cookies, tokens, or raw log lines.
+    python3 - "$prod_id" "$api_id" <<'PY'
+import subprocess,sys,json,re
+def keys(container_id):
+    raw=subprocess.check_output(
+        ["docker","inspect","--format","{{json .Config.Env}}",container_id],
+        text=True,timeout=10)
+    return dict(value.split("=",1) for value in json.loads(raw) if "=" in value)
+a,b=keys(sys.argv[1]),keys(sys.argv[2])
+prefixes=("Auth__","Jwt__","Postgres__","Redis__","ConnectionStrings__",
+          "CredentialProtection__","DataProtection__","Security__","ASPNETCORE_")
+for key in sorted(a.keys()-b.keys()):
+    if key.startswith(prefixes):
+        print("GENERATION_DIAG_MISSING_STANDBY_KEY="+key)
+for key in ("Auth__Authority","Auth__Audience","Auth__Jwt__SecretKey",
+            "Postgres__ConnectionString","Redis__ConnectionString",
+            "CredentialProtection__KeyRingPath"):
+    if key in a and key in b:
+        print("GENERATION_DIAG_VALUE_MATCH key="+key+
+              " matches_primary="+str(a[key]==b[key]).lower())
+PY
+  fi
   docker logs --tail 200 "$api_id" 2>&1 | python3 -c '
 import re,sys
 types=set()
