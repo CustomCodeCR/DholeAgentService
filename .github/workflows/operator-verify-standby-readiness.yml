@@ -59,8 +59,8 @@ jobs:
       - name: Validate standby and record explicit human authorization attestation
         shell: bash
         env:
-          GENERATION: \${{ inputs.generation }}
-          CONFIRMATION: \${{ inputs.confirmation }}
+          GENERATION: ${{ inputs.generation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           python3 scripts/operator-attest-generation-readiness.py \
