@@ -199,7 +199,7 @@ public sealed class MaerskCircuitPostgresIntegrationTests
     }
 
     private static ServiceDbContext CreateDb(string connection)
-        => new(new DbContextOptionsBuilder<ServiceDbContext>().UseNpgsql(connection).Options);
+        => new(new DbContextOptionsBuilder<ServiceDbContext>().UseNpgsql(connection, npgsql => npgsql.EnableRetryOnFailure()).Options);
 
     private static PostgresMaerskCircuitBreaker CreateCircuit(ServiceDbContext db)
         => new(db, Options.Create(new MaerskCircuitOptions

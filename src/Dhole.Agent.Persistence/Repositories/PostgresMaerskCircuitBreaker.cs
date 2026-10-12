@@ -165,6 +165,11 @@ public sealed class PostgresMaerskCircuitBreaker(
             throw new ArgumentException(
                 "An authenticated operator, documented reason and verified provider clearance are required.");
 
+        // EF Core's Npgsql retrying strategy requires the entire explicit transaction
+        // to run as one retriable unit (including the FOR UPDATE lock and audit).
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var current = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
             $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
@@ -223,6 +228,7 @@ public sealed class PostgresMaerskCircuitBreaker(
             await AuditAsync(providerId, "OperatorReset", null, actorId, reason.Trim(), ct);
         await tx.CommitAsync(ct);
         return affected == 1;
+        });
     }
 
     private async Task EnsureRowAsync(Guid providerId, CancellationToken ct)
