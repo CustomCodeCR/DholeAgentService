@@ -65,6 +65,36 @@ public sealed class MaerskCircuitPostgresIntegrationTests
     }
 
     [TestMethod]
+    public async Task EdgeDeniedWithoutRegisteredBrowserProfile_NeverResetsOrReplays()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(db);
+            var breaker = CreateCircuit(db);
+            await breaker.RecordFailureAsync(providerId, Guid.NewGuid(),
+                "maersk_authentication_edge_denied");
+
+            var state = await breaker.GetAsync(providerId);
+            Assert.AreEqual("Open", state.State);
+            Assert.IsTrue(state.RequiresOperator);
+            Assert.AreEqual("maersk_authentication_edge_denied", state.ReasonCode);
+            Assert.IsFalse(await db.BrowserProfiles.AsNoTracking()
+                .AnyAsync(x => x.ProviderId == providerId && !x.IsDeleted && x.IsActive));
+
+            Assert.IsFalse(await breaker.ResetByOperatorAsync(
+                providerId, Guid.NewGuid(),
+                "Operator cannot attest provider verification without a recorded session", true));
+            Assert.AreEqual("Open", (await breaker.GetAsync(providerId)).State);
+            Assert.IsFalse(await breaker.CanScheduleAsync(providerId));
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
     public async Task DuplicateCaptchaDelivery_OpensOnceAndPersistsAfterNewContext()
     {
         var connection = ConnectionOrInconclusive();
