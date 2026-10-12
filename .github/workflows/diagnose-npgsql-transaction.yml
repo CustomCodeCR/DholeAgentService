@@ -1,0 +1,45 @@
+name: Diagnose Npgsql transaction failure (read-only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-npgsql-transaction.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 3
+    steps:
+      - name: Identify active Worker exception site without provider secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, subprocess, re
+          labels = subprocess.run(["docker","ps","-q","--filter","label=com.docker.compose.project"],capture_output=True,text=True,check=True).stdout.split()
+          owners = []
+          for item in labels:
+              v = json.loads(subprocess.run(["docker","inspect",item],capture_output=True,text=True,check=True).stdout)[0]
+              meta = v.get("Config",{}).get("Labels",{})
+              proj, svc = meta.get("com.docker.compose.project",""),meta.get("com.docker.compose.service","")
+              if (proj=="dhole" and svc=="dhole-agent-workers") or (proj.startswith("dhole-agent-prod") and svc in ("dhole-agent-workers","dhole-agent-workers-prod1")):
+                  owners.append((proj,item))
+          print("NPGSQL_DIAGNOSTIC_ACTIVE_WORKERS",len(owners)," ".join(o[0] for o in owners))
+          for project, item in owners:
+              run = subprocess.run(["docker","logs","--since","2026-10-12T07:55:00Z","--until","2026-10-12T11:10:00Z",item],capture_output=True,text=True,timeout=90)
+              lines=(run.stdout+"\n"+run.stderr).splitlines()
+              matches=[i for i,l in enumerate(lines) if "NpgsqlRetryingExecutionStrategy" in l or "does not support user-initiated transactions" in l]
+              print("NPGSQL_DIAGNOSTIC project=",project,"matching_lines=",len(matches))
+              for position in matches[:8]:
+                  # Only C# stack frames; never print full log bodies, payloads or credentials.
+                  frames=[]
+                  for line in lines[max(0,position-5):min(len(lines),position+22)]:
+                      line=line.strip()
+                      if re.match(r"^(at |--- End of stack|System\.InvalidOperationException|Microsoft\.EntityFrameworkCore\.Storage\.ExecutionStrategy)",line):
+                          frames.append(re.sub(r":line [0-9]+",":line N",line)[:250])
+                  print("NPGSQL_STACK_SAMPLE",json.dumps(frames[:18]))
+          PY
