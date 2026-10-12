@@ -1,0 +1,37 @@
+name: Diagnose generation dispatch (read-only)
+on:
+  push:
+    branches: [master, develop]
+    paths: [.github/workflows/diagnose-generation-dispatch.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Load protected database configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/generation-readonly"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/generation-readonly" >/dev/null
+          echo "PRIVATE_ENV=$RUNNER_TEMP/generation-readonly/.env.production" >> "$GITHUB_ENV"
+      - name: Diagnose pending generation requests without modifying anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/diagnose-generation-dispatch.sh
+          bash scripts/diagnose-generation-dispatch.sh "$PRIVATE_ENV"
