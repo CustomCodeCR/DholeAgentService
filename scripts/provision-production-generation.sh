@@ -99,7 +99,7 @@ if [[ -n "$existing" ]]; then
     }
   fi
   if [[ "$mode" == apply && "$worker_count" -eq 0 ]]; then
-    "${compose[@]}" create --no-build --pull never --no-deps dhole-agent-workers
+    "${compose[@]}" create --no-build --pull never dhole-agent-workers
   fi
   if [[ "$mode" == apply ]]; then
     # The prior prodN API lacked Auth__Authority/Auth__Audience and could
