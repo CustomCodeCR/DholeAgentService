@@ -191,6 +191,17 @@ internal static class ProductionGenerationEndpoints
                 ("name", request.TargetGeneration));
             if (registered is null)
                 return Results.Conflict(new { error = "Destination generation must be registered first." });
+            // A registered name alone does not mean Docker provisioned it.
+            // Never enqueue a handoff against a missing or unhealthy standby.
+            var provisioned = await ScalarAsync(db, """
+                SELECT status FROM agent.runtime_generation_provisions
+                WHERE generation=@name
+                """, ct, ("name", request.TargetGeneration));
+            if (provisioned != "Provisioned")
+                return Results.Conflict(new {
+                    error = "Destination infrastructure is not provisioned. Repair and verify the standby before requesting a switch.",
+                    diagnosticCode = "destination_not_provisioned"
+                });
             var ruleEnabled = await ScalarAsync(db,
                 "SELECT enabled::text FROM agent.runtime_generation_rules WHERE code=@code", ct,
                 ("code", request.Trigger));
