@@ -250,6 +250,43 @@ public sealed class MaerskLoginService
         }
     }
 
+    /// <summary>
+    /// Recovery requires stronger evidence than a URL landing on maersk.com:
+    /// an edge-denied page can retain the /book URL with no authenticated user.
+    /// Do not mark BrowserProfile.Authenticated unless the account control is
+    /// actually visible on the original provider booking page.
+    /// </summary>
+    public static async Task<bool> HasVerifiedBookingSessionAsync(
+        IPage page, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !uri.Host.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase)
+            || !uri.AbsolutePath.StartsWith("/book", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var body = page.Locator("body").First;
+        try
+        {
+            var content = (await body.InnerTextAsync(new LocatorInnerTextOptions { Timeout = 4_000 }))
+                .Trim();
+            if (content.StartsWith("Access Denied", StringComparison.OrdinalIgnoreCase)
+                || content.Contains("You don't have permission to access", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var account = page.Locator(
+                "[data-test*='account' i], [data-testid*='account' i], " +
+                "[aria-label*='account' i], a[href*='logout' i], " +
+                "button:has-text('Log out'), button:has-text('Logout')").First;
+            return await account.CountAsync() > 0 && await account.IsVisibleAsync();
+        }
+        catch (PlaywrightException)
+        {
+            return false;
+        }
+    }
+
     private static async Task<bool> TryResumeExistingSessionAsync(
         IPage page,
         string? configuredSearchUrl,
