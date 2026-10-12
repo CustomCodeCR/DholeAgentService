@@ -17,6 +17,17 @@ public sealed class ProductionGenerationDispatchBackgroundService(
     IConfiguration configuration,
     ILogger<ProductionGenerationDispatchBackgroundService> logger) : BackgroundService
 {
+    // Shared with the operator-only readiness workflow.
+    // Never create provider authorization automatically in the Worker.
+    private const string ReadinessSchema = """
+        CREATE TABLE IF NOT EXISTS agent.runtime_generation_readiness (
+            generation text PRIMARY KEY,
+            ready boolean NOT NULL DEFAULT false,
+            provider_authorized boolean NOT NULL DEFAULT false,
+            verified_by text NOT NULL,
+            verified_at_utc timestamptz NOT NULL
+        );
+        """;
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
     private static readonly Guid SchedulerActor = Guid.Empty;
     private static readonly string[] TechnicalCodes =
@@ -32,6 +43,7 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             return;
         }
         logger.LogInformation("GENERATION_DISPATCHER_RUNNING");
+        var readinessSchemaInitialized = false;
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -42,6 +54,11 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                     var db = scope.ServiceProvider.GetRequiredService<ServiceDbContext>();
                     if (await ExistsAsync(db, stoppingToken))
                     {
+                        if (!readinessSchemaInitialized)
+                        {
+                            await db.Database.ExecuteSqlRawAsync(ReadinessSchema, stoppingToken);
+                            readinessSchemaInitialized = true;
+                        }
                         // Close old/unfulfillable requests first instead of leaving the
                         // UI at Pending indefinitely or dispatching stale handoffs.
                         await ReconcilePendingAsync(db, stoppingToken);
@@ -82,6 +99,37 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                 SELECT 1 FROM agent.runtime_generation_provisions p
                 WHERE p.generation=r.target_generation AND p.status='Provisioned'
             )
+            RETURNING id::text
+            """, ct);
+
+        // The host-local attestation remains authoritative at handoff.
+        // Reject unverified standbys before creating futile GitHub Actions runs.
+        await QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests r
+            SET status='Rejected',
+                diagnostic_code=CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM agent.runtime_generation_readiness a
+                        WHERE a.generation=r.target_generation
+                    ) THEN 'standby_readiness_missing'
+                    WHEN EXISTS (
+                        SELECT 1 FROM agent.runtime_generation_readiness a
+                        WHERE a.generation=r.target_generation
+                          AND (NOT a.ready OR NOT a.provider_authorized
+                               OR length(trim(a.verified_by)) < 3)
+                    ) THEN 'standby_authorization_unverified'
+                    ELSE 'standby_readiness_expired'
+                END,
+                completed_at_utc=now()
+            WHERE r.status='Pending'
+              AND NOT EXISTS (
+                SELECT 1 FROM agent.runtime_generation_readiness a
+                WHERE a.generation=r.target_generation
+                  AND a.ready AND a.provider_authorized
+                  AND length(trim(a.verified_by)) >= 3
+                  AND a.verified_at_utc <= now()
+                  AND a.verified_at_utc > now() - interval '60 minutes'
+              )
             RETURNING id::text
             """, ct);
 
@@ -136,6 +184,11 @@ public sealed class ProductionGenerationDispatchBackgroundService(
             SELECT g.name FROM agent.runtime_generations g
             INNER JOIN agent.runtime_generation_provisions p
                 ON p.generation=g.name AND p.status='Provisioned'
+            INNER JOIN agent.runtime_generation_readiness a
+                ON a.generation=g.name AND a.ready AND a.provider_authorized
+               AND length(trim(a.verified_by)) >= 3
+               AND a.verified_at_utc <= now()
+               AND a.verified_at_utc > now() - interval '60 minutes'
             WHERE g.name <> @active AND g.name ~ '^prod[1-9][0-9]*$'
             ORDER BY substring(g.name from 5)::numeric
             LIMIT 1
