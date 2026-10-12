@@ -102,6 +102,46 @@ def check_infrastructure(executor, target, env_file):
     print("GENERATION_READINESS_TECHNICAL_GATES_PASSED generation=" + target)
 
 
+def record_database_readiness(env_file, target, operator, verified_at):
+    # This database record lets the .NET production Worker refuse unverified
+    # handoffs BEFORE dispatching GitHub Actions. The host-local operator
+    # attestation remains mandatory in the independent handoff executor.
+    spec = importlib.util.spec_from_file_location(
+        "generation_apply", ROOT / "scripts/production-generation-apply-request.py")
+    apply = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(apply)
+    database = apply.parse_db(env_file)
+    # Inputs are allowlisted by main(); no arbitrary SQL or identity input.
+    query = f"""
+        CREATE TABLE IF NOT EXISTS agent.runtime_generation_readiness (
+          generation text PRIMARY KEY,
+          ready boolean NOT NULL DEFAULT false,
+          provider_authorized boolean NOT NULL DEFAULT false,
+          verified_by text NOT NULL,
+          verified_at_utc timestamptz NOT NULL
+        );
+        INSERT INTO agent.runtime_generation_readiness
+            (generation, ready, provider_authorized, verified_by, verified_at_utc)
+        VALUES ('{target}', true, true, '{operator}', '{verified_at}'::timestamptz)
+        ON CONFLICT (generation) DO UPDATE SET
+            ready=EXCLUDED.ready,
+            provider_authorized=EXCLUDED.provider_authorized,
+            verified_by=EXCLUDED.verified_by,
+            verified_at_utc=EXCLUDED.verified_at_utc;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM agent.runtime_generation_readiness
+            WHERE generation='{target}' AND ready AND provider_authorized
+              AND verified_by='{operator}'
+              AND verified_at_utc > now() - interval '60 minutes'
+              AND verified_at_utc <= now()
+        ) THEN 'RECORDED' ELSE 'FAILED' END;
+    """
+    outcome = apply.sql(database, query, stage="operator_readiness_persistence")
+    if outcome.splitlines()[-1] != "RECORDED":
+        refuse("database_readiness_not_confirmed")
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--generation", required=True)
@@ -156,6 +196,10 @@ def main():
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    # Never advertise a ready standby to the Worker until the independent
+    # runner attestation has actually been written.
+    record_database_readiness(args.env_file, args.generation, actor,
+                              record["verified_at_utc"])
     print("GENERATION_OPERATOR_ATTESTATION_RECORDED generation=" + args.generation)
     print("GENERATION_READINESS_VALIDITY_SECONDS=3600")
     print("GENERATION_READINESS_OPERATOR=" + actor)
