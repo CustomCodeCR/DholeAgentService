@@ -1,4 +1,5 @@
 name: Recover existing prod1 and prod2 standbys
+# Recover absent stopped standby Workers observed by read-only production diagnostics.
 
 on:
   # Retry after fixing unsupported Docker Compose create flag.
