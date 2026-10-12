@@ -1,0 +1,39 @@
+name: Diagnose Agent generation health (read-only)
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/diagnose-production-generation.yml
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: "Registered generation to inspect (prodN)"
+        type: string
+        required: true
+        default: prod2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Diagnose existing generation without modifying containers or sessions
+        shell: bash
+        env:
+          GENERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.generation || 'prod2' }}
+        run: |
+          set -euo pipefail
+          bash -n scripts/diagnose-production-generation.sh
+          bash scripts/diagnose-production-generation.sh "$GENERATION"
