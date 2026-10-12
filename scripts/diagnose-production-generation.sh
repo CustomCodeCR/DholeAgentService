@@ -39,4 +39,36 @@ for service in agent-api hermes-agent; do
     printf 'GENERATION_DIAG_HTTP service=%s probe_unavailable\n' "$service"
   fi
 done
+# Identify startup failure types without publishing logs, PII or secrets.
+api_id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+  --filter 'label=com.docker.compose.service=dhole-agent-api' | head -n1)"
+prod_id="$(docker ps -aq --filter 'label=com.docker.compose.project=dhole' \
+  --filter 'label=com.docker.compose.service=dhole-agent-api' | head -n1)"
+if [[ -n "$api_id" ]]; then
+  for key in Auth__Authority Auth__Audience Postgres__ConnectionString \
+    Redis__ConnectionString ASPNETCORE_ENVIRONMENT CredentialProtection__KeyRingPath; do
+    in_alt="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$api_id" \
+      | cut -d= -f1 | grep -Fx -c "$key" || true)"
+    in_primary=unknown
+    if [[ -n "$prod_id" ]]; then
+      in_primary="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$prod_id" \
+        | cut -d= -f1 | grep -Fx -c "$key" || true)"
+    fi
+    printf 'GENERATION_DIAG_CONFIG key=%s primary_present=%s standby_present=%s\n' \
+      "$key" "$in_primary" "$in_alt"
+  done
+  docker logs --tail 200 "$api_id" 2>&1 | python3 -c '
+import re,sys
+types=set()
+frames=set()
+for line in sys.stdin:
+    m=re.search(r"(?<![\\w.])((?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[\\w.]*Exception)",line)
+    if m: types.add(m.group(1))
+    f=re.search(r"\\bat ([A-Za-z_][\\w.]*)\\(",line)
+    if f and re.match(r"^(?:Dhole|Microsoft|Npgsql|CustomCodeFramework)[.]",f.group(1)):
+        frames.add(f.group(1))
+for value in sorted(types)[:8]: print("GENERATION_DIAG_EXCEPTION_TYPE="+value)
+for value in sorted(frames)[:8]: print("GENERATION_DIAG_STACK_FRAME="+value)
+' || true
+fi
 echo 'GENERATION_DIAG_FINISHED (no containers or volumes modified)'
