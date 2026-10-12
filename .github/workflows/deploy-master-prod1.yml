@@ -2,6 +2,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 
 # Master-native deployment. The legacy production job assumes 'prod' owns the
 # queue; this workflow updates the currently active prod1 without starting prod.
+# Release 2026-10-12: verified Maersk reset rejection (HTTP 409) PR #114.
 on:
   push:
     branches: [master]
