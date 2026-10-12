@@ -1,0 +1,58 @@
+name: Hotfix prod2 Agent API reset failure (API only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/hotfix-prod2-api-only.yml]
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY_PROD2_API_ONLY
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  hotfix:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact master and safe API-only release
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || exit 2
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || exit 2
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$CONFIRMATION" == DEPLOY_PROD2_API_ONLY ]] || exit 2
+          fi
+          bash -n scripts/hotfix-prod2-api-only.sh
+          python3 -m unittest discover -s tests -p test_prod2_api_hotfix.py -v
+          echo PROD2_API_PRECHECK_PASSED
+      - name: Prepare protected production environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/prod2-api-hotfix"
+          chmod 700 "$RUNNER_TEMP/prod2-api-hotfix"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/prod2-api-hotfix" >/dev/null
+          test -r "$RUNNER_TEMP/prod2-api-hotfix/.env.production"
+          chmod 600 "$RUNNER_TEMP/prod2-api-hotfix/.env.production"
+          echo "PROD2_HOTFIX_ENV=$RUNNER_TEMP/prod2-api-hotfix/.env.production" >> "$GITHUB_ENV"
+      - name: Back up and update only existing prod2 Agent API
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/hotfix-prod2-api-only.sh \
+            .dhole-system "$PROD2_HOTFIX_ENV" \
+            "$HOME/dhole-agent-protected-release-backups"
