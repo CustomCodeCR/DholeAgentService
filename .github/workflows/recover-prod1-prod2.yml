@@ -1,0 +1,116 @@
+name: Recover existing prod1 and prod2 standbys
+
+on:
+  # One protected rollout explicitly requested for the already-created
+  # generations. No other repository push triggers this host operation.
+  push:
+    branches: [master]
+    paths: [.github/workflows/recover-prod1-prod2.yml]
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type RECOVER_EXISTING_STANDBYS"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Validate authorized recovery scope
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            [[ "$CONFIRMATION" == RECOVER_EXISTING_STANDBYS ]] || exit 2
+          else
+            [[ "${{ github.ref }}" == refs/heads/master ]] || exit 2
+          fi
+          bash -n scripts/provision-production-generation.sh
+          bash -n scripts/repair-prod1-standby.sh
+          python3 -m py_compile scripts/production-generation-provision-status.py
+          docker network inspect dhole >/dev/null
+          free_kib="$(df -Pk / | awk 'NR==2 {print $4}')"
+          [[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -ge 5242880 ]] || {
+            echo 'GENERATION_RECOVERY_INSUFFICIENT_ROOT_SPACE'
+            exit 1
+          }
+          # Never touch an activated standby's worker.
+          for project in dhole-agent-prod1 dhole-agent-prod2; do
+            running="$(docker ps -q --filter "label=com.docker.compose.project=$project" \
+               --filter 'label=com.docker.compose.service=dhole-agent-workers' \
+               --filter 'label=com.docker.compose.service=dhole-agent-workers-prod1')"
+            [[ -z "$running" ]] || {
+              echo "GENERATION_RECOVERY_WORKER_ALREADY_ACTIVE: $project"
+              exit 1
+            }
+          done
+          echo 'GENERATION_RECOVERY_SCOPE_VERIFIED'
+      - name: Prepare protected DholeSystem production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/recover-standbys"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/recover-standbys" >/dev/null
+          chmod 600 "$RUNNER_TEMP/recover-standbys/.env.production"
+          echo "STANDBY_PRIVATE_ENV=$RUNNER_TEMP/recover-standbys/.env.production" >> "$GITHUB_ENV"
+      - name: Configure authorized generation Worker dispatch
+        shell: bash
+        env:
+          GENERATION_ACTIONS_TOKEN: ${{ secrets.GENERATION_ORCHESTRATOR_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$GENERATION_ACTIONS_TOKEN" ]] || {
+            echo 'GENERATION_DISPATCHER_SECRET_MISSING'; exit 1;
+          }
+          sed -i '/^GenerationOrchestrator__GitHubToken=/d' "$STANDBY_PRIVATE_ENV"
+          printf 'GenerationOrchestrator__GitHubToken=%s\n' "$GENERATION_ACTIONS_TOKEN" >> "$STANDBY_PRIVATE_ENV"
+          sed -i '/^GenerationOrchestrator__Enabled=/d' "$STANDBY_PRIVATE_ENV"
+          echo 'GenerationOrchestrator__Enabled=true' >> "$STANDBY_PRIVATE_ENV"
+          echo 'GENERATION_STANDBY_DISPATCH_CONFIGURED'
+      - name: Recover prod2 stateless API and prepare stopped Worker
+        id: prod2
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/provision-production-generation.sh \
+            prod2 apply .dhole-system "$STANDBY_PRIVATE_ENV"
+          python3 scripts/production-generation-provision-status.py \
+            --generation prod2 --status Provisioned --env-file "$STANDBY_PRIVATE_ENV"
+      - name: Recover prod1 legacy stateless API and prepare stopped Worker
+        id: prod1
+        if: ${{ !cancelled() && steps.prod2.conclusion != 'skipped' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/repair-prod1-standby.sh \
+            .dhole-system "$STANDBY_PRIVATE_ENV"
+          python3 scripts/production-generation-provision-status.py \
+            --generation prod1 --status Provisioned --env-file "$STANDBY_PRIVATE_ENV"
+      - name: Final read-only Docker state for both generations
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in prod1 prod2; do
+            echo "GENERATION_RECOVERY_INSPECTION: $target"
+            docker ps -a --filter "label=com.docker.compose.project=dhole-agent-$target" \
+              --format '{{.Names}}: {{.Status}}'
+          done
+          echo 'GENERATION_RECOVERY_INSPECTION_COMPLETED'
