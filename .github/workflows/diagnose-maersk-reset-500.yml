@@ -1,0 +1,74 @@
+name: Diagnose Maersk circuit reset 500 (read-only)
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-maersk-reset-500.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Diagnose only exception type, stack and provider state without changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,re,os,sys
+          PROVIDER="2155f49f-ef15-43a5-9cc1-55203598af59"
+          MARKERS=("0HNP81I5M5H1F","0HNP660QNPS1M","ResetByOperatorAsync","/maersk-circuit/","maersk-circuit","PostgresMaerskCircuitBreaker")
+          def command(args,**kw):
+              return subprocess.run(args,capture_output=True,text=True,timeout=45,**kw)
+          rows={}
+          for project,service in (("dhole","dhole-agent-api"),("dhole-agent-prod1","dhole-agent-api-prod1"),("dhole-agent-prod1","dhole-agent-workers-prod1")):
+              id=command(["docker","ps","-aq","--filter",f"label=com.docker.compose.project={project}","--filter",f"label=com.docker.compose.service={service}"]).stdout.strip().splitlines()
+              if len(id)!=1: print("RESET_DIAG_CONTAINER",project,service,"count="+str(len(id)));continue
+              container=json.loads(command(["docker","inspect",id[0]]).stdout)[0]
+              rows[(project,service)]=container
+              print("RESET_DIAG_CONTAINER",project,service,"status="+container["State"]["Status"])
+              out=command(["docker","logs","--since","90m",id[0]])
+              lines=(out.stdout+"\n"+out.stderr).splitlines()
+              exact=[i for i,line in enumerate(lines) if any(marker in line for marker in MARKERS)]
+              print("RESET_DIAG_MATCHES",project,service,len(exact))
+              for at in exact[-15:]:
+                  # Print only non-sensitive exception class, SQLSTATE, and method signatures.
+                  start=max(0,at-5);end=min(len(lines),at+38)
+                  sample=lines[start:end]
+                  found_types=set()
+                  for line in sample:
+                      for exc in re.findall(r"(?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[.][\w.]*Exception",line):
+                          if len(exc)<200:found_types.add(exc)
+                      match=re.search(r"(?:SqlState|SQLSTATE|PostgresErrorCodes)[=: ]+([0-9A-Z]{5})",line)
+                      if match: print("RESET_DIAG_SQLSTATE",project,service,match.group(1))
+                      frame=re.search(r"(?:at |   at )((?:Dhole|Microsoft[.]EntityFrameworkCore|Npgsql)[\w.]+)\(",line)
+                      if frame: print("RESET_DIAG_STACK",project,service,frame.group(1)[:170])
+                  for exc in sorted(found_types):print("RESET_DIAG_EXCEPTION",project,service,exc)
+          source=rows.get(("dhole","dhole-agent-api"))
+          if not source:raise SystemExit("RESET_DIAG_NO_API")
+          env=dict(x.split("=",1) for x in source["Config"].get("Env",[]) if "=" in x)
+          connection=env.get("Postgres__ConnectionString") or env.get("AGENT_POSTGRES_CONNECTION_STRING")
+          if not connection:raise SystemExit("RESET_DIAG_NO_DB_CONFIG")
+          c=dict(x.split("=",1) for x in connection.split(";") if "=" in x)
+          if not all(c.get(k) for k in ("Database","Username","Password")):raise SystemExit("RESET_DIAG_INVALID_DB_CONFIG")
+          def query(name,sql):
+              environment=os.environ.copy()
+              environment["PGPASSWORD"]=c["Password"]
+              environment["PGOPTIONS"]="-c default_transaction_read_only=on"
+              args=["docker","run","--rm","--pull","never","--network","dhole","-e","PGPASSWORD","-e","PGOPTIONS","postgres:17-alpine","psql","-X","-t","-A","-F","|","-v","ON_ERROR_STOP=1","-h",c.get("Host","postgres"),"-p",c.get("Port","5432"),"-U",c["Username"],"-d",c["Database"],"-c",sql]
+              result=command(args,env=environment)
+              if result.returncode:
+                  print("RESET_DIAG_DB_ERROR",name,result.returncode)
+              else:
+                  for line in result.stdout.splitlines()[:20]:
+                      if len(line)<200 and re.fullmatch(r"[A-Za-z0-9_|: .+\-]+",line):
+                          print("RESET_DIAG_DB",name,line)
+          query("circuit",f"""SELECT state,requires_operator,reason_code,updated_at_utc FROM agent.maersk_circuits WHERE provider_id='{PROVIDER}'""")
+          query("profiles",f"""SELECT status,count(*),count(*) FILTER (WHERE last_login_at IS NOT NULL AND last_login_at>(SELECT updated_at_utc FROM agent.maersk_circuits WHERE provider_id='{PROVIDER}')) AS verified_after_block FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}' AND NOT is_deleted AND is_active GROUP BY status ORDER BY status""")
+          query("running",f"""SELECT count(*) FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND status='Running'""")
+          print("RESET_DIAG_FINISHED_READ_ONLY")
+          PY
