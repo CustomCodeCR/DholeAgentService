@@ -62,7 +62,9 @@ root_available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
 # recreated using the reviewed generic compose definition.
 existing="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
 if [[ -n "$existing" ]]; then
-  for service in hermes-config-init hermes-agent dhole-agent-api dhole-agent-workers; do
+  # Interrupted previous attempts may have no config-init or dormant worker.
+  # The mandatory existing services are the stateless API and healthy Hermes.
+  for service in hermes-agent dhole-agent-api; do
     ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
       --filter "label=com.docker.compose.service=$service")"
     [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
