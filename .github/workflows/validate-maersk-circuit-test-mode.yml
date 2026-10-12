@@ -1,0 +1,27 @@
+name: Validate Maersk circuit toggle (offline)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/maersk-circuit-test-mode.sh'
+      - 'scripts/tests/test-maersk-circuit-test-mode.sh'
+      - '.github/workflows/maersk-circuit-test-mode.yml'
+      - '.github/workflows/validate-maersk-circuit-test-mode.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Bash syntax and run simulated Docker toggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-circuit-test-mode.sh
+          bash -n scripts/tests/test-maersk-circuit-test-mode.sh
+          bash scripts/tests/test-maersk-circuit-test-mode.sh
