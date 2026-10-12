@@ -24,6 +24,36 @@ class GateError(Exception):
     pass
 
 
+# Preflight must report only fixed, non-sensitive diagnostic codes.
+# Never echo raw Docker, database or provider error output to Actions logs.
+SAFE_PREFLIGHT_REASONS = (
+    ("standby has no operator-verified readiness record", "standby_readiness_missing"),
+    ("standby provider authorization requires independent operator attestation", "standby_authorization_unverified"),
+    ("standby readiness is stale", "standby_readiness_expired"),
+    ("destination was not verified", "standby_readiness_invalid"),
+    ("standby API and Hermes must already be running and healthy", "standby_services_unhealthy"),
+    ("standby Worker must be stopped before handoff", "standby_worker_not_stopped"),
+    ("exactly one active Agent Worker across all generations is required", "multiple_or_missing_active_workers"),
+    ("standby Worker must use the same image revision as primary", "standby_worker_image_mismatch"),
+    ("standby API must use the same image revision as primary", "standby_api_image_mismatch"),
+    ("source and destination must share identical", "standby_runtime_configuration_mismatch"),
+    ("both Workers must have active Maersk circuit and monitoring", "standby_circuit_monitoring_mismatch"),
+    ("source and destination queue dispatch mode must match", "standby_queue_mode_mismatch"),
+    ("keyring volume must be isolated per generation", "standby_keyring_not_isolated"),
+    ("isolated Workers must have different browser profile volumes", "standby_browser_volume_not_isolated"),
+    ("live circuit restrictions or active Agent executions prohibit handoff", "provider_circuit_or_jobs_blocked"),
+    ("required persistent mount missing", "standby_persistent_mount_missing"),
+)
+
+
+def preflight_failure_code(error_output):
+    """Map only known safe messages to stable request diagnostics."""
+    for phrase, code in SAFE_PREFLIGHT_REASONS:
+        if phrase in error_output:
+            return code
+    return "standby_preflight_failed"
+
+
 def parse_db(path):
     connection = ""
     for line in Path(path).read_text().splitlines():
@@ -142,8 +172,9 @@ def run(request_id, env_file, state_dir, check_only):
             preflight = subprocess.run(args + ["--mode", "check"],
                                       capture_output=True, text=True, timeout=65)
             if preflight.returncode != 0:
-                set_terminal(db, request_id, "Rejected", "standby_preflight_failed")
-                raise GateError("Standby failed independent health, circuit or authorization gate")
+                code = preflight_failure_code(preflight.stderr)
+                set_terminal(db, request_id, "Rejected", code)
+                raise GateError("Standby preflight rejected: " + code)
             if check_only:
                 print("GENERATION_READY_FOR_AUTHORIZED_HANDOFF")
                 return
