@@ -7,7 +7,7 @@ system="${2:?DholeSystem checkout required}"
 runtime="${3:?Protected production env required}"
 backup_root="${4:?Durable backup root required}"
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$backup_root" == /* ]] || exit 2
-[[ "${GITHUB_REF:-}" == refs/heads/master && "${GITHUB_EVENT_NAME:-}" == push ]] || exit 2
+[[ "${GITHUB_REF:-}" == refs/heads/master && "${GITHUB_EVENT_NAME:-}" == workflow_run ]] || exit 2
 [[ -r "$runtime" && -f "$system/deploy/docker-compose.agent-prod1.yml" ]] || exit 2
 export DHOLE_ENV_FILE="$runtime" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest AGENT_GENERATION=prod1
 primary=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.services.yml" -p dhole)
