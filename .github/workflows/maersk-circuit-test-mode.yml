@@ -31,6 +31,23 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout reviewed DholeSystem runtime manifests
+        shell: bash
+        env:
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUESTED_ENVIRONMENT" == production && "$GITHUB_REF" == refs/heads/master ]]; then
+            infra_branch=master
+          elif [[ "$REQUESTED_ENVIRONMENT" == staging && "$GITHUB_REF" == refs/heads/develop ]]; then
+            infra_branch=develop
+          else
+            echo "MAERSK_TEST_REFUSED: branch and environment mismatch" >&2
+            exit 2
+          fi
+          git clone --depth 1 --branch "$infra_branch" https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          test -r .dhole-system/deploy/docker-compose.services.yml
+          echo "MAERSK_TEST_INFRASTRUCTURE_CHECKOUT=$infra_branch"
       - name: Verify branch and configuration source
         shell: bash
         env:
@@ -45,6 +62,7 @@ jobs:
           test -r "$source"
           echo "CIRCUIT_SOURCE_ENV=$source" >> "$GITHUB_ENV"
           bash -n scripts/maersk-circuit-test-mode.sh
+          bash scripts/tests/test-maersk-circuit-test-mode.sh
       - name: Recreate only existing Agent API and active Worker with override
         shell: bash
         env:
@@ -54,4 +72,4 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/maersk-circuit-test-mode.sh \
-            "$REQUESTED_ENVIRONMENT" "$REQUESTED_ACTION" "$OPERATOR_CONFIRMATION" "$CIRCUIT_SOURCE_ENV"
+            "$REQUESTED_ENVIRONMENT" "$REQUESTED_ACTION" "$OPERATOR_CONFIRMATION" "$CIRCUIT_SOURCE_ENV" .dhole-system
