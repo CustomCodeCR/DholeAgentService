@@ -76,7 +76,11 @@ public sealed class MaerskAgentProvider(
 
         await using var heldProfileLock = profileLock;
 
-        var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
+        var verificationOnly = MaerskSessionVerification.IsExplicit(
+            context.Execution, context.Definition, context.Provider);
+        var plan = verificationOnly
+            ? new PlanResolution(true, null, null, CurrentMaerskBookingUrl, null, null, null, null)
+            : BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
 
@@ -208,6 +212,13 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
+            if (verificationOnly
+                && !await MaerskLoginService.HasVerifiedBookingSessionAsync(page, cancellationToken))
+                throw new MaerskAuthenticationException(
+                    "maersk_authentication_verification_required",
+                    "The original Maersk session did not display an authenticated account at /book. " +
+                    "The browser profile and circuit were preserved; verify access interactively.");
+
             // ExecuteSearchAsync navigates to the booking page before the first
             // search. Do not reload /book a second time during authentication:
             // repeated navigation increases session churn and can invalidate UI state.
@@ -241,6 +252,14 @@ public sealed class MaerskAgentProvider(
             return AgentProviderExecutionResult.Failed(
                 "maersk_authentication_failed",
                 ex.Message);
+        }
+
+        if (verificationOnly)
+        {
+            return AgentProviderExecutionResult.Completed(
+                "{\"verificationOnly\":true,\"provider\":\"MAERSK\",\"sessionVerified\":true}",
+                "MaerskSessionVerification", "1.0",
+                "{\"verificationOnly\":true,\"sessionVerified\":true}");
         }
 
         var results = new List<object>();
