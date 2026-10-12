@@ -32,5 +32,29 @@ class ApplyRequestTests(unittest.TestCase):
             self.assertEqual(values["Database"], "dhole_agent")
             self.assertEqual(values["Password"], "private")
 
+    def test_missing_operator_attestation_has_actionable_code(self):
+        output = ("GENERATION_SWITCH_FAILED: GENERATION_SWITCH_REFUSED: "
+                  "standby has no operator-verified readiness record")
+        self.assertEqual(apply.preflight_failure_code(output),
+                         "standby_readiness_missing")
+
+    def test_readiness_expiry_has_distinct_code(self):
+        output = ("GENERATION_SWITCH_FAILED: GENERATION_SWITCH_REFUSED: "
+                  "standby readiness is stale")
+        self.assertEqual(apply.preflight_failure_code(output),
+                         "standby_readiness_expired")
+
+    def test_circuit_and_live_jobs_are_never_bypassed(self):
+        output = ("GENERATION_SWITCH_FAILED: GENERATION_SWITCH_REFUSED: "
+                  "live circuit restrictions or active Agent executions prohibit handoff")
+        self.assertEqual(apply.preflight_failure_code(output),
+                         "provider_circuit_or_jobs_blocked")
+
+    def test_raw_unknown_preflight_error_not_leaked(self):
+        output = "private connection token=secret-token"
+        self.assertEqual(apply.preflight_failure_code(output),
+                         "standby_preflight_failed")
+
+
 if __name__ == "__main__":
     unittest.main()
