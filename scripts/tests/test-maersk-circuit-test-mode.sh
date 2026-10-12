@@ -52,6 +52,10 @@ case "$1" in
     [[ "$2" == inspect ]] || exit 3
     echo 'sha256:unmodified-image' ;;
   inspect)
+    if [[ "$#" == 2 && "$2" == api-main ]]; then
+      printf '%s\n' '{"State":{"Status":"running"},"Config":{"Env":["Auth__Jwt__Issuer=test-issuer","Auth__Jwt__Audience=test-audience","Auth__Jwt__SecretKey=test-secret-value","Auth__Jwt__ExpirationMinutes=60","MaerskCircuit__Enabled=true"]}}'
+      exit 0
+    fi
     template="$3"
     case "$template" in
       '{{.State.Status}}') echo running ;;
@@ -84,6 +88,7 @@ GITHUB_REF=refs/heads/master bash "$script" production disable \
   > "$tmp/disable.log"
 grep -Fxq false "$tmp/state/circuit"
 grep -Fq 'MAERSK_TEST_DONE: production circuit=false' "$tmp/disable.log"
+grep -Fq 'PROD1_JWT_RUNTIME_PREPARED' "$tmp/disable.log"
 GITHUB_REF=refs/heads/master bash "$script" production restore \
   RESTORE_MAERSK_CIRCUIT "$tmp/runtime.env" "$tmp/system" > "$tmp/restore.log"
 grep -Fxq true "$tmp/state/circuit"
