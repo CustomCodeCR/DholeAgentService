@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'scripts/maersk-circuit-test-mode.sh'
+      - 'scripts/prepare-prod1-jwt-env.py'
+      - 'scripts/repair-prod1-jwt-runtime.py'
+      - 'scripts/deploy-active-prod1-npgsql-hotfix.sh'
+      - '.github/workflows/repair-prod1-jwt-runtime.yml'
       - 'scripts/tests/test-maersk-circuit-test-mode.sh'
       - '.github/workflows/maersk-circuit-test-mode.yml'
       - '.github/workflows/validate-maersk-circuit-test-mode.yml'
@@ -22,6 +26,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m py_compile scripts/prepare-prod1-jwt-env.py scripts/repair-prod1-jwt-runtime.py
+          bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh
           bash -n scripts/maersk-circuit-test-mode.sh
           bash -n scripts/tests/test-maersk-circuit-test-mode.sh
           bash scripts/tests/test-maersk-circuit-test-mode.sh

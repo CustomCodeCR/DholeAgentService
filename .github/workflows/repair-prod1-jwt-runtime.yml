@@ -1,0 +1,49 @@
+name: Repair prod1 JWT bootstrap and queue worker
+
+# The one-time master push deploys the fix to the already-failed prod1 runtime.
+# Further reruns require explicit operator confirmation.
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/repair-prod1-jwt-runtime.yml
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type REPAIR_PROD1_JWT_FROM_MAIN_API"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.event_name == 'push' || inputs.confirmation == 'REPAIR_PROD1_JWT_FROM_MAIN_API'
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout production Compose source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]]
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          test -r .dhole-system/deploy/docker-compose.agent-prod1.yml
+      - name: Validate repair scripts and mocked toggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/prepare-prod1-jwt-env.py scripts/repair-prod1-jwt-runtime.py
+          bash -n scripts/maersk-circuit-test-mode.sh
+          bash scripts/tests/test-maersk-circuit-test-mode.sh
+      - name: Repair prod1 JWT without modifying database or browser profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/repair-prod1-jwt-runtime.py .dhole-system
