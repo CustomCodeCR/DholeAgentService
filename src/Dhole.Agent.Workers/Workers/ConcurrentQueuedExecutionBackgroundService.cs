@@ -101,7 +101,17 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
             if (isMaersk && _active.Values.Count(x => x.IsMaersk) >= _options.MaxConcurrentMaersk)
                 continue;
             if (isMaersk && !await maerskCircuit.CanScheduleAsync(provider.Id, cancellationToken))
-                continue;
+            {
+                // Only an operator-authored, single-shot Authenticate execution
+                // can run for recovery. No rate search can bypass the circuit.
+                var definitions = scope.ServiceProvider.GetRequiredService<IAgentDefinitionRepository>();
+                var definition = await definitions.GetByIdAsync(execution.AgentDefinitionId, cancellationToken);
+                var circuit = await maerskCircuit.GetAsync(provider.Id, cancellationToken);
+                if (definition is null
+                    || circuit.State != "Open" || !circuit.RequiresOperator
+                    || !MaerskSessionVerification.IsExplicit(execution, definition, provider))
+                    continue;
+            }
 
             // Shared browser profiles are serialized across all workers.
             var scopeKey = isMaersk
