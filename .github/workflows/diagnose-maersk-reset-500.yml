@@ -89,3 +89,36 @@ jobs:
           query("running",f"""SELECT count(*) FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND status='Running'""")
           print("RESET_DIAG_FINISHED_READ_ONLY")
           PY
+
+      - name: Locate reset error across ingress and API containers (read-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,re
+          def run(args):
+              return subprocess.run(args,capture_output=True,text=True,timeout=35)
+          ids=run(["docker","ps","-q"]).stdout.splitlines()
+          markers=["0HNP81I5M5H1H","0HNP660QNPSCD","maersk-circuit/2155f49f","/maersk-circuit/","ResetByOperatorAsync"]
+          for cid in ids:
+              details=run(["docker","inspect",cid])
+              if details.returncode: continue
+              info=json.loads(details.stdout)[0]
+              labels=info["Config"].get("Labels",{})
+              service=labels.get("com.docker.compose.service","")
+              project=labels.get("com.docker.compose.project","")
+              if not any(term in service.lower() for term in ("gateway","api","web","traefik")):continue
+              raw=run(["docker","logs","--since","4h","--tail","30000",cid])
+              lines=(raw.stdout+"\n"+raw.stderr).splitlines()
+              matches=[i for i,line in enumerate(lines) if any(term in line for term in markers)]
+              errors=[(i,line) for i,line in enumerate(lines) if re.search(r"(?:\b5[0-9]{2}\b|exception|unhandled)",line,re.I)]
+              print("RESET_ROUTE_SERVICE",project,service,"total_lines="+str(len(lines)),"incident_matches="+str(len(matches)),"errors="+str(len(errors)))
+              if matches:
+                  for idx in matches[-5:]:
+                      for line in lines[max(0,idx-5):min(len(lines),idx+12)]:
+                          types=set(re.findall(r"\b(?:System|Npgsql|Microsoft|Dhole|CustomCodeFramework)[.]\w+(?:[.]\w+)*Exception\b",line))
+                          frames=re.findall(r"(?:at )((?:Dhole|Microsoft|Npgsql)[.\w]+)\(",line)
+                          for typ in sorted(types)[:3]:print("RESET_ROUTE_EXCEPTION",service,typ)
+                          for frame in frames[:4]:print("RESET_ROUTE_FRAME",service,frame[:150])
+          print("RESET_ROUTE_DIAG_FINISHED")
+          PY
