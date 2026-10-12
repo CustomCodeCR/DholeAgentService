@@ -29,6 +29,29 @@ docker volume inspect "$original_keys" >/dev/null
 for image in dhole/agent-api dhole/agent-workers dhole/hermes-agent; do
   docker image inspect "$image:$DHOLE_IMAGE_TAG" >/dev/null
 done
+# The isolated API uses the same trusted application JWT configuration as
+# the main API. Do not guess signing keys/issuer or read existing browser state.
+# Fail before any Docker changes when an operator-provided protected env lacks
+# the required option names. Values are never printed in Actions logs.
+required_api_config=(
+  Auth__Jwt__SecretKey
+  Auth__Jwt__Issuer
+  Auth__Jwt__Audience
+  Auth__Jwt__ExpirationMinutes
+  Auth__Jwt__RequireHttpsMetadata
+  ConnectionStrings__Postgres
+)
+missing_api_config=0
+for key in "${required_api_config[@]}"; do
+  if ! grep -q "^${key}=" "$environment"; then
+    printf 'GENERATION_API_REQUIRED_CONFIG_MISSING key=%s\n' "$key" >&2
+    missing_api_config=1
+  fi
+done
+if (( missing_api_config )); then
+  echo 'GENERATION_API_CONFIG_INCOMPLETE: verify protected JWT/DB options; no containers changed' >&2
+  exit 2
+fi
 "${compose[@]}" config -q
 root_available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
 [[ "$root_available" =~ ^[0-9]+$ && "$root_available" -ge 5242880 ]] || {
