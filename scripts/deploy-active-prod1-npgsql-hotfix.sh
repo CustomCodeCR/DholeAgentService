@@ -11,6 +11,10 @@ backup_root="${4:?Durable backup root required}"
 [[ "${GITHUB_SHA:-}" == "$sha" ]] || { echo 'PROD1_HOTFIX_REFUSED: checkout SHA differs from approved master commit' >&2; exit 2; }
 [[ "${GITHUB_REF:-}" == refs/heads/master && ( "${GITHUB_EVENT_NAME:-}" == push || "${GITHUB_EVENT_NAME:-}" == workflow_dispatch ) ]] || exit 2
 [[ -r "$runtime" && -f "$system/deploy/docker-compose.agent-prod1.yml" ]] || exit 2
+# Prepared deploy config must carry the exact effective JWT options of the
+# running primary API; the host's /opt/dhole/.env does not declare those keys.
+# Update only the protected temporary env file, before any container mutation.
+python3 scripts/prepare-prod1-jwt-env.py "$runtime"
 export DHOLE_ENV_FILE="$runtime" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest AGENT_GENERATION=prod1
 primary=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.services.yml" -p dhole)
 active=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.agent-prod1.yml" -p dhole-agent-prod1 --profile activated)
