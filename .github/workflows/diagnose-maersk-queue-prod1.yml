@@ -35,6 +35,35 @@ jobs:
               if (proj=="dhole" and svc in ("dhole-agent-api","dhole-agent-workers")) or (proj=="dhole-agent-prod1" and svc in ("dhole-agent-workers-prod1","dhole-agent-api-prod1")):
                   containers.append((proj,svc,info))
                   print("MAERSK_DIAG_CONTAINER",proj,svc,"state="+info.get("State",{}).get("Status","unknown"),"image="+info.get("Image","")[:19],"restart_count="+str(info.get("RestartCount","?")))
+          # Capture redacted crash fingerprints from restarting prod1 containers.
+          for project,service,info in containers:
+              if project != "dhole-agent-prod1":continue
+              state=info.get("State",{})
+              print("MAERSK_DIAG_PROD1_STATE",service,
+                    "status="+str(state.get("Status","unknown")),
+                    "exit="+str(state.get("ExitCode","?")),
+                    "oom="+str(state.get("OOMKilled","?")),
+                    "error_type="+str(bool(state.get("Error"))),
+                    "restarts="+str(info.get("RestartCount","?")))
+              result=subprocess.run(["docker","logs","--since","15m","--tail","1500",info["Id"]],
+                                     capture_output=True,text=True,timeout=50)
+              logs=(result.stdout+"\\n"+result.stderr).splitlines()
+              marker_terms=("AGENT_WORKER_", "AGENT_QUEUE_", "Unhandled exception", "ExceptionHandler",
+                            "No service for type", "Unable to resolve service for type", "PostgresException",
+                            "NpgsqlException", "Connection refused", "No space left", "OutOfMemoryException",
+                            "InvalidOperationException", "ArgumentException", "FormatException", "OperationCanceledException")
+              for term in marker_terms:
+                  matches=sum(term.lower() in line.lower() for line in logs)
+                  if matches:
+                      print("MAERSK_DIAG_CRASH_MARKER",service,term.replace(" ","_"),matches)
+              frames=[]
+              for line in logs:
+                  for name in re.findall(r'(?:at |---> )((?:Dhole|Npgsql|Microsoft[.]EntityFrameworkCore|System)[.A-Za-z0-9_]+)',line):
+                      if len(name)<180:frames.append(name)
+                  for exc in re.findall(r'(?:System|Dhole|Npgsql|Microsoft)[.A-Za-z0-9_]+Exception',line):
+                      if len(exc)<160:frames.append(exc)
+              for name in list(dict.fromkeys(frames))[-18:]:
+                  print("MAERSK_DIAG_CRASH_FRAME",service,name)
           workers=[i for p,s,i in containers if "workers" in s and i.get("State",{}).get("Status")=="running"]
           print("MAERSK_DIAG_ACTIVE_WORKER_COUNT",len(workers))
           if len(workers)!=1:
