@@ -42,8 +42,10 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                     var db = scope.ServiceProvider.GetRequiredService<ServiceDbContext>();
                     if (await ExistsAsync(db, stoppingToken))
                     {
-                        // Manual requests must not be blocked by malformed or unavailable
-                        // automatic-rule data. Dispatch them before any optional rule evaluation.
+                        // Close old/unfulfillable requests first instead of leaving the
+                        // UI at Pending indefinitely or dispatching stale handoffs.
+                        await ReconcilePendingAsync(db, stoppingToken);
+                        // Manual requests must not depend on optional rule evaluation.
                         await DispatchPendingAsync(db, stoppingToken);
                         await DispatchProvisioningAsync(db, stoppingToken);
                         await ExpireOverdueAsync(db, stoppingToken);
@@ -67,6 +69,31 @@ public sealed class ProductionGenerationDispatchBackgroundService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         finally { _github.Dispose(); }
+    }
+
+    private static async Task ReconcilePendingAsync(ServiceDbContext db, CancellationToken ct)
+    {
+        // Fail closed if an operator selected a merely registered environment.
+        await QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests r
+            SET status='Rejected', diagnostic_code='destination_not_provisioned',
+                completed_at_utc=now()
+            WHERE r.status='Pending' AND NOT EXISTS (
+                SELECT 1 FROM agent.runtime_generation_provisions p
+                WHERE p.generation=r.target_generation AND p.status='Provisioned'
+            )
+            RETURNING id::text
+            """, ct);
+
+        // A request older than the overall five-minute target is no longer
+        // safe to activate automatically, even if it later becomes ready.
+        await QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests
+            SET status='Failed', diagnostic_code='manual_request_expired',
+                completed_at_utc=now()
+            WHERE status='Pending' AND created_at_utc < now() - interval '4 minutes 45 seconds'
+            RETURNING id::text
+            """, ct);
     }
 
     private static async Task<bool> ExistsAsync(ServiceDbContext db, CancellationToken ct)
