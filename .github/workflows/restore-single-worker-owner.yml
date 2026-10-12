@@ -1,0 +1,82 @@
+name: Restore single active production Worker
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/restore-single-worker-owner.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+jobs:
+  restore:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Prepare protected DB access
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/production-owner-repair"
+          chmod 700 "$RUNNER_TEMP/production-owner-repair"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/production-owner-repair" >/dev/null
+          chmod 600 "$RUNNER_TEMP/production-owner-repair/.env.production"
+          echo "OWNER_REPAIR_ENV=$RUNNER_TEMP/production-owner-repair/.env.production" >> "$GITHUB_ENV"
+      - name: Guard and stop only redundant inactive-generation Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util, json, os, subprocess, sys
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location("apply",Path("scripts/production-generation-apply-request.py"))
+          helper=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helper)
+          db=helper.parse_db(os.environ["OWNER_REPAIR_ENV"])
+          def sql(query):
+              return helper.sql(db, query, stage="single_owner_recovery")
+          active=sql("SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true")
+          if active!="prod1":
+              print("GENERATION_OWNER_REPAIR_REFUSED: active_generation_not_prod1",file=sys.stderr)
+              sys.exit(1)
+          def discover(project,service):
+              ids=subprocess.check_output(["docker","ps","-aq","--filter",f"label=com.docker.compose.project={project}","--filter",f"label=com.docker.compose.service={service}"],text=True).splitlines()
+              if len(ids)!=1: raise RuntimeError("wrong_container_count")
+              return ids[0]
+          primary=discover("dhole","dhole-agent-workers")
+          standby=discover("dhole-agent-prod1","dhole-agent-workers-prod1")
+          def state(item):
+              return json.loads(subprocess.check_output(["docker","inspect",item],text=True))[0]["State"]["Status"]
+          if state(standby)!="running":
+              raise RuntimeError("authorized_prod1_worker_not_running")
+          # Abort if any third generation owns a Worker.
+          all_ids=subprocess.check_output(["docker","ps","-q","--filter","label=com.docker.compose.project"],text=True).splitlines()
+          other=[]
+          for item in all_ids:
+              info=json.loads(subprocess.check_output(["docker","inspect",item],text=True))[0]
+              labels=info.get("Config",{}).get("Labels",{})
+              if labels.get("com.docker.compose.project","").startswith("dhole-agent-prod") and item!=standby and labels.get("com.docker.compose.service","") in ("dhole-agent-workers","dhole-agent-workers-prod1"):
+                  other.append(item)
+          if other:
+              raise RuntimeError("another_generation_worker_is_running")
+          if state(primary)!="running":
+              print("GENERATION_OWNER_ALREADY_SINGLE: prod1")
+              sys.exit(0)
+          # Never stop a potentially running job during this one-time repair.
+          active_jobs=sql('SELECT count(*) FROM agent."AgentExecutions" WHERE status=\'Running\'')
+          if active_jobs!="0":
+              print("GENERATION_OWNER_REPAIR_BLOCKED: running_jobs="+active_jobs,file=sys.stderr)
+              sys.exit(1)
+          subprocess.run(["docker","stop","--time","60",primary],check=True,timeout=90,capture_output=True)
+          if state(primary)=="running" or state(standby)!="running":
+              raise RuntimeError("single_owner_verification_failed")
+          print("GENERATION_SINGLE_ACTIVE_WORKER_RESTORED: prod1; old_prod_worker_stopped")
+          print("GENERATION_PERSISTENT_VOLUMES_UNCHANGED")
+          PY
