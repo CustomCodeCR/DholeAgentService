@@ -40,7 +40,7 @@ public static class MaerskSessionVerification
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
 
-            using var properties = doc.RootElement.EnumerateObject();
+            var properties = doc.RootElement.EnumerateObject();
             if (!properties.MoveNext()) return false;
             var property = properties.Current;
             if (property.Name != "maerskSessionVerification"
