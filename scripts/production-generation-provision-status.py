@@ -33,7 +33,8 @@ def main():
        UPDATE agent.runtime_generation_provisions
        SET status='{args.status}', diagnostic_code='{code}',
            updated_at_utc=now()
-       WHERE generation='{args.generation}' AND status IN ('Dispatched','Dispatching');
+       WHERE generation='{args.generation}'
+         AND status IN ('Dispatched','Dispatching','Failed');
     """
     environment = os.environ.copy()
     environment["PGPASSWORD"] = settings["Password"]
