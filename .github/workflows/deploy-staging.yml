@@ -29,6 +29,8 @@ on:
   # current develop commit before master production promotion.
   # Authorized release: Worker standby-readiness DB gate after verified prod1 attestation.
   # Preserve protected backups, schema gates, worker drain and rollback on both environments.
+  # Authorized 2026-10-12 retry-safe Npgsql hotfix; deploy staged Agent API and
+  # Worker before the generation-aware prod1 release. Keep full snapshot gates.
   # Only this workflow's explicitly authorized YAML change triggers the
   # guarded staging deploy; ordinary develop pushes remain validation-only.
   push:
