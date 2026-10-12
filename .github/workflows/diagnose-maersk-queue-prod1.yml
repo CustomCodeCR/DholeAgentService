@@ -73,10 +73,24 @@ jobs:
                       safe=re.sub(r'(?i)(Password|Secret|Token|ApiKey|ConnectionString|Username)\\s*[:=]\\s*[^ ,;]+',r'\\1=[REDACTED]',safe)
                       safe=re.sub(r'(?i)(postgres|redis|https?)://[^ ]+','[REDACTED_URL]',safe)
                       safe=re.sub(r'[A-Za-z0-9+/=_-]{44,}','[REDACTED_VALUE]',safe)
-                      safe=re.sub(r'[^\\x20-\\x7e]','',safe)
+                      safe=re.sub(r'[^\x20-\x7e]','',safe)
                       if len(safe)<340:
                           print("MAERSK_DIAG_OPTIONS_MESSAGE",service,safe[:320])
                           break
+          # Compare presence only; never log JWT values or hashes.
+          auth_keys=("Auth__Jwt__SecretKey","Auth__Jwt__Issuer","Auth__Jwt__Audience",
+                     "Auth__Jwt__ExpirationMinutes","AUTH_JWT_SECRET","AUTH_JWT_ISSUER",
+                     "AUTH_JWT_AUDIENCE","Auth__Authority","Auth__Audience")
+          for project,service,info in containers:
+              env=dict(item.split("=",1) for item in info.get("Config",{}).get("Env",[]) if "=" in item)
+              for key in auth_keys:
+                  value=env.get(key,"")
+                  print("MAERSK_DIAG_AUTH_KEY",project,service,key,"present="+str(bool(value and value.strip())))
+          with open("/opt/dhole/.env") as handle:
+              raw=handle.read().splitlines()
+          env_source=dict(line.split("=",1) for line in raw if "=" in line and not line.startswith("#"))
+          for key in auth_keys:
+              print("MAERSK_DIAG_SOURCE_KEY",key,"present="+str(bool(env_source.get(key,"").strip())))
           workers=[i for p,s,i in containers if "workers" in s and i.get("State",{}).get("Status")=="running"]
           print("MAERSK_DIAG_ACTIVE_WORKER_COUNT",len(workers))
           if len(workers)!=1:
