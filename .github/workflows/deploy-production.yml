@@ -39,13 +39,34 @@ env:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    # This approved hotfix is promoted by a dedicated, single-owner prod1
+    # release. Do not invoke the legacy prod Worker rollout for that staging SHA.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha != '59dd987fd89a96450ed7120a82e857c5150d45e8') }}
     runs-on: [self-hosted, linux, x64, dhole]
     steps:
       - name: Checkout approved Agent revision
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'develop' }}
+
+      - name: Prevent default Worker activation while a prodN standby owns production
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A guarded handoff intentionally stops dhole's Worker. Never use
+          # this legacy rollout to start it while an isolated prodN owns jobs.
+          while IFS= read -r container; do
+            [[ -n "$container" ]] || continue
+            descriptor="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$container")"
+            project="${descriptor%%|*}"
+            service="${descriptor#*|}"
+            if [[ "$project" =~ ^dhole-agent-prod[1-9][0-9]*$ &&
+                  ( "$service" == dhole-agent-workers || "$service" == dhole-agent-workers-prod1 ) ]]; then
+              echo 'GENERATION_DEPLOY_REFUSED: active isolated Worker requires generation-aware release' >&2
+              exit 2
+            fi
+          done < <(docker ps -q --filter label=com.docker.compose.project)
+          echo 'GENERATION_DEFAULT_WORKER_DEPLOY_ALLOWED'
 
       - name: Confirm phase 8 manual release
         shell: bash
