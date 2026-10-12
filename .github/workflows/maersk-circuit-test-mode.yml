@@ -1,0 +1,57 @@
+name: Maersk circuit - controlled test toggle
+
+# Manual only. Disabling internal protection must not start automatic schedules.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target (production uses active prod1; staging uses develop)"
+        required: true
+        type: choice
+        options: [staging, production]
+      action:
+        description: "Disable temporarily or restore the circuit"
+        required: true
+        type: choice
+        options: [disable, restore]
+      confirmation:
+        description: "Disable: DISABLE_MAERSK_CIRCUIT_SCHEDULES_PAUSED; restore: RESTORE_MAERSK_CIRCUIT"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  toggle:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    concurrency:
+      group: dhole-agent-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify branch and configuration source
+        shell: bash
+        env:
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED_ENVIRONMENT:$GITHUB_REF" in
+            production:refs/heads/master) source=/opt/dhole/.env ;;
+            staging:refs/heads/develop) source=/opt/dhole/.env.staging ;;
+            *) echo "MAERSK_TEST_REFUSED: environment and branch mismatch" >&2; exit 2 ;;
+          esac
+          test -r "$source"
+          echo "CIRCUIT_SOURCE_ENV=$source" >> "$GITHUB_ENV"
+          bash -n scripts/maersk-circuit-test-mode.sh
+      - name: Recreate only existing Agent API and active Worker with override
+        shell: bash
+        env:
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+          REQUESTED_ACTION: ${{ inputs.action }}
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          bash scripts/maersk-circuit-test-mode.sh \
+            "$REQUESTED_ENVIRONMENT" "$REQUESTED_ACTION" "$OPERATOR_CONFIRMATION" "$CIRCUIT_SOURCE_ENV"
