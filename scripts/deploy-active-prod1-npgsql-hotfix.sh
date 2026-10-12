@@ -51,6 +51,20 @@ short="${sha:0:12}"
 for n in agent-api agent-workers; do
   docker image inspect "dhole/$n:master-$short" >/dev/null || fail "missing approved master artifact $n"
 done
+# The health probe is itself a Docker image. Containerd GC can remove it
+# between releases: validate and run it BEFORE stopping prod1 or backing up.
+probe_image=curlimages/curl:8.12.1
+if ! docker image inspect "$probe_image" >/dev/null 2>&1; then
+  docker pull "$probe_image" >/dev/null || fail 'health probe image cannot be downloaded'
+fi
+docker image inspect "$probe_image" >/dev/null || fail 'health probe image unavailable'
+docker run --rm --pull never --network dhole "$probe_image" \
+  -fsS --max-time 8 http://dhole-dhole-agent-api-1:8080/health >/dev/null ||
+  fail 'primary API baseline health failed before deployment'
+docker run --rm --pull never --network dhole "$probe_image" \
+  -fsS --max-time 8 http://dhole-agent-api-prod1:8080/health >/dev/null ||
+  fail 'prod1 API baseline health failed before deployment'
+echo 'PROD1_HOTFIX_HEALTH_PROBE_BASELINE_VERIFIED'
 [[ "$(df -Pk / | awk 'NR==2{print $4}')" -ge 2097152 ]] || fail 'root filesystem too full'
 mkdir -p "$backup_root"; chmod 700 "$backup_root"
 [[ "$(df -Pk "$backup_root" | awk 'NR==2{print $4}')" -ge 4194304 ]] ||

@@ -30,6 +30,11 @@ class MasterProd1ReleaseTests(unittest.TestCase):
     def test_verified_backups_precede_image_promotion(self):
         self.assertLess(self.script.index('bash scripts/maersk-phase8-backup.sh prod1'),
                         self.script.index('docker image tag "dhole/agent-api:master-$short"'))
+        self.assertIn("PROD1_HOTFIX_HEALTH_PROBE_BASELINE_VERIFIED", self.script)
+        self.assertLess(self.script.index("probe_image=curlimages/curl:8.12.1"),
+                        self.script.index('docker stop --time 90 "$worker"'))
+        self.assertLess(self.script.index("docker pull \"$probe_image\""),
+                        self.script.index('docker stop --time 90 "$worker"'))
         self.assertIn("PROD1_HOTFIX_PROTECTED_BACKUPS_VERIFIED", self.script)
         self.assertIn("PROD1_HOTFIX_ROLLBACK_ATTEMPTED", self.script)
         self.assertIn('old_browser', self.script)
