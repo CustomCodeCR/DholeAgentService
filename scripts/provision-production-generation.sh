@@ -84,6 +84,23 @@ if [[ -n "$existing" ]]; then
       }
     fi
   done
+  # Workers are not allowed to run during infrastructure recovery.
+  # A previously failed run may have never created its dormant worker.
+  worker_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+    --filter 'label=com.docker.compose.service=dhole-agent-workers')"
+  worker_count="$(printf '%s\n' "$worker_ids" | sed '/^$/d' | wc -l)"
+  [[ "$worker_count" -le 1 ]] || {
+    echo "GENERATION_MULTIPLE_STANDBY_WORKERS" >&2; exit 1;
+  }
+  if [[ "$worker_count" -eq 1 ]]; then
+    worker_state="$(docker inspect -f '{{.State.Status}}' "$worker_ids")"
+    [[ "$worker_state" == created || "$worker_state" == exited ]] || {
+      echo "GENERATION_ACTIVE_STANDBY_WORKER_REFUSED" >&2; exit 1;
+    }
+  fi
+  if [[ "$mode" == apply && "$worker_count" -eq 0 ]]; then
+    "${compose[@]}" create --no-build --pull never --no-deps dhole-agent-workers
+  fi
   if [[ "$mode" == apply ]]; then
     # The prior prodN API lacked Auth__Authority/Auth__Audience and could
     # restart indefinitely. Replace only this *stateless* container; Compose
