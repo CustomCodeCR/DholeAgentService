@@ -26,12 +26,17 @@ id(){
 status(){ docker inspect -f '{{.State.Status}}' "$1"; }
 digest(){ docker inspect -f '{{.Image}}' "$1"; }
 mount(){ docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$2\"}}{{.Name}}{{end}}{{end}}" "$1"; }
-main_worker="$(id dhole dhole-agent-workers)"
+# Legacy prod Worker container may have been removed. Check for a running
+# duplicate, not the existence of an obsolete stopped container.
+main_worker="$(docker ps -aq --filter 'label=com.docker.compose.project=dhole' --filter 'label=com.docker.compose.service=dhole-agent-workers')"
+[[ "$(printf '%s\n' "$main_worker" | sed '/^$/d' | wc -l)" -le 1 ]] ||
+  fail 'ambiguous legacy worker ownership'
+legacy_running(){ [[ -n "$main_worker" ]] && [[ "$(status "$main_worker")" == running ]]; }
 main_api="$(id dhole dhole-agent-api)"
 worker="$(id dhole-agent-prod1 dhole-agent-workers-prod1)"
 api="$(id dhole-agent-prod1 dhole-agent-api-prod1)"
 hermes="$(id dhole-agent-prod1 hermes-agent-prod1)"
-[[ "$(status "$main_worker")" != running && "$(status "$worker")" == running ]] ||
+[[ "$(status "$worker")" == running ]] && ! legacy_running ||
   fail 'single active prod1 Worker is required'
 [[ "$(status "$api")" == running && "$(status "$hermes")" == running ]] ||
   fail 'healthy existing prod1 infrastructure required'
@@ -58,7 +63,7 @@ old_keys="$(mount "$worker" /data/agent-keys)"
 old_api_keys="$(mount "$api" /data/agent-keys)"
 [[ -n "$old_browser" && -n "$old_keys" && "$old_keys" == "$old_api_keys" ]] ||
   fail 'persistent mounts mismatch'
-[[ "$old_browser" != "$(mount "$main_worker" /data/browser-profiles)" ]] ||
+[[ -z "$main_worker" || "$old_browser" != "$(mount "$main_worker" /data/browser-profiles)" ]] ||
   fail 'browser profile isolation failed'
 suffix="${GITHUB_RUN_ID:-hotfix}"
 docker image tag "$old_worker" "dhole/agent-workers:rollback-prod1-$suffix"
@@ -110,7 +115,7 @@ while :; do
 done
 docker stop --time 90 "$worker" >/dev/null || fail 'failed to stop active Worker gracefully'
 stopped=1
-[[ "$(running)" == 0 && "$(status "$main_worker")" != running ]] ||
+[[ "$(running)" == 0 ]] && ! legacy_running ||
   fail 'jobs active or duplicate Worker started during drain'
 output="$(mktemp)"
 chmod 600 "$output"
@@ -133,7 +138,7 @@ docker image tag "dhole/agent-workers:master-$short" dhole/agent-workers:latest
 new_worker="$(id dhole-agent-prod1 dhole-agent-workers-prod1)"
 new_api="$(id dhole-agent-prod1 dhole-agent-api-prod1)"
 new_primary_api="$(id dhole dhole-agent-api)"
-[[ "$(status "$new_worker")" == running && "$(status "$main_worker")" != running ]] ||
+[[ "$(status "$new_worker")" == running ]] && ! legacy_running ||
   fail 'single-owner Worker check failed'
 [[ "$(digest "$new_worker")" == "$(docker image inspect -f '{{.Id}}' dhole/agent-workers:latest)" ]] ||
   fail 'active Worker image revision differs from release'
