@@ -53,7 +53,7 @@ case "$1" in
     echo 'sha256:unmodified-image' ;;
   inspect)
     if [[ "$#" == 2 && "$2" == api-main ]]; then
-      printf '%s\n' '{"State":{"Status":"running"},"Config":{"Env":["Auth__Jwt__Issuer=test-issuer","Auth__Jwt__Audience=test-audience","Auth__Jwt__SecretKey=test-secret-value","Auth__Jwt__ExpirationMinutes=60","MaerskCircuit__Enabled=true"]}}'
+      printf '%s\n' '[{"State":{"Status":"running"},"Config":{"Env":["Auth__Jwt__Issuer=test-issuer","Auth__Jwt__Audience=test-audience","Auth__Jwt__SecretKey=test-secret-value","Auth__Jwt__ExpirationMinutes=60","MaerskCircuit__Enabled=true"]}}]'
       exit 0
     fi
     template="$3"
