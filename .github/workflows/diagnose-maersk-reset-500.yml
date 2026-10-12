@@ -211,3 +211,44 @@ jobs:
                   print("AGENT_DNS_RESOLVED_IP",address)
           print("AGENT_DNS_READ_ONLY_COMPLETE")
           PY
+
+      - name: Verify protected rollback, unique API health and sole Worker (read-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,re
+          def call(*a):
+              return subprocess.run(a,capture_output=True,text=True,timeout=20)
+          def check(project,service):
+              r=call("docker","ps","-aq","--filter","label=com.docker.compose.project="+project,"--filter","label=com.docker.compose.service="+service)
+              ids=r.stdout.splitlines()
+              if len(ids)!=1:
+                  print("ROLLBACK_DIAG_SERVICE_COUNT",project,service,len(ids));return
+              d=json.loads(call("docker","inspect",ids[0]).stdout)[0]
+              print("ROLLBACK_DIAG_CONTAINER",project,service,
+                    "state="+d["State"]["Status"],
+                    "health="+(d["State"].get("Health") or {}).get("Status","none"),
+                    "image="+d["Image"][:25],
+                    "restartCount="+str(d.get("RestartCount",0)))
+              if "api" in service:
+                  out=call("docker","logs","--since","30m","--tail","2500",ids[0])
+                  log=out.stdout+"\n"+out.stderr
+                  for key in ("Unhandled exception","Application started","Host terminated","database_update_failed","Unable to resolve service","port 8080","Connection refused","NpgsqlRetryingExecutionStrategy"):
+                      print("ROLLBACK_DIAG_API_LOG",project,key.replace(" ","_"),log.lower().count(key.lower()))
+          for project,service in (("dhole","dhole-agent-api"),("dhole-agent-prod1","dhole-agent-api-prod1"),("dhole-agent-prod1","dhole-agent-workers-prod1"),("dhole","dhole-agent-workers"),("dhole-agent-prod2","dhole-agent-api")):
+              check(project,service)
+          urls=[
+            ("main_unique","http://dhole-dhole-agent-api-1:8080/health"),
+            ("main_service","http://dhole-agent-api:8080/health"),
+            ("prod1_service","http://dhole-agent-api-prod1:8080/health"),
+            ("prod1_unique","http://dhole-agent-prod1-dhole-agent-api-prod1-1:8080/health"),
+            ("prod2_unique","http://agent-api-prod2:8080/health")
+          ]
+          for name,url in urls:
+              r=call("docker","run","--rm","--pull","never","--network","dhole",
+                     "curlimages/curl:8.12.1","--silent","--output","/dev/null",
+                     "--max-time","4","--write-out","%{http_code}",url)
+              print("ROLLBACK_DIAG_HEALTH",name,"code="+r.stdout.strip(),"exit="+str(r.returncode))
+          print("ROLLBACK_DIAG_FINISHED_READ_ONLY")
+          PY
