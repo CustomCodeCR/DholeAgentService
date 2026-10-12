@@ -183,3 +183,31 @@ jobs:
                   print("GATEWAY_ROUTE_RESET_LOG",project,"mentions="+str(raw.count(path)))
           print("GATEWAY_ROUTE_INSPECTION_READ_ONLY")
           PY
+
+      - name: Identify competing Docker DNS aliases for Agent API (read-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json
+          def call(args):
+              return subprocess.run(args,capture_output=True,text=True,timeout=30).stdout.strip()
+          for proj,svc in (("dhole","dhole-agent-api"),("dhole-agent-prod1","dhole-agent-api-prod1"),("dhole-agent-prod2","dhole-agent-api")):
+              ids=call(["docker","ps","-q","--filter","label=com.docker.compose.project="+proj,"--filter","label=com.docker.compose.service="+svc]).splitlines()
+              if len(ids)!=1: print("AGENT_DNS_MISSING",proj,svc);continue
+              details=json.loads(call(["docker","inspect",ids[0]]))[0]
+              networks=details.get("NetworkSettings",{}).get("Networks",{})
+              for network,net in networks.items():
+                  aliases=net.get("Aliases") or []
+                  relevant=[x for x in aliases if "agent-api" in x]
+                  print("AGENT_DNS_ALIAS",proj,svc,network,",".join(relevant) if relevant else "none")
+                  print("AGENT_DNS_ADDRESS",proj,svc,network,net.get("IPAddress","unset"))
+          ingress=call(["docker","ps","-q","--filter","label=com.docker.compose.project=dhole","--filter","label=com.docker.compose.service=api-gateway"]).splitlines()
+          if len(ingress)==1:
+              out=call(["docker","exec",ingress[0],"getent","ahostsv4","dhole-agent-api"])
+              addresses={line.split()[0] for line in out.splitlines() if line.strip()}
+              print("AGENT_DNS_RESOLUTION_COUNT",len(addresses))
+              for address in sorted(addresses):
+                  print("AGENT_DNS_RESOLVED_IP",address)
+          print("AGENT_DNS_READ_ONLY_COMPLETE")
+          PY
