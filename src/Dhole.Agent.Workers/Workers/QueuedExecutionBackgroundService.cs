@@ -1,3 +1,4 @@
+using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 
@@ -74,7 +75,15 @@ public sealed class QueuedExecutionBackgroundService(
                 var provider = await providers.GetByIdAsync(execution.ProviderId, cancellationToken);
                 if (provider?.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase) == true
                     && !await maerskCircuit.CanScheduleAsync(provider.Id, cancellationToken))
-                    continue;
+                {
+                    var definitions = scope.ServiceProvider.GetRequiredService<IAgentDefinitionRepository>();
+                    var definition = await definitions.GetByIdAsync(execution.AgentDefinitionId, cancellationToken);
+                    var circuit = await maerskCircuit.GetAsync(provider.Id, cancellationToken);
+                    if (definition is null || circuit.State != "Open"
+                        || !circuit.RequiresOperator
+                        || !MaerskSessionVerification.IsExplicit(execution, definition, provider))
+                        continue;
+                }
 
                 await orchestrator.ExecuteAsync(execution.Id, cancellationToken);
             }
