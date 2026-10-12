@@ -52,6 +52,8 @@ jobs:
           set -euo pipefail
           bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh
           python3 -m unittest discover -s tests -p test_master_prod1_release.py -v
+          bash -n scripts/hotfix-prod2-api-only.sh
+          python3 -m unittest discover -s tests -p test_prod2_api_hotfix.py -v
 
       - uses: actions/setup-dotnet@v4
         with:
