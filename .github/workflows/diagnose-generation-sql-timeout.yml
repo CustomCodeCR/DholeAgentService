@@ -37,3 +37,21 @@ jobs:
           set -euo pipefail
           python3 -m py_compile scripts/diagnose-generation-sql-timeout.py
           python3 scripts/diagnose-generation-sql-timeout.py --env-file "$GEN_SQL_PRIVATE_ENV"
+      - name: Smoke-test patched production SQL helper without changing database
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import os
+          location=Path("scripts/production-generation-apply-request.py")
+          spec=importlib.util.spec_from_file_location("generation_apply", location)
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          db=module.parse_db(os.environ["GEN_SQL_PRIVATE_ENV"])
+          value=module.sql(db, "SELECT 1;", stage="smoke")
+          if value != "1":
+              raise SystemExit("GENERATION_SQL_SMOKE_UNEXPECTED_RESPONSE")
+          print("GENERATION_SQL_HELPER_SMOKE_OK: PostgreSQL 17 cached image")
+          PY
