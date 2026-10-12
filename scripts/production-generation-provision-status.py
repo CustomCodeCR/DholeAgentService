@@ -29,12 +29,19 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9_]+", settings["Database"]):
         raise ValueError("Invalid DB")
     code = "infrastructure_provisioned" if args.status == "Provisioned" else "infrastructure_provision_failed"
+    # Legacy prod1 may have been registered before provision statuses existed.
+    # This function is called only AFTER API, Hermes, keyrings and inactive
+    # standby Worker have passed the on-host recovery checks.
     query = f"""
-       UPDATE agent.runtime_generation_provisions
-       SET status='{args.status}', diagnostic_code='{code}',
-           updated_at_utc=now()
-       WHERE generation='{args.generation}'
-         AND status IN ('Dispatched','Dispatching','Failed');
+       INSERT INTO agent.runtime_generation_provisions
+           (generation, status, diagnostic_code, updated_at_utc)
+       VALUES ('{args.generation}', '{args.status}', '{code}', now())
+       ON CONFLICT (generation) DO UPDATE SET
+           status = EXCLUDED.status,
+           diagnostic_code = EXCLUDED.diagnostic_code,
+           updated_at_utc = now()
+       WHERE agent.runtime_generation_provisions.status
+           IN ('Pending', 'Dispatching', 'Dispatched', 'Failed', 'Provisioned');
     """
     environment = os.environ.copy()
     environment["PGPASSWORD"] = settings["Password"]
