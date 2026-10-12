@@ -42,8 +42,8 @@ if [[ -n "$existing" ]]; then
   for service in hermes-config-init hermes-agent dhole-agent-api dhole-agent-workers; do
     ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
       --filter "label=com.docker.compose.service=$service")"
-    [[ "$(printf '%s\\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
-      printf 'GENERATION_EXISTING_INCOMPLETE: service=%s\\n' "$service" >&2
+    [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]] || {
+      printf 'GENERATION_EXISTING_INCOMPLETE: service=%s\n' "$service" >&2
       exit 1
     }
     state="$(docker inspect -f '{{.State.Status}}' "$ids")"
@@ -124,10 +124,10 @@ for service in hermes-agent dhole-agent-api dhole-agent-workers; do
     status="$(docker inspect -f '{{.State.Status}}' "$id")"
     health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-defined{{end}}' "$id")"
     restarts="$(docker inspect -f '{{.RestartCount}}' "$id")"
-    printf 'GENERATION_HEALTH_DETAIL service=%s state=%s health=%s restarts=%s\\n' \
+    printf 'GENERATION_HEALTH_DETAIL service=%s state=%s health=%s restarts=%s\n' \
       "$service" "$status" "$health" "$restarts"
   fi
 done
-printf 'GENERATION_HEALTH_HTTP api=%s hermes=%s\\n' "$api_result" "$hermes_result"
+printf 'GENERATION_HEALTH_HTTP api=%s hermes=%s\n' "$api_result" "$hermes_result"
 echo "GENERATION_INFRASTRUCTURE_HEALTH_FAILED: $generation" >&2
 exit 1
