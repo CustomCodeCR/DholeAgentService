@@ -1,6 +1,7 @@
 name: Recover existing prod1 and prod2 standbys
 
 on:
+  # Retry after fixing unsupported Docker Compose create flag.
   # One protected rollout explicitly requested for the already-created
   # generations. No other repository push triggers this host operation.
   push:
