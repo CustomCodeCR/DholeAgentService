@@ -1,0 +1,42 @@
+name: Diagnose generation handoff gates (read-only)
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-generation-handoff-gates.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Prepare private production environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/generation-gate-diagnostic"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/generation-gate-diagnostic" >/dev/null
+          chmod 600 "$RUNNER_TEMP/generation-gate-diagnostic/.env.production"
+          echo "HANDOFF_DIAG_ENV=$RUNNER_TEMP/generation-gate-diagnostic/.env.production" >> "$GITHUB_ENV"
+      - name: Check both generations without changing application state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/diagnose-generation-handoff-gates.py
+          python3 scripts/diagnose-generation-handoff-gates.py \
+            --state-dir "$HOME/.local/state/dhole-production-generation" \
+            --env-file "$HANDOFF_DIAG_ENV"
