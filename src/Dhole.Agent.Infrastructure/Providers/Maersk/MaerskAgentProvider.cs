@@ -76,7 +76,11 @@ public sealed class MaerskAgentProvider(
 
         await using var heldProfileLock = profileLock;
 
-        var plan = BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
+        var verificationOnly = MaerskSessionVerification.IsExplicit(
+            context.Execution, context.Definition, context.Provider);
+        var plan = verificationOnly
+            ? new PlanResolution(true, null, null, CurrentMaerskBookingUrl, null, null, null, null)
+            : BuildPlan(context.Execution.ConfigurationSnapshotJson, context.Execution.InputJson);
         if (!plan.Success)
             return AgentProviderExecutionResult.Failed(plan.ErrorCode!, plan.ErrorMessage!);
 
@@ -208,8 +212,15 @@ public sealed class MaerskAgentProvider(
                 plan.SearchUrl,
                 preferInteractiveAuthentication);
 
-            // First search will navigate to /book. Avoid duplicate reload.
+            if (verificationOnly
+                && !await MaerskLoginService.HasVerifiedBookingSessionAsync(page, cancellationToken))
+                throw new MaerskAuthenticationException(
+                    "maersk_authentication_verification_required",
+                    "The original Maersk session did not display an authenticated account at /book. " +
+                    "The browser profile and circuit were preserved; verify access interactively.");
 
+            // Authentication success is recorded only after the login service
+            // has actually verified the original Maersk session.
             if (browserProfile is not null)
             {
                 browserProfile.Authenticate(DateTime.UtcNow);
@@ -239,6 +250,16 @@ public sealed class MaerskAgentProvider(
             return AgentProviderExecutionResult.Failed(
                 "maersk_authentication_failed",
                 ex.Message);
+        }
+
+        if (verificationOnly)
+        {
+            // No search parameters, offers, UI search, or provider replay.
+            // The circuit remains open until a separate operator reset.
+            return AgentProviderExecutionResult.Completed(
+                "{\"verificationOnly\":true,\"provider\":\"MAERSK\",\"sessionVerified\":true}",
+                "MaerskSessionVerification", "1.0",
+                "{\"verificationOnly\":true,\"sessionVerified\":true}");
         }
 
         var results = new List<object>();

@@ -132,7 +132,13 @@ public sealed class AgentExecutionOrchestrator(
                 profile.Id,
                 profile.ExecutionStrategy);
 
+            var verificationOnly = MaerskSessionVerification.IsExplicit(execution, definition, provider);
+            var currentCircuit = verificationOnly
+                ? await circuitBreaker.GetAsync(provider.Id, cancellationToken)
+                : null;
             if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
+                && !(verificationOnly && currentCircuit?.State == "Open"
+                     && currentCircuit.RequiresOperator)
                 && !await circuitBreaker.TryEnterAsync(provider.Id, execution.Id, cancellationToken))
             {
                 // Denied jobs remain Queued, preserving correlation/snapshots.

@@ -5,6 +5,7 @@ using CustomCodeFramework.Cqrs.Queries;
 using Dhole.Agent.Api.Authorization;
 using Dhole.Agent.Api.Extensions;
 using Dhole.Agent.Application.Agents;
+using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Application.Abstractions.Repositories;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.ExtractionProfiles;
@@ -100,6 +101,101 @@ public static class AgentEndpoints
             return Results.Ok(await breaker.GetAsync(providerId, ct));
         }).RequireScope(AgentScopeNames.BrowserProfilesView);
 
+        // Unlike rate-search executions, a single explicitly requested
+        // authentication-only execution is allowed while the provider circuit
+        // remains Open. Never changes the circuit or the existing Chromium files.
+        circuit.MapPost("/{providerId:guid}/verify-session", async (
+            Guid providerId, VerifyOriginalMaerskSessionRequest request,
+            HttpContext http, ServiceDbContext db, IMaerskCircuitBreaker breaker,
+            CancellationToken ct) =>
+        {
+            var actorId = http.GetCurrentUserId();
+            if (actorId is null || actorId.Value == Guid.Empty)
+                return Results.Unauthorized();
+
+            var provider = await db.AgentProviders.AsNoTracking().FirstOrDefaultAsync(
+                x => x.Id == providerId && x.Code == "MAERSK" && !x.IsDeleted && x.IsActive, ct);
+            if (provider is null) return Results.NotFound();
+
+            var state = await breaker.GetAsync(providerId, ct);
+            if (state.State != "Open" || !state.RequiresOperator)
+                return Results.Conflict(new { code = "maersk_verification_not_required",
+                    error = "Only an operator-blocked circuit supports this manual verification flow." });
+
+            var credential = await db.AgentCredentials.AsNoTracking().FirstOrDefaultAsync(
+                x => x.Id == request.CredentialId && x.ProviderId == providerId
+                     && !x.IsDeleted && x.IsActive, ct);
+            if (credential is null)
+                return Results.BadRequest(new { code = "maersk_verification_credential_missing" });
+
+            var profileRoot = $"/data/browser-profiles/MAERSK/{credential.Id:N}";
+            var profiles = await db.BrowserProfiles
+                .Where(x => x.ProviderId == providerId && !x.IsDeleted && x.IsActive)
+                .ToListAsync(ct);
+            if (profiles.Any(x => x.CredentialId != credential.Id
+                                  || x.StoragePath != profileRoot
+                                  || x.Status is BrowserProfileStatus.Blocked
+                                      or BrowserProfileStatus.ResetRequested))
+                return Results.Conflict(new { code = "maersk_verification_profile_conflict",
+                    error = "The original persistent browser profile requires operator review." });
+
+            var definition = await db.AgentDefinitions.FirstOrDefaultAsync(
+                x => x.Code == MaerskSessionVerification.DefinitionCode, ct);
+            if (definition is not null
+                && (definition.ProviderId != providerId
+                    || definition.ActionType != AgentActionType.Authenticate
+                    || definition.ExecutionStrategy != AgentExecutionStrategy.BrowserNetworkCapture
+                    || definition.IsDeleted || !definition.IsActive))
+                return Results.Conflict(new { code = "maersk_verification_definition_conflict" });
+
+            // Return the existing in-flight verification rather than generating
+            // concurrent attempts against the provider or the same browser.
+            if (definition is not null)
+            {
+                var pending = await db.AgentExecutions.AsNoTracking()
+                    .Where(x => x.AgentDefinitionId == definition.Id
+                             && x.ProviderId == providerId
+                             && x.CredentialId == credential.Id
+                             && x.InputJson == MaerskSessionVerification.InputJson
+                             && (x.Status == AgentExecutionStatus.Queued
+                                 || x.Status == AgentExecutionStatus.Running))
+                    .OrderByDescending(x => x.CreatedAtUtc)
+                    .Select(x => x.Id).FirstOrDefaultAsync(ct);
+                if (pending != Guid.Empty)
+                    return Results.Accepted($"/api/agents/executions/{pending}",
+                        new { executionId = pending, status = "QueuedOrRunning",
+                              circuit = "Open", verificationOnly = true });
+            }
+
+            if (profiles.Count == 0)
+            {
+                db.BrowserProfiles.Add(BrowserProfile.Create(
+                    providerId, credential.Id, "Maersk prod1 - original Chromium profile",
+                    $"maersk-original-{credential.Id:N}", profileRoot, actorId));
+            }
+
+            if (definition is null)
+            {
+                definition = AgentDefinition.Create(providerId,
+                    MaerskSessionVerification.DefinitionCode, "Maersk original session verification",
+                    "Explicit operator authentication only; no price search, retries or circuit reset",
+                    AgentActionType.Authenticate, AgentExecutionStrategy.BrowserNetworkCapture,
+                    null, actorId);
+                db.AgentDefinitions.Add(definition);
+            }
+
+            var execution = AgentExecution.Create(definition.Id, providerId,
+                null, credential.Id, AgentExecutionType.Manual, 1000,
+                MaerskSessionVerification.InputJson, 1,
+                Guid.NewGuid().ToString("N"), createdBy: actorId);
+            execution.Queue(actorId);
+            db.AgentExecutions.Add(execution);
+            await db.SaveChangesAsync(ct);
+            return Results.Accepted($"/api/agents/executions/{execution.Id}",
+                new { executionId = execution.Id, status = "Queued", circuit = "Open",
+                      verificationOnly = true, browserProfileStatus = "Unverified" });
+        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
         circuit.MapPost("/{providerId:guid}/reset", async (Guid providerId,
             ResetMaerskCircuitRequest request, HttpContext context,
             IAgentProviderRepository providers, IMaerskCircuitBreaker breaker,
@@ -192,5 +288,6 @@ public static class AgentEndpoints
     }
 
     private sealed record SetActiveRequest(bool IsActive);
+    private sealed record VerifyOriginalMaerskSessionRequest(Guid CredentialId);
     private sealed record ResetMaerskCircuitRequest(string Reason, bool VerifiedWithProvider);
 }
