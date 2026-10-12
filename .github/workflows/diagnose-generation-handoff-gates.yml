@@ -1,4 +1,5 @@
 name: Diagnose generation handoff gates (read-only)
+# Current-state recheck after fixing PostgreSQL 16 image timeout; read-only.
 
 on:
   push:
