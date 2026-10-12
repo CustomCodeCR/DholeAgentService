@@ -30,6 +30,8 @@ class Prod2ApiHotfixTests(unittest.TestCase):
         self.assertIn('agent-keys.tar.gz', self.script)
         self.assertIn('pg_dump', self.script)
         self.assertIn("PROD2_API_ROLLBACK_ATTEMPTED", self.script)
+        self.assertIn("docker commit --pause=false", self.script)
+        self.assertIn('docker image inspect "dhole/agent-api:rollback-prod2-api-$suffix"', self.script)
         self.assertIn('$(mount "$new_api" /data/agent-keys)', self.script)
         self.assertNotIn("docker volume rm", self.script)
         self.assertNotIn("docker compose down", self.script)
