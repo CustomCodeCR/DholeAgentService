@@ -150,3 +150,36 @@ jobs:
               data=call(["docker","image","inspect","--format","{{.Id}}",image])
               print("DRIFT_PINNED_IMAGE",image,"image="+data[:22] if data else "missing")
           PY
+
+      - name: Inspect live gateway Agent routing to active generation (read-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,re,urllib.parse
+          def run(args):
+              return subprocess.run(args,capture_output=True,text=True,timeout=45).stdout.strip()
+          containers=run(["docker","ps","-q","--filter","label=com.docker.compose.service=api-gateway"]).splitlines()
+          for cid in containers:
+              d=json.loads(run(["docker","inspect",cid]))[0]
+              labels=d["Config"].get("Labels",{})
+              project=labels.get("com.docker.compose.project","unknown")
+              print("GATEWAY_ROUTE_CONTAINER",project,"state="+d["State"]["Status"])
+              for item in d["Config"].get("Env",[]):
+                  if "=" not in item:continue
+                  key,value=item.split("=",1)
+                  if not any(q in key.lower() for q in ("agent","proxy","route","yarp")):continue
+                  if any(q in key.lower() for q in ("secret","key","token","password","credential")):continue
+                  host=urllib.parse.urlparse(value).hostname
+                  safe_hosts={"dhole-agent-api","dhole-agent-api-prod1","agent-api-prod1","agent-api-prod2","agent-api-prod3"}
+                  if host in safe_hosts:
+                      print("GATEWAY_ROUTE_ENV",project,key,"host="+host)
+                  else:
+                      print("GATEWAY_ROUTE_ENV_KEY",project,key,"value_redacted")
+              raw=run(["docker","logs","--since","3h","--tail","30000",cid])
+              for host in ("dhole-agent-api","agent-api-prod1","agent-api-prod2"):
+                  print("GATEWAY_ROUTE_LOG_HOST",project,host,"mentions="+str(raw.count(host)))
+              for path in ("/api/agents/maersk-circuit/","/maersk-circuit/"):
+                  print("GATEWAY_ROUTE_RESET_LOG",project,"mentions="+str(raw.count(path)))
+          print("GATEWAY_ROUTE_INSPECTION_READ_ONLY")
+          PY
