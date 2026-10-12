@@ -42,6 +42,14 @@ internal static class ProductionGenerationEndpoints
             diagnostic_code text
         );
 
+        CREATE TABLE IF NOT EXISTS agent.runtime_generation_readiness (
+            generation text PRIMARY KEY,
+            ready boolean NOT NULL DEFAULT false,
+            provider_authorized boolean NOT NULL DEFAULT false,
+            verified_by text NOT NULL,
+            verified_at_utc timestamptz NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS agent.runtime_generation_rules (
             code text PRIMARY KEY,
             enabled boolean NOT NULL DEFAULT false,
@@ -86,9 +94,19 @@ internal static class ProductionGenerationEndpoints
                 "SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true", ct);
             var generationRows = await RowsAsync(db, """
                 SELECT g.name, g.registered_at_utc::text,
-                       coalesce(p.status, 'Registered')
+                       coalesce(p.status, 'Registered'),
+                       CASE
+                           WHEN a.generation IS NULL THEN 'Missing'
+                           WHEN NOT a.ready OR NOT a.provider_authorized
+                                OR length(trim(a.verified_by)) < 3 THEN 'Unverified'
+                           WHEN a.verified_at_utc > now()
+                                OR a.verified_at_utc <= now() - interval '60 minutes'
+                               THEN 'Expired'
+                           ELSE 'Verified'
+                       END
                 FROM agent.runtime_generations g
                 LEFT JOIN agent.runtime_generation_provisions p ON p.generation=g.name
+                LEFT JOIN agent.runtime_generation_readiness a ON a.generation=g.name
                 ORDER BY CASE WHEN g.name='prod' THEN 0 ELSE 1 END,
                          CASE WHEN g.name='prod' THEN 0 ELSE substring(g.name from 5)::numeric END
                 """, ct);
@@ -122,7 +140,8 @@ internal static class ProductionGenerationEndpoints
                 authenticationIncidentCount = int.TryParse(authIncidents, out var authCount) ? authCount : 0,
                 generations = generationRows.Select(r => new {
                     name = r[0], browserState = "IsolatedPersistent", sharedDatabases = true,
-                    registeredAtUtc = r[1], provisioningStatus = r[2]
+                    registeredAtUtc = r[1], provisioningStatus = r[2],
+                    providerReadinessStatus = r[3]
                 }),
                 rules = rules.Select(r => new {
                     code = r[0], enabled = r[1] == "true", threshold = int.Parse(r[2]),
