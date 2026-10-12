@@ -17,7 +17,7 @@ class ApplyRequestTests(unittest.TestCase):
         db = {"Database": "dhole_agent", "Username": "agent",
               "Password": "example-secret", "Host": "postgres"}
         with patch.object(apply.subprocess, "run",
-                          return_value=Mock(returncode=0, stdout="1\\n")) as run:
+                          return_value=Mock(returncode=0, stdout="1\n")) as run:
             result = apply.sql(db, "SELECT 1;", stage="test_probe")
         self.assertEqual(result, "1")
         command = run.call_args.args[0]
