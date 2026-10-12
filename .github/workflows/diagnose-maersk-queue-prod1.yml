@@ -64,6 +64,19 @@ jobs:
                       if len(exc)<160:frames.append(exc)
               for name in list(dict.fromkeys(frames))[-18:]:
                   print("MAERSK_DIAG_CRASH_FRAME",service,name)
+              # OptionsValidationException typically contains a safe option type
+              # name or missing section; never print connection strings or values.
+              for line in logs[-250:]:
+                  if ("OptionsValidationException" in line or "validation failed for" in line.lower()
+                      or "data annotation" in line.lower()):
+                      safe=line.strip()
+                      safe=re.sub(r'(?i)(Password|Secret|Token|ApiKey|ConnectionString|Username)\\s*[:=]\\s*[^ ,;]+',r'\\1=[REDACTED]',safe)
+                      safe=re.sub(r'(?i)(postgres|redis|https?)://[^ ]+','[REDACTED_URL]',safe)
+                      safe=re.sub(r'[A-Za-z0-9+/=_-]{44,}','[REDACTED_VALUE]',safe)
+                      safe=re.sub(r'[^\\x20-\\x7e]','',safe)
+                      if len(safe)<340:
+                          print("MAERSK_DIAG_OPTIONS_MESSAGE",service,safe[:320])
+                          break
           workers=[i for p,s,i in containers if "workers" in s and i.get("State",{}).get("Status")=="running"]
           print("MAERSK_DIAG_ACTIVE_WORKER_COUNT",len(workers))
           if len(workers)!=1:
