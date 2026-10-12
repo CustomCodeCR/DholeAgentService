@@ -84,7 +84,17 @@ docker run --rm -v "$snapshot:/backup:ro" postgres:17-alpine pg_restore -l /back
 echo "PROD2_API_PROTECTED_BACKUP_VERIFIED path=$snapshot"
 suffix="${GITHUB_RUN_ID:-manual}"
 old_image="$(digest "$old_api")"
-docker image tag "$old_image" "dhole/agent-api:rollback-prod2-api-$suffix"
+# Docker image GC can discard the source image metadata while a container
+# is still running. Preserve its stateless filesystem as a local rollback image.
+# docker commit excludes mounted secrets, databases and browser volumes.
+if docker image inspect "$old_image" >/dev/null 2>&1; then
+  docker image tag "$old_image" "dhole/agent-api:rollback-prod2-api-$suffix"
+else
+  docker commit --pause=false "$old_api" "dhole/agent-api:rollback-prod2-api-$suffix" >/dev/null ||
+    die "unable to preserve old API for rollback"
+fi
+docker image inspect "dhole/agent-api:rollback-prod2-api-$suffix" >/dev/null ||
+  die "old API rollback image not verified"
 docker image tag "$fixed" "dhole/agent-api:prod2-api-hotfix-$suffix"
 changed=0
 completed=0
