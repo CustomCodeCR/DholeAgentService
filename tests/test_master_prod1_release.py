@@ -19,7 +19,10 @@ class MasterProd1ReleaseTests(unittest.TestCase):
         self.assertIn('[[ "${GITHUB_SHA:-}" == "$sha" ]]', self.script)
 
     def test_previous_worker_remains_stopped(self):
-        self.assertIn('[[ "$(status "$main_worker")" != running', self.script)
+        self.assertIn('legacy_running()', self.script)
+        self.assertIn('! legacy_running', self.script)
+        self.assertIn("ambiguous legacy worker ownership", self.script)
+        self.assertIn('[[ -z "$main_worker" ||', self.script)
         self.assertNotIn('up -d --no-deps --force-recreate --pull never dhole-agent-workers\n', self.script)
         self.assertIn('dhole-agent-workers-prod1', self.script)
         self.assertIn('m.find_running_generation()[0]=="prod1"', self.script)
