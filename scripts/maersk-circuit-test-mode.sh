@@ -88,6 +88,13 @@ for entry in "runtime:$new" "previous:$old"; do
     printf '\nMaerskCircuit__Enabled=%s\n' "$value" >> "$file"
   fi
 done
+if [[ "$environment" == production ]]; then
+  # Prod1 Compose has not inherited the Auth:Jwt options found in the main
+  # production API. Preserve its effective issuer, audience and secret on
+  # every future toggle; never print these values or modify /opt/dhole/.env.
+  python3 scripts/prepare-prod1-jwt-env.py "$work/runtime.env"
+  python3 scripts/prepare-prod1-jwt-env.py "$work/previous.env"
+fi
 compose() {
   local index="$1" env_file="$2"; shift 2
   local -a flags=(-f "$system_dir/deploy/docker-compose.services.yml")
