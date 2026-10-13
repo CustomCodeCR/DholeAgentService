@@ -65,6 +65,21 @@ public sealed class MaerskSessionVerificationTests
     }
 
     [TestMethod]
+    public void BlockedOriginalProfileMayOnlyBeInspectedByExplicitManualVerification()
+    {
+        Assert.IsTrue(MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+            true, BrowserProfileStatus.Blocked));
+        Assert.IsFalse(MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+            false, BrowserProfileStatus.Blocked));
+        Assert.IsFalse(MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+            true, BrowserProfileStatus.ResetRequested));
+        Assert.IsFalse(MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+            true, BrowserProfileStatus.Expired));
+        Assert.IsFalse(MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+            false, null));
+    }
+
+    [TestMethod]
     public void ProviderCircuitStaysClosedToNormalJobsUntilVerifiedReset()
     {
         var state = new MaerskCircuitSnapshot(Guid.NewGuid(), "Open", true,
