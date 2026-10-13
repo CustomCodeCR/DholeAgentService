@@ -7,6 +7,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # Retry verified original-session release with absent legacy-worker preflight PR #121.
 # Release: preflight checked curl health probe before prod1 switch PR #122.
 # Release 2026-10-12: JSONB semantic auth-only recovery dispatch PR #123.
+# Release 2026-10-12: operator-only original Chromium profile verification PR #135; deploy to active prod1.
 on:
   push:
     branches: [master]
