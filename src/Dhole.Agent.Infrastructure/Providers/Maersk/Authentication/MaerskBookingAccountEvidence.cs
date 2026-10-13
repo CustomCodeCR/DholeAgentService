@@ -8,12 +8,32 @@ namespace Dhole.Agent.Infrastructure.Providers.Maersk.Authentication;
 public static class MaerskBookingAccountEvidence
 {
     public static bool IsOfficialBookingPage(string? url)
-        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
-           && uri.Scheme == Uri.UriSchemeHttps
-           && (uri.IdnHost.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase)
-               || uri.IdnHost.Equals("maersk.com", StringComparison.OrdinalIgnoreCase))
+        => IsOfficialSessionCheckPage(url)
+           && Uri.TryCreate(url, UriKind.Absolute, out var uri)
            && (uri.AbsolutePath.Equals("/book", StringComparison.OrdinalIgnoreCase)
                || uri.AbsolutePath.StartsWith("/book/", StringComparison.OrdinalIgnoreCase));
+
+    // The authenticated account header is shared between / and /book. A
+    // restored profile can remain on the homepage after manual login, so URL
+    // alone cannot decide whether the original provider session is valid.
+    // URL eligibility is necessary but NEVER sufficient; a positive account
+    // identity in the rendered header must still be observed.
+    public static bool IsOfficialSessionCheckPage(string? url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && uri.Scheme == Uri.UriSchemeHttps
+           && uri.UserInfo.Length == 0
+           && uri.Port == 443
+           && (uri.IdnHost.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase)
+               || uri.IdnHost.Equals("maersk.com", StringComparison.OrdinalIgnoreCase))
+           && (uri.AbsolutePath == "/"
+               || uri.AbsolutePath.Equals("/book", StringComparison.OrdinalIgnoreCase)
+               || uri.AbsolutePath.StartsWith("/book/", StringComparison.OrdinalIgnoreCase));
+
+    // A customer code in the account popover is additional evidence, never
+    // sufficient by itself: unrelated price/booking references are numeric too.
+    public static bool IsCustomerCodeFormat(string? value)
+        => value is { Length: >= 8 and <= 15 }
+           && value.All(c => c is >= '0' and <= '9');
 
     public static bool AvatarMatchesDisplayName(string? initials, string? name)
     {
