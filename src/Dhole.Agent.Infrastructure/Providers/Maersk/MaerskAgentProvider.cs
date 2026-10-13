@@ -218,9 +218,18 @@ public sealed class MaerskAgentProvider(
                     }
 
                     return AgentProviderExecutionResult.Completed(
-                        "{\\"verificationOnly\\":true,\\"provider\\":\\"MAERSK\\",\\"sessionVerified\\":true}",
+                        JsonSerializer.Serialize(new
+                        {
+                            verificationOnly = true,
+                            provider = "MAERSK",
+                            sessionVerified = true
+                        }),
                         "MaerskSessionVerification", "1.0",
-                        "{\\"verificationOnly\\":true,\\"sessionVerified\\":true}");
+                        JsonSerializer.Serialize(new
+                        {
+                            verificationOnly = true,
+                            sessionVerified = true
+                        }));
                 }
 
                 return AgentProviderExecutionResult.Failed(
