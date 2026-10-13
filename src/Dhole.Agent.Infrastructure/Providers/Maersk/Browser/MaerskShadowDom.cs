@@ -1909,22 +1909,35 @@ internal static class MaerskShadowDom
                             if (!isMatch)
                                 continue;
 
+                            // On long Maersk booking forms an MDS option can
+                            // be visible and enabled but lie below a clipped
+                            // scrolling panel. Force-click is not a recovery:
+                            // it can report success without committing the value.
+                            // Scroll first and keep a real pointer interaction.
                             try
                             {
-                                await candidate.ClickAsync(
-                                    new LocatorClickOptions { Timeout = 1_500 });
-                            }
-                            catch (PlaywrightException)
-                            {
-                                await candidate.ClickAsync(
-                                    new LocatorClickOptions
+                                await candidate.ScrollIntoViewIfNeededAsync(
+                                    new LocatorScrollIntoViewIfNeededOptions
                                     {
-                                        Timeout = 1_500,
-                                        Force = true
+                                        Timeout = 2_000
                                     });
+                                await candidate.ClickAsync(
+                                    new LocatorClickOptions { Timeout = 3_000 });
+                                return true;
                             }
-
-                            return true;
+                            catch (PlaywrightException ex)
+                                when (MaerskOptionViewportRecovery.IsOutsideViewport(ex.Message))
+                            {
+                                // Keyboard activation targets THIS exact-matched
+                                // option, never the first available suggestion.
+                                // The caller must still verify the following
+                                // booking field became enabled before continuing.
+                                await candidate.FocusAsync();
+                                await candidate.PressAsync(
+                                    "Enter",
+                                    new LocatorPressOptions { Timeout = 2_000 });
+                                return true;
+                            }
                         }
                         catch (PlaywrightException)
                         {
