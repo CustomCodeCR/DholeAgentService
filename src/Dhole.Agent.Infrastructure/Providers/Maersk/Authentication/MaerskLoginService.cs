@@ -320,9 +320,12 @@ public sealed class MaerskLoginService
                     visit(document);
                     for (const avatar of avatars) {
                         for (const name of names) {
+                            const words = name.value.split(/\s+/);
                             if (name.r.left >= avatar.r.left - 20
                                 && name.r.left <= avatar.r.right + 300
-                                && Math.abs(name.r.top - avatar.r.top) <= 75)
+                                && Math.abs(name.r.top - avatar.r.top) <= 75
+                                && (words[0][0] + words[1][0]).toUpperCase()
+                                   === avatar.value)
                                 return avatar.value + '|' + name.value;
                         }
                     }
