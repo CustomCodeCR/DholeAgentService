@@ -118,9 +118,13 @@ public static class AgentEndpoints
             if (provider is null) return Results.NotFound();
 
             var state = await breaker.GetAsync(providerId, ct);
-            if (state.State != "Open" || !state.RequiresOperator)
-                return Results.Conflict(new { code = "maersk_verification_not_required",
-                    error = "Only an operator-blocked circuit supports this manual verification flow." });
+            // Manual verification never bypasses the remote provider challenge.
+            // Its single authorized worker job can inspect the original profile
+            // even while the *internal* circuit is Disabled or operator-Open.
+            if (!((state.State == "Open" && state.RequiresOperator)
+                  || state.State is "Disabled" or "Closed"))
+                return Results.Conflict(new { code = "maersk_verification_unavailable",
+                    error = "Manual verification is not permitted in this circuit state." });
 
             var credential = await db.AgentCredentials.AsNoTracking().FirstOrDefaultAsync(
                 x => x.Id == request.CredentialId && x.ProviderId == providerId
@@ -134,8 +138,7 @@ public static class AgentEndpoints
                 .ToListAsync(ct);
             if (profiles.Any(x => x.CredentialId != credential.Id
                                   || x.StoragePath != profileRoot
-                                  || x.Status is BrowserProfileStatus.Blocked
-                                      or BrowserProfileStatus.ResetRequested))
+                                  || x.Status == BrowserProfileStatus.ResetRequested))
                 return Results.Conflict(new { code = "maersk_verification_profile_conflict",
                     error = "The original persistent browser profile requires operator review." });
 
@@ -164,7 +167,7 @@ public static class AgentEndpoints
                 if (pending != Guid.Empty)
                     return Results.Accepted($"/api/agents/executions/{pending}",
                         new { executionId = pending, status = "QueuedOrRunning",
-                              circuit = "Open", verificationOnly = true });
+                              circuit = state.State, verificationOnly = true });
             }
 
             if (profiles.Count == 0)
@@ -192,8 +195,8 @@ public static class AgentEndpoints
             db.AgentExecutions.Add(execution);
             await db.SaveChangesAsync(ct);
             return Results.Accepted($"/api/agents/executions/{execution.Id}",
-                new { executionId = execution.Id, status = "Queued", circuit = "Open",
-                      verificationOnly = true, browserProfileStatus = "Unverified" });
+                new { executionId = execution.Id, status = "Queued", circuit = state.State,
+                      verificationOnly = true, browserProfileStatus = "AwaitingManualVerification" });
         }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
         circuit.MapPost("/{providerId:guid}/reset", async (Guid providerId,
