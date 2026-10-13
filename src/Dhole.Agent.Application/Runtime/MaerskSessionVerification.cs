@@ -25,6 +25,13 @@ public static class MaerskSessionVerification
            && execution.MaxAttempts == 1
            && HasExactVerificationMarker(execution.InputJson);
 
+    // An operator-only verification may inspect the blocked original profile
+    // while holding its lifetime lock. Rate searches, scheduled executions,
+    // technical resets, and all other actions remain denied.
+    public static bool MayInspectBlockedOriginalProfile(
+        bool isExplicitManualVerification, BrowserProfileStatus? status)
+        => isExplicitManualVerification && status == BrowserProfileStatus.Blocked;
+
     // EF Core stores execution.input_json as PostgreSQL jsonb. PostgreSQL
     // normalizes whitespace/key layout (for example, {"flag": true}), so an
     // ordinal string comparison to serialized JSON would reject legitimate
