@@ -91,7 +91,12 @@ public sealed class MaerskAgentProvider(
 
         var recoveryDecision = recovery.Evaluate(
             browserProfile?.Status, context.Execution.ExecutionType);
-        if (!recoveryDecision.CanContinue)
+        // A blocked original profile may ONLY be opened for the exact,
+        // operator-requested verification job. No rate search or scheduled
+        // task may pass the normal provider-verification gate.
+        if (!recoveryDecision.CanContinue
+            && !MaerskSessionVerification.MayInspectBlockedOriginalProfile(
+                verificationOnly, browserProfile?.Status))
             return AgentProviderExecutionResult.Failed(
                 recoveryDecision.ErrorCode!,
                 recoveryDecision.Explanation!);
@@ -193,6 +198,44 @@ public sealed class MaerskAgentProvider(
 
         var page = playwrightSession.Context.Pages.FirstOrDefault()
                    ?? await playwrightSession.Context.NewPageAsync();
+
+        if (verificationOnly)
+        {
+            // This never submits credentials, searches fares, rotates the
+            // identity, or resets the provider circuit. The operator uses the
+            // original Chromium window over the existing SSH-only noVNC tunnel.
+            // Only a verified account on the official /book page is evidence
+            // of restored access. Failed/expired verification preserves Blocked.
+            try
+            {
+                if (await WaitForManualOriginalProfileAsync(
+                        playwrightSession.Context, page, cancellationToken))
+                {
+                    if (browserProfile is not null)
+                    {
+                        browserProfile.Authenticate(DateTime.UtcNow);
+                        await unitOfWork.SaveChangesAsync(cancellationToken);
+                    }
+
+                    return AgentProviderExecutionResult.Completed(
+                        "{\\"verificationOnly\\":true,\\"provider\\":\\"MAERSK\\",\\"sessionVerified\\":true}",
+                        "MaerskSessionVerification", "1.0",
+                        "{\\"verificationOnly\\":true,\\"sessionVerified\\":true}");
+                }
+
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_authentication_verification_required",
+                    "Manual verification timed out. The original Chromium profile was preserved; " +
+                    "authenticate through noVNC and verify the official Maersk booking account.");
+            }
+            catch (PlaywrightException)
+            {
+                return AgentProviderExecutionResult.Failed(
+                    "maersk_authentication_verification_required",
+                    "The interactive Chromium window closed before provider verification completed. " +
+                    "The original browser profile was preserved.");
+            }
+        }
 
         var credentialResult = await ResolveCredentialsAsync(context.Credential, cancellationToken);
         if (!credentialResult.Success)
@@ -1094,6 +1137,48 @@ public sealed class MaerskAgentProvider(
             return uri.ToString();
 
         return CurrentMaerskBookingUrl;
+    }
+
+    private static async Task<bool> WaitForManualOriginalProfileAsync(
+        IBrowserContext context, IPage initialPage, CancellationToken cancellationToken)
+    {
+        // Leave any restored tab intact. Navigate only an empty browser tab
+        // to the provider's public home page for manual authorized sign-in.
+        if (initialPage.Url is "about:blank" or "")
+        {
+            try
+            {
+                await initialPage.GotoAsync(
+                    "https://www.maersk.com/",
+                    new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 20_000
+                    });
+            }
+            catch (PlaywrightException)
+            {
+                // Even an edge-denied response must remain visible for the
+                // operator. Do not automate alternate URLs or retries.
+            }
+        }
+
+        var deadline = DateTime.UtcNow.AddMinutes(7);
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var tab in context.Pages)
+            {
+                if (tab.IsClosed) continue;
+                if (await MaerskLoginService.HasVerifiedBookingSessionAsync(
+                        tab, cancellationToken))
+                    return true;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        }
+
+        return false;
     }
 
     private static BrowserProfileStatus MapBrowserProfileStatus(string errorCode)
