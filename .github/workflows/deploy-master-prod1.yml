@@ -10,6 +10,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # Release 2026-10-12: operator-only original Chromium profile verification PR #135; deploy to active prod1.
 # Release 2026-10-13: detect authenticated Maersk booking-header identity on original profile PR #139.
 # Release 2026-10-13: detect authenticated account on Maersk official homepage and customer-code popover PR #142.
+# Release 2026-10-13: fix offscreen commodity option selection in Maersk searches PR #145.
 on:
   push:
     branches: [master]
