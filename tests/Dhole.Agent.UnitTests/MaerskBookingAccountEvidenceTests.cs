@@ -25,6 +25,36 @@ public sealed class MaerskBookingAccountEvidenceTests
         => Assert.IsFalse(MaerskBookingAccountEvidence.IsOfficialBookingPage(url));
 
     [DataTestMethod]
+    [DataRow("https://www.maersk.com/")]
+    [DataRow("https://maersk.com/")]
+    [DataRow("https://maersk.com")]
+    [DataRow("https://www.maersk.com/book/sailings")]
+    public void OfficialHomepageOrBookingPageMayInspectVisibleAccount(string url)
+        => Assert.IsTrue(MaerskBookingAccountEvidence.IsOfficialSessionCheckPage(url));
+
+    [DataTestMethod]
+    [DataRow("https://www.maersk.com/portaluser/login")]
+    [DataRow("https://accounts.maersk.com/")]
+    [DataRow("http://maersk.com/")]
+    [DataRow("https://evil-maersk.com/")]
+    [DataRow("https://maersk.com.evil.example/")]
+    [DataRow("https://maersk.com/bookings-fake")]
+    [DataRow("about:blank")]
+    public void UnsafeOrUnrelatedPagesCannotVerifySession(string url)
+        => Assert.IsFalse(MaerskBookingAccountEvidence.IsOfficialSessionCheckPage(url));
+
+    [TestMethod]
+    public void OnlyNumericCustomerCodesWithBoundedLengthAreFormatEligible()
+    {
+        Assert.IsTrue(MaerskBookingAccountEvidence.IsCustomerCodeFormat("12345678901"));
+        Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("1234"));
+        Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("1234567890123456"));
+        Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("Customer Code"));
+        Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("12345678abc"));
+        Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat(null));
+    }
+
+    [DataTestMethod]
     [DataRow("RS", "Royner Sibaja")]
     [DataRow("JL", "John Lopez")]
     [DataRow("AM", "Ana María")]
