@@ -260,10 +260,7 @@ public sealed class MaerskLoginService
         IPage page, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var uri)
-            || uri.Scheme != Uri.UriSchemeHttps
-            || !uri.Host.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase)
-            || !uri.AbsolutePath.StartsWith("/book", StringComparison.OrdinalIgnoreCase))
+        if (!MaerskBookingAccountEvidence.IsOfficialBookingPage(page.Url))
             return false;
 
         var body = page.Locator("body").First;
@@ -279,7 +276,65 @@ public sealed class MaerskLoginService
                 "[data-test*='account' i], [data-testid*='account' i], " +
                 "[aria-label*='account' i], a[href*='logout' i], " +
                 "button:has-text('Log out'), button:has-text('Logout')").First;
-            return await account.CountAsync() > 0 && await account.IsVisibleAsync();
+            if (await account.CountAsync() > 0 && await account.IsVisibleAsync())
+                return true;
+
+            // Current Maersk booking UI renders an initials avatar beside a
+            // visible given/family name instead of an account/logout locator.
+            // Find BOTH within the right side of the top navigation and require
+            // their initials to match. Do not accept prices, the /book URL by
+            // itself, or unrelated public navigation text as proof of login.
+            // Only this boolean evidence is used to update the session state;
+            // account names are neither logged nor persisted by this probe.
+            var identityEvidence = await page.EvaluateAsync<string?>( """
+                () => {
+                    const visible = element => {
+                        const r = element.getBoundingClientRect();
+                        if (!r.width || !r.height || r.bottom <= 0
+                            || r.top >= 340 || r.right < innerWidth * 0.55)
+                            return false;
+                        const css = getComputedStyle(element);
+                        return css.display !== 'none' && css.visibility !== 'hidden';
+                    };
+                    const avatars = [], names = [];
+                    const namePattern = /\b[\p{Lu}][\p{Ll}]{1,34}\s+[\p{Lu}][\p{Ll}]{1,34}\b/gu;
+                    const visit = root => {
+                        for (const el of root.querySelectorAll('*')) {
+                            if (el.shadowRoot) visit(el.shadowRoot);
+                            if (!visible(el)) continue;
+                            const r = el.getBoundingClientRect();
+                            const content = (el.textContent || '').trim();
+                            if (content.length > 160) continue;
+                            if (/^[A-Z]{2}$/.test(content)
+                                && r.width <= 85 && r.height <= 85)
+                                avatars.push({ value: content, r });
+                            else {
+                                for (const match of content.matchAll(namePattern)) {
+                                    names.push({ value: match[0], r });
+                                    if (names.length >= 100) break;
+                                }
+                            }
+                            if (avatars.length > 100 || names.length > 100) break;
+                        }
+                    };
+                    visit(document);
+                    for (const avatar of avatars) {
+                        for (const name of names) {
+                            if (name.r.left >= avatar.r.left - 20
+                                && name.r.left <= avatar.r.right + 300
+                                && Math.abs(name.r.top - avatar.r.top) <= 75)
+                                return avatar.value + '|' + name.value;
+                        }
+                    }
+                    return null;
+                }
+                """ );
+
+            if (string.IsNullOrEmpty(identityEvidence)) return false;
+            var separator = identityEvidence.IndexOf('|');
+            return separator == 2
+                   && MaerskBookingAccountEvidence.AvatarMatchesDisplayName(
+                       identityEvidence[..separator], identityEvidence[(separator + 1)..]);
         }
         catch (PlaywrightException)
         {
