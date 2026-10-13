@@ -251,16 +251,16 @@ public sealed class MaerskLoginService
     }
 
     /// <summary>
-    /// Recovery requires stronger evidence than a URL landing on maersk.com:
+    /// Recovery requires stronger evidence than visiting Maersk's homepage:
     /// an edge-denied page can retain the /book URL with no authenticated user.
     /// Do not mark BrowserProfile.Authenticated unless the account control is
-    /// actually visible on the original provider booking page.
+    /// actually visible on the original provider homepage or booking page.
     /// </summary>
     public static async Task<bool> HasVerifiedBookingSessionAsync(
         IPage page, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!MaerskBookingAccountEvidence.IsOfficialBookingPage(page.Url))
+        if (!MaerskBookingAccountEvidence.IsOfficialSessionCheckPage(page.Url))
             return false;
 
         var body = page.Locator("body").First;
@@ -296,7 +296,7 @@ public sealed class MaerskLoginService
                         const css = getComputedStyle(element);
                         return css.display !== 'none' && css.visibility !== 'hidden';
                     };
-                    const avatars = [], names = [];
+                    const avatars = [], names = [], codes = [], codeLabels = [];
                     const namePattern = /\b[\p{Lu}][\p{Ll}]{1,34}\s+[\p{Lu}][\p{Ll}]{1,34}\b/gu;
                     const visit = root => {
                         for (const el of root.querySelectorAll('*')) {
@@ -308,13 +308,20 @@ public sealed class MaerskLoginService
                             if (/^[A-Z]{2}$/.test(content)
                                 && r.width <= 85 && r.height <= 85)
                                 avatars.push({ value: content, r });
+                            else if (/^[0-9]{8,15}$/.test(content) && r.top >= 150
+                                     && r.width <= 240 && r.height <= 90)
+                                codes.push({ r });
+                            else if (/^(?:customer|client)\s*code\s*:?$/i.test(content)
+                                     && r.top >= 150 && r.width <= 240)
+                                codeLabels.push({ r });
                             else {
                                 for (const match of content.matchAll(namePattern)) {
                                     names.push({ value: match[0], r });
                                     if (names.length >= 100) break;
                                 }
                             }
-                            if (avatars.length > 100 || names.length > 100) break;
+                            if (avatars.length > 100 || names.length > 100
+                                || codes.length > 100 || codeLabels.length > 100) break;
                         }
                     };
                     visit(document);
@@ -329,11 +336,30 @@ public sealed class MaerskLoginService
                                 return avatar.value + '|' + name.value;
                         }
                     }
+                    // Maersk's account menu can expose a customer code instead
+                    // of logout/account controls. The code is evidence ONLY
+                    // alongside a visible account avatar and its nearby label,
+                    // inside the upper-right profile menu on the official site.
+                    // Return a constant token, never the actual customer code.
+                    for (const avatar of avatars) {
+                        for (const code of codes) {
+                            if (code.r.left < avatar.r.left - 20
+                                || code.r.left > avatar.r.right + 350
+                                || code.r.top < avatar.r.top - 25
+                                || code.r.top > avatar.r.bottom + 160)
+                                continue;
+                            if (codeLabels.some(label =>
+                                Math.abs(label.r.top - code.r.top) <= 85
+                                && Math.abs(label.r.left - code.r.left) <= 180))
+                                return 'VERIFIED_CUSTOMER_CODE';
+                        }
+                    }
                     return null;
                 }
                 """ );
 
             if (string.IsNullOrEmpty(identityEvidence)) return false;
+            if (identityEvidence == "VERIFIED_CUSTOMER_CODE") return true;
             var separator = identityEvidence.IndexOf('|');
             return separator == 2
                    && MaerskBookingAccountEvidence.AvatarMatchesDisplayName(
