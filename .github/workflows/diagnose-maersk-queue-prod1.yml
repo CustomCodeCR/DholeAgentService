@@ -153,5 +153,7 @@ jobs:
           query("running",f"""SELECT count(*) FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND status='Running'""")
           query("queued",f"""SELECT id::text,status,attempt,priority,coalesce(to_char(next_attempt_at_utc at time zone 'UTC','YYYY-MM-DD HH24:MI:SS'),'none') FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND status='Queued' ORDER BY priority DESC,created_at_utc LIMIT 12""")
           query("profile",f"""SELECT status,count(*) FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}' AND is_active AND NOT is_deleted GROUP BY status""")
+          query("manual_verification",f"""SELECT id::text,status,attempt,coalesce(error_code,'none'),coalesce(to_char(started_at at time zone 'UTC','YYYY-MM-DD HH24:MI:SS'),'none'),coalesce(to_char(completed_at at time zone 'UTC','YYYY-MM-DD HH24:MI:SS'),'none') FROM agent."AgentExecutions" WHERE provider_id='{PROVIDER}' AND input_json::jsonb @> '{{"maerskSessionVerification":true}}'::jsonb ORDER BY created_at_utc DESC LIMIT 8""")
+          query("original_profile",f"""SELECT status,coalesce(to_char(last_login_at at time zone 'UTC','YYYY-MM-DD HH24:MI:SS'),'none'),coalesce(to_char(last_used_at at time zone 'UTC','YYYY-MM-DD HH24:MI:SS'),'none') FROM agent."BrowserProfiles" WHERE provider_id='{PROVIDER}' AND is_active AND NOT is_deleted LIMIT 4""")
           print("MAERSK_DIAG_FINISHED_READ_ONLY")
           PY
