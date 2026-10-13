@@ -46,7 +46,7 @@ public sealed class MaerskBookingAccountEvidenceTests
     [TestMethod]
     public void OnlyNumericCustomerCodesWithBoundedLengthAreFormatEligible()
     {
-        Assert.IsTrue(MaerskBookingAccountEvidence.IsCustomerCodeFormat("30900042289"));
+        Assert.IsTrue(MaerskBookingAccountEvidence.IsCustomerCodeFormat("12345678901"));
         Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("1234"));
         Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("1234567890123456"));
         Assert.IsFalse(MaerskBookingAccountEvidence.IsCustomerCodeFormat("Customer Code"));
