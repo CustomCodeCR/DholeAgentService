@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,55 @@ def update(env_file, generation, credential, status):
     result = apply.sql(apply.parse_db(env_file), query, stage="standby_auth_status")
     if status != "Failed" and result.strip() != generation:
         raise ValueError("standby_auth_state_changed")
+
+
+def restart_ready(env_file, generation, credential):
+    """Re-arm only a healthy, explicitly restarted standby viewer for a new proof."""
+    if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
+            int(generation[4:]) > 200) or not re.fullmatch(r"[0-9a-f]{32}", credential):
+        raise ValueError("invalid_standby_target")
+    viewer_name = "dhole-standby-auth-" + generation
+    inspection = subprocess.run(
+        ["docker", "inspect", viewer_name], capture_output=True, text=True,
+        timeout=15, check=False)
+    if inspection.returncode or not inspection.stdout:
+        raise ValueError("restarted_viewer_not_found")
+    viewer = json.loads(inspection.stdout)[0]
+    labels = viewer.get("Config", {}).get("Labels") or {}
+    if (labels.get("dhole.standby.auth.generation") != generation or
+            labels.get("dhole.standby.auth.credential") != credential or
+            viewer.get("State", {}).get("Status") != "running" or
+            not re.fullmatch(r"dhole/agent-workers:standby-inspector-[0-9a-f]{12}",
+                             viewer.get("Config", {}).get("Image") or "")):
+        raise ValueError("restarted_viewer_not_healthy")
+    probe = subprocess.run(
+        ["docker", "exec", viewer_name, "curl", "-fsS", "--max-time", "3",
+         "--output", "/dev/null", "http://127.0.0.1:9222/json/version"],
+        capture_output=True, timeout=8, check=False)
+    if probe.returncode:
+        raise ValueError("restarted_chromium_not_ready")
+    # Failed may be retried only after this explicit, healthy restart.
+    # Invalidate any previous identity proof; the next inspect must re-attest.
+    query = f"""
+      ALTER TABLE agent.runtime_generation_auth_sessions
+        ADD COLUMN IF NOT EXISTS account_name text,
+        ADD COLUMN IF NOT EXISTS account_username text,
+        ADD COLUMN IF NOT EXISTS account_customer_id text,
+        ADD COLUMN IF NOT EXISTS account_verified_at_utc timestamptz;
+      UPDATE agent.runtime_generation_auth_sessions
+      SET status='Ready', diagnostic_code=NULL,
+          account_name=NULL, account_username=NULL, account_customer_id=NULL,
+          account_verified_at_utc=NULL,
+          requested_at_utc=now(), updated_at_utc=now()
+      WHERE generation='{generation}'
+        AND credential_id='{credential}'::uuid
+        AND status IN ('Preparing','Ready','Failed')
+      RETURNING generation;
+    """
+    result = apply.sql(apply.parse_db(env_file), query, stage="standby_auth_restart_ready")
+    if result.splitlines()[-1:] != [generation]:
+        raise ValueError("restarted_standby_state_changed")
+    print("STANDBY_AUTH_STATE_RECORDED status=Ready")
 
 
 def record_identity(env_file, generation, credential, identity_file):
@@ -120,8 +170,13 @@ def main():
     parser.add_argument("--status",required=False)
     parser.add_argument("--identity-file")
     parser.add_argument("--reset-identity",action="store_true")
+    parser.add_argument("--restart-ready",action="store_true")
     args=parser.parse_args()
-    if args.identity_file:
+    if args.restart_ready:
+        if args.status != "Ready" or args.identity_file or args.reset_identity:
+            raise ValueError("invalid_restart_ready_options")
+        restart_ready(args.env_file, args.generation, args.credential)
+    elif args.identity_file:
         record_identity(args.env_file,args.generation,args.credential,Path(args.identity_file))
     elif args.reset_identity:
         reset_identity(args.env_file,args.generation,args.credential)
