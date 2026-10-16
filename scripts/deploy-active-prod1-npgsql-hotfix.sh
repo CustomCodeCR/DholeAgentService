@@ -193,7 +193,8 @@ import subprocess
 import sys
 
 labels = ("primary_api", "prod1_api", "prod1_worker")
-for label, container in zip(labels, sys.argv[1:], strict=True):
+assert len(sys.argv) == 4, "three exact prod1 runtime containers required"
+for label, container in zip(labels, sys.argv[1:]):
     info = json.loads(subprocess.run(
         ["docker", "inspect", container], capture_output=True, text=True,
         check=True, timeout=20).stdout)[0]
