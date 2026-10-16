@@ -128,6 +128,37 @@ else
     hermes-config-init hermes-agent dhole-agent-api
   "${compose[@]}" create --no-build --pull never dhole-agent-workers
 fi
+# Provisioning is complete only when all three services exist exactly once.
+# A standby Worker is intentionally stopped: starting it would create a
+# second queue consumer and could compromise the active browser session.
+for required_service in hermes-agent dhole-agent-api dhole-agent-workers; do
+  service_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+    --filter "label=com.docker.compose.service=$required_service")"
+  service_count="$(printf '%s\n' "$service_ids" | sed '/^$/d' | wc -l)"
+  [[ "$service_count" -eq 1 ]] || {
+    printf 'GENERATION_REQUIRED_SERVICE_MISSING service=%s count=%s\n' \
+      "$required_service" "$service_count" >&2
+    exit 1
+  }
+done
+# A stopped Worker cannot serve noVNC. Its browser and keyring mounts
+# must nevertheless be configured before reporting successful provisioning.
+worker_id="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+  --filter 'label=com.docker.compose.service=dhole-agent-workers')"
+for mount_target in /data/browser-profiles /data/agent-keys; do
+  mount_count="$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' \
+    "$worker_id" | grep -Fxc "$mount_target" || true)"
+  [[ "$mount_count" -eq 1 ]] || {
+    printf 'GENERATION_WORKER_PERSISTENCE_MISSING mount=%s\n' "$mount_target" >&2
+    exit 1
+  }
+done
+novnc_enabled="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  "$worker_id" | grep -Fxc 'AGENT_NOVNC_ENABLED=true' || true)"
+[[ "$novnc_enabled" -eq 1 ]] || {
+  echo 'GENERATION_WORKER_NOVNC_CONFIG_MISSING' >&2; exit 1;
+}
+echo "GENERATION_REQUIRED_COMPONENTS_PRESENT: $generation api hermes workers(dormant)"
 worker="$("${compose[@]}" ps -aq dhole-agent-workers)"
 [[ -n "$worker" ]] || { echo 'GENERATION_WORKER_MISSING' >&2; exit 1; }
 state="$(docker inspect -f '{{.State.Status}}' "$worker")"
