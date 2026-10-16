@@ -13,6 +13,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # Release 2026-10-13: fix offscreen commodity option selection in Maersk searches PR #145.
 # Release 2026-10-15: restore GitHub generation dispatcher credential in protected prod1 runtime.
 # Release 2026-10-16: stage isolated standby Maersk noVNC before generation handoff (PR #151).
+# Release 2026-10-16: verify original standby Maersk Hub account and show username/Customer ID (PR #158).
 on:
   push:
     branches: [master]
