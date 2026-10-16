@@ -40,6 +40,9 @@ jobs:
           set -euo pipefail
           python3 -m py_compile scripts/operator-attest-generation-readiness.py
           python3 -m unittest discover -s tests -p test_operator_standby_readiness.py -v
+          python3 -m py_compile scripts/standby-authentication.py scripts/standby-auth-state.py
+          python3 -m unittest discover -s tests -p test_standby_authentication.py -v
+          bash -n docker/start-standby-auth.sh
 
       - name: Dormant standby image synchronization safety regression
         run: |
