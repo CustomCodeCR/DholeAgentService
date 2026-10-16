@@ -14,12 +14,12 @@ internal static class StandbyAccountInspector
 
     public static async Task<int> RunAsync()
     {
+        var reason = "no_official_hub_page";
         try
         {
             using var playwright = await Playwright.CreateAsync();
-            // Do not close the externally running Chromium: it owns the
-            // operator's persisted standby session. The probe process exits
-            // after inspecting and only its CDP connection is dropped.
+            // Never close externally owned Chromium or navigate the browser.
+            // Inspection only reads the protected Hub and opens its Account panel.
             var browser = await playwright.Chromium.ConnectOverCDPAsync(
                 "http://127.0.0.1:9222", new BrowserTypeConnectOverCDPOptions
                 {
@@ -29,44 +29,87 @@ internal static class StandbyAccountInspector
             foreach (var context in browser.Contexts)
             foreach (var page in context.Pages)
             {
-                if (!AllowedOfficialPage(page.Url))
+                if (!AllowedOfficialPage(page.Url) ||
+                    !Uri.TryCreate(page.Url, UriKind.Absolute, out var uri) ||
+                    !(uri.AbsolutePath.Equals("/hub", StringComparison.OrdinalIgnoreCase) ||
+                      uri.AbsolutePath.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase)))
                     continue;
 
-                // Inspect the authenticated Hub account without requiring
-                // the operator to open its menu manually.
-                var identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
-                if (identity is null && page.Url.Contains("/hub", StringComparison.OrdinalIgnoreCase))
+                reason = "hub_identity_not_visible";
+                var identity = await ReadIdentityAsync(page);
+                if (identity is null)
+                    continue;
+
+                if (!ValidIdentity(identity))
                 {
-                    var account = page.GetByRole(AriaRole.Button,
-                        new() { Name = "Account", Exact = true });
-                    if (await account.CountAsync() == 1)
-                    {
-                        await account.ClickAsync(new() { Timeout = 2_000 });
-                        identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
-                    }
-                }
-                if (identity is null || !ValidIdentity(identity))
+                    reason = "hub_identity_invalid_format";
                     continue;
+                }
 
-                // This is captured by the protected workflow and stored privately.
-                // The workflow must never print the stdout or account details.
+                // Identity details are sent only to the protected workflow via stdout.
+                // No page HTML, cookies, authentication headers or tokens are logged.
                 Console.WriteLine(JsonSerializer.Serialize(identity));
                 return 0;
             }
         }
         catch (PlaywrightException)
         {
-            // Deliberately do not disclose page content or provider token data.
+            reason = "cdp_or_page_inspection_failed";
         }
         catch (TimeoutException)
         {
+            reason = "browser_inspection_timed_out";
         }
         catch (Exception)
         {
-            // Report only an unverified result; page contents and tokens stay private.
+            reason = "unexpected_inspection_error";
         }
-        Console.Error.WriteLine("STANDBY_MAERSK_ACCOUNT_NOT_VERIFIED");
+
+        Console.Error.WriteLine("STANDBY_MAERSK_ACCOUNT_NOT_VERIFIED reason=" + reason);
         return 3;
+    }
+
+    private static async Task<Identity?> ReadIdentityAsync(IPage page)
+    {
+        // Maersk's account trigger can be a button, an icon with an accessible
+        // name, or a text-bearing element inside a web component. Read the
+        // panel first, since opening an already expanded menu may close it.
+        var candidates = new ILocator[]
+        {
+            page.GetByRole(AriaRole.Button, new() { Name = "Account", Exact = true }),
+            page.Locator("button[aria-label*='account' i], [role='button'][aria-label*='account' i]"),
+            page.GetByText("Account", new() { Exact = true })
+        };
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
+            if (identity is not null && ValidIdentity(identity))
+                return identity;
+
+            if (attempt == 0)
+            {
+                foreach (var candidate in candidates)
+                {
+                    try
+                    {
+                        if (await candidate.CountAsync() == 0)
+                            continue;
+                        await candidate.First.ClickAsync(new() { Timeout = 1_500 });
+                        break;
+                    }
+                    catch (PlaywrightException)
+                    {
+                        // A hidden candidate should not prevent trying the next
+                        // visible control. Never force-click or navigate.
+                    }
+                }
+            }
+            await Task.Delay(450);
+        }
+
+        // Preserve the distinction between absent and malformed account data.
+        return await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
     }
 
     private static bool AllowedOfficialPage(string? location)
@@ -93,7 +136,7 @@ internal static class StandbyAccountInspector
             identity.DisplayName.Length is < 4 or > 100 ||
             identity.DisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 2)
             return false;
-        if (identity.DisplayName.Any(ch => char.IsControl(ch) || ch is '\'' or '"'))
+        if (identity.DisplayName.Any(ch => char.IsControl(ch) || ch is '"'))
             return false;
         if (identity.Username.Length is < 3 or > 64 ||
             !identity.Username.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '.' or '-'))
@@ -104,27 +147,70 @@ internal static class StandbyAccountInspector
 
     private const string JavaScriptEvidence = """
         () => {
-            // Verify account identity on a protected Hub page, not merely its URL.
+            // An official protected Hub plus a visible real account identity
+            // is required; the URL by itself is never sufficient to attest
+            // the specific credential. Do not read cookies or browser storage.
             if (!/^\/hub(?:\/|$)/i.test(location.pathname)) return null;
-            const body = document.body;
-            if (!body) return null;
-            const text = (body.innerText || '').replace(/\r/g, '');
-            if (!/(?:^|\n)\s*Account\s*(?:\n|$)/i.test(text)
-                || !/(?:^|\n)\s*(?:Log out|Logout|Sign out)\s*(?:\n|$)/i.test(text)
-                || /Access Denied|Verify you are human|captcha required/i.test(text))
-                return null;
-            const grab = (label, pattern) => {
-                const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
-                const position = lines.findIndex(line => line.toLowerCase() === label.toLowerCase());
-                if (position < 0 || position >= lines.length - 1) return null;
-                const value = lines[position + 1];
-                return pattern.test(value) ? value : null;
+            if (!document.body) return null;
+
+            const prohibited = /Access Denied|Verify you are human|captcha required|Sign in to continue/i;
+            const entries = [];
+            const addText = (value) => {
+                if (!value) return;
+                for (const row of value.replace(/\r/g, '').split('\n')) {
+                    const text = row.replace(/\s+/g, ' ').trim();
+                    if (text && text.length <= 180) entries.push(text);
+                }
             };
-            const displayName = grab('Name', /^[\p{L}][\p{L} .'-]{3,99}$/u);
-            const customerId = grab('Customer ID', /^[0-9]{8,15}$/);
-            const username = grab('Username', /^[A-Za-z0-9_.-]{3,64}$/);
-            if (!displayName || !customerId || !username) return null;
-            return { DisplayName: displayName, Username: username, CustomerId: customerId };
+            addText(document.body.innerText || '');
+
+            // Walk *open* shadow roots of Maersk web components. Standard
+            // document.body.innerText does not include their rendered text.
+            const walk = (root, depth) => {
+                if (depth > 8) return;
+                for (const el of root.querySelectorAll('*')) {
+                    if (!el.shadowRoot) continue;
+                    addText(el.shadowRoot.innerText || '');
+                    for (const node of el.shadowRoot.querySelectorAll('*')) {
+                        if (node.children.length === 0 && node.getClientRects().length)
+                            addText(node.innerText || node.textContent || '');
+                    }
+                    walk(el.shadowRoot, depth + 1);
+                }
+            };
+            walk(document, 0);
+            if (prohibited.test(entries.join('\n'))) return null;
+
+            const labels = {
+                DisplayName: ['Name', 'Full name', 'Display name'],
+                Username: ['Username', 'User name'],
+                CustomerId: ['Customer ID', 'Customer Id', 'Customer number']
+            };
+            const valid = {
+                DisplayName: /^[\p{L}][\p{L} .'-]{3,99}$/u,
+                Username: /^[A-Za-z0-9_.-]{3,64}$/,
+                CustomerId: /^[0-9]{8,15}$/
+            };
+            const fields = {};
+            for (const [field, aliases] of Object.entries(labels)) {
+                fields[field] = '';
+                for (let i = 0; i < entries.length && !fields[field]; i++) {
+                    for (const alias of aliases) {
+                        const line = entries[i];
+                        const exact = line.toLowerCase().replace(/:$/, '') === alias.toLowerCase();
+                        const inline = line.toLowerCase().startsWith(alias.toLowerCase() + ':');
+                        const value = (exact ? entries[i + 1] : inline
+                            ? line.slice(alias.length + 1).trim() : '') || '';
+                        if (valid[field].test(value)) {
+                            fields[field] = value;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!fields.DisplayName || !fields.Username || !fields.CustomerId)
+                return null;
+            return fields;
         }
         """;
 }
