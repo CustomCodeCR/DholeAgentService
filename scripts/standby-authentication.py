@@ -113,10 +113,12 @@ def prepare(generation, credential, script_path):
     name = viewer_name(generation)
     existing = find_viewer(name)
     if existing:
-        # Never terminate a different existing viewer or reuse its profile.
+        # Only the SAME previously verified generation+credential viewer may
+        # be reconciled, e.g. when an operator session expires after 30 min.
+        # No persistent volume is removed and the active Worker is untouched.
         _, info = inspect_existing(generation, credential)
-        if info["State"]["Status"] != "exited":
-            raise RuntimeError("standby_viewer_already_exists")
+        if info["State"]["Status"] == "running":
+            safe_run(["docker", "stop", "--time", "25", existing], 45)
         safe_run(["docker", "rm", existing])
     port = viewer_port(generation)
     # Docker publishes only 127.0.0.1, reachable to the operator by SSH.
