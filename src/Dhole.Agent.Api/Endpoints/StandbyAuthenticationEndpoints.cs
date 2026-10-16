@@ -27,6 +27,11 @@ internal static class StandbyAuthenticationEndpoints
             updated_at_utc timestamptz NOT NULL DEFAULT now(),
             diagnostic_code text NULL
         );
+        ALTER TABLE agent.runtime_generation_auth_sessions
+          ADD COLUMN IF NOT EXISTS account_name text,
+          ADD COLUMN IF NOT EXISTS account_username text,
+          ADD COLUMN IF NOT EXISTS account_customer_id text,
+          ADD COLUMN IF NOT EXISTS account_verified_at_utc timestamptz;
         CREATE UNIQUE INDEX IF NOT EXISTS ix_generation_single_pre_auth
           ON agent.runtime_generation_auth_sessions((true))
           WHERE status IN ('Requested','Preparing','Ready','Finishing');
@@ -44,14 +49,18 @@ internal static class StandbyAuthenticationEndpoints
             await ExpireAsync(db, ct);
             var rows = await ReadRowsAsync(db, """
                 SELECT generation, status, diagnostic_code,
-                       requested_at_utc::text, updated_at_utc::text
+                       requested_at_utc::text, updated_at_utc::text,
+                       account_name, account_username, account_customer_id,
+                       account_verified_at_utc::text
                 FROM agent.runtime_generation_auth_sessions
                 ORDER BY requested_at_utc DESC LIMIT 50
                 """, ct);
             return Results.Ok(ApiResponse<object>.Ok(rows.Select(x => new
             {
                 generation = x[0], status = x[1], diagnosticCode = x[2],
-                requestedAtUtc = x[3], updatedAtUtc = x[4]
+                requestedAtUtc = x[3], updatedAtUtc = x[4],
+                accountName = x[5], accountUsername = x[6],
+                accountCustomerId = x[7], accountVerifiedAtUtc = x[8]
             }).ToArray()));
         }).RequireScope(AgentScopeNames.BrowserProfilesView);
 
@@ -111,7 +120,9 @@ internal static class StandbyAuthenticationEndpoints
                         actor_id=EXCLUDED.actor_id,
                         status='Requested',
                         requested_at_utc=now(),updated_at_utc=now(),
-                        diagnostic_code=NULL
+                        diagnostic_code=NULL,
+                        account_name=NULL,account_username=NULL,
+                        account_customer_id=NULL,account_verified_at_utc=NULL
                     WHERE runtime_generation_auth_sessions.status NOT IN
                         ('Requested','Preparing','Ready','Finishing')
                     RETURNING generation
@@ -131,6 +142,71 @@ internal static class StandbyAuthenticationEndpoints
             }
             return Results.Accepted("/api/agents/runtime-generations/authentication/",
                 new { generation, status = "Requested", activeGenerationUnchanged = true });
+        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
+        // Actual provider proof is produced by a read-only CDP probe inside
+        // this generation's temporary browser (not by the active prod1 Worker).
+        group.MapPost("/{generation}/inspect", async (
+            string generation, HttpContext http, ServiceDbContext db,
+            IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (http.GetCurrentUserId() is not { } actor || actor == Guid.Empty)
+                return Results.Unauthorized();
+            if (!ValidTarget(generation))
+                return Results.BadRequest(new { code = "invalid_generation" });
+            var token = configuration["GenerationOrchestrator:GitHubToken"];
+            if (!configuration.GetValue<bool>("GenerationOrchestrator:Enabled") ||
+                string.IsNullOrWhiteSpace(token))
+                return Results.Conflict(new { code = "github_dispatcher_not_configured" });
+            await ExpireAsync(db, ct);
+            var credential = await ScalarAsync(db, """
+                SELECT credential_id::text
+                FROM agent.runtime_generation_auth_sessions
+                WHERE generation=@generation AND actor_id=@actor AND status='Ready'
+                  AND requested_at_utc>now()-interval '30 minutes'
+                """, ct, ("generation", generation), ("actor", actor));
+            if (credential is null || !Guid.TryParse(credential, out var id))
+                return Results.Conflict(new { code = "standby_authentication_not_ready" });
+            if (!await DispatchAsync(token, "inspect", generation, id,
+                "INSPECT_STANDBY_ACCOUNT", ct))
+                return Results.Conflict(new { code = "standby_identity_dispatch_failed" });
+            return Results.Accepted("/api/agents/runtime-generations/authentication/",
+                new { generation, operation = "inspect", activeGenerationUnchanged = true });
+        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
+        group.MapPost("/{generation}/restart", async (
+            string generation, HttpContext http, ServiceDbContext db,
+            IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (http.GetCurrentUserId() is not { } actor || actor == Guid.Empty)
+                return Results.Unauthorized();
+            if (!ValidTarget(generation))
+                return Results.BadRequest(new { code = "invalid_generation" });
+            var token = configuration["GenerationOrchestrator:GitHubToken"];
+            if (!configuration.GetValue<bool>("GenerationOrchestrator:Enabled") ||
+                string.IsNullOrWhiteSpace(token))
+                return Results.Conflict(new { code = "github_dispatcher_not_configured" });
+            await ExpireAsync(db, ct);
+            var credential = await ScalarAsync(db, """
+                UPDATE agent.runtime_generation_auth_sessions
+                SET status='Preparing', updated_at_utc=now(),
+                    account_name=NULL, account_username=NULL,
+                    account_customer_id=NULL,account_verified_at_utc=NULL
+                WHERE generation=@generation AND actor_id=@actor AND status='Ready'
+                  AND requested_at_utc>now()-interval '30 minutes'
+                RETURNING credential_id::text
+                """, ct, ("generation", generation), ("actor", actor));
+            if (credential is null || !Guid.TryParse(credential, out var id))
+                return Results.Conflict(new { code = "standby_authentication_not_ready" });
+            if (!await DispatchAsync(token, "restart", generation, id,
+                "RESTART_STANDBY_ACCOUNT_VIEWER", ct))
+            {
+                await UpdateStatusAsync(db, generation, "Preparing", "Ready",
+                    "github_dispatch_failed", ct);
+                return Results.Conflict(new { code = "standby_restart_dispatch_failed" });
+            }
+            return Results.Accepted("/api/agents/runtime-generations/authentication/",
+                new { generation, operation = "restart", activeGenerationUnchanged = true });
         }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
         group.MapPost("/{generation}/complete", async (
@@ -154,6 +230,9 @@ internal static class StandbyAuthenticationEndpoints
                 WHERE generation=@generation AND status='Ready'
                   AND requested_at_utc>now()-interval '30 minutes'
                   AND actor_id=@actor
+                  AND account_verified_at_utc > now()-interval '5 minutes'
+                  AND account_username IS NOT NULL
+                  AND account_customer_id IS NOT NULL
                 RETURNING credential_id::text
                 """, ct, ("generation", generation), ("actor", actor));
             if (credential is null || !Guid.TryParse(credential, out var credentialId))
