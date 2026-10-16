@@ -75,6 +75,21 @@ jobs:
           chmod 600 "$RUNNER_TEMP/standby-authentication/.env.production"
           echo "GENERATION_PRIVATE_ENV=$RUNNER_TEMP/standby-authentication/.env.production" >> "$GITHUB_ENV"
 
+      - name: Safely repair missing dormant standby Worker before browser preparation
+        if: ${{ inputs.operation == 'prepare' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+        run: |
+          set -euo pipefail
+          # Existing guarded provisioning creates ONLY the missing dormant
+          # Worker, preserves browser/key/Hermes volumes, and keeps the only
+          # active queue Worker in its original generation.
+          # The standby API is stateless and may be safely reconciled.
+          bash scripts/provision-production-generation.sh \
+            "$GENERATION" apply .dhole-system "$GENERATION_PRIVATE_ENV"
+          echo "STANDBY_AUTH_DORMANT_WORKER_REPAIRED generation=$GENERATION"
+
       - name: Claim requested standby authentication
         if: ${{ inputs.operation == 'prepare' }}
         shell: bash
