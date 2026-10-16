@@ -93,8 +93,8 @@ internal static class StandbyAccountInspector
 
 
     // Playwright may not enumerate an existing Chromium tab even when Chrome's
-    // local /json/list exposes it. Use that local page target as a read-only
-    // fallback; do not navigate, handle cookies, or touch a queue Worker.
+    // local /json/list exposes it. Use that local page target as a non-navigating
+    // fallback; only the Account menu may be opened; never read cookies or start jobs.
     private static async Task<(Identity? Identity, string Reason)> InspectDirectPageTargetAsync()
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
@@ -344,7 +344,9 @@ internal static class StandbyAccountInspector
             // An official protected Hub plus a visible real account identity
             // is required; the URL by itself is never sufficient to attest
             // the specific credential. Do not read cookies or browser storage.
-            if (!/^\/hub(?:\/|$)/i.test(location.pathname)) return null;
+            if (location.protocol !== 'https:' ||
+                !['www.maersk.com', 'maersk.com'].includes(location.hostname) ||
+                !/^\/hub(?:\/|$)/i.test(location.pathname)) return null;
             if (!document.body) return null;
 
             const prohibited = /Access Denied|Verify you are human|captcha required|Sign in to continue/i;
