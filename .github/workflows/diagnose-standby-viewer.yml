@@ -1,0 +1,91 @@
+name: Diagnose standby Maersk viewer (read-only)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/diagnose-standby-viewer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect prod2 browser-only preflight without modifying Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          python3 - <<'PY'
+          import importlib.util, json, subprocess
+          from pathlib import Path
+          def module(path, key):
+              spec=importlib.util.spec_from_file_location(key, str(path))
+              result=importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(result)
+              return result
+          root=Path.cwd()
+          st=module(root/'scripts/standby-authentication.py','safe_standby')
+          ex=st.executor
+          def mark(k,v): print('STANDBY_DIAG '+k+'='+str(v),flush=True)
+          def safe(k,fn):
+              try:
+                  v=fn()
+                  mark(k,'pass')
+                  return v
+              except Exception as e:
+                  error=str(e)
+                  if 'exactly one' in error:
+                      reason='missing_or_ambiguous_container'
+                  elif 'required persistent mount missing' in error:
+                      reason='missing_browser_mount'
+                  elif 'exactly one active' in error:
+                      reason='multiple_or_no_active_worker'
+                  else:
+                      reason=type(e).__name__
+                  mark(k,'failed_'+reason)
+                  return None
+          active=safe('sole_active_queue_owner',ex.find_running_generation)
+          names=safe('destination_names',lambda:ex.generation_services('prod2'))
+          if names:
+              proj,api,worker,hermes=names
+              target=safe('dormant_worker_container',lambda:ex.inspect(proj,worker))
+              destapi=safe('standby_api_container',lambda:ex.inspect(proj,api))
+              desthermes=safe('standby_hermes_container',lambda:ex.inspect(proj,hermes))
+              if target:
+                  mark('dormant_worker_state',target['State']['Status'])
+              if destapi: mark('api_healthy',ex.healthy(destapi))
+              if desthermes: mark('hermes_healthy',ex.healthy(desthermes))
+              if active and target:
+                  ma=safe('active_profile_mount',lambda:ex.mount_name(active[1],'/data/browser-profiles'))
+                  mb=safe('target_profile_mount',lambda:ex.mount_name(target,'/data/browser-profiles'))
+                  if ma and mb:
+                      mark('profile_isolated',ma!=mb)
+                      mark('target_is_volume',mb[0]=='volume')
+                  mark('worker_image_revision_matches',target['Image']==active[1]['Image'])
+          exists=safe('viewer_discovery',lambda:st.find_viewer('dhole-standby-auth-prod2'))
+          if exists:
+              viewer=safe('viewer_inspection',lambda:json.loads(
+                  subprocess.run(['docker','inspect',exists],capture_output=True,
+                                 text=True,check=True,timeout=10).stdout)[0])
+              if viewer:
+                  mark('viewer_state',viewer['State']['Status'])
+                  mark('viewer_exit_code',viewer['State'].get('ExitCode'))
+                  mark('viewer_published_loopback',bool(viewer.get('NetworkSettings',{})
+                           .get('Ports',{}).get('6080/tcp')))
+          else:
+              mark('viewer_state','absent')
+          p=subprocess.run(['curl','-fsS','--connect-timeout','2','--max-time','3',
+                            '-o','/dev/null','http://127.0.0.1:6083/vnc.html'],
+                           capture_output=True,timeout=5)
+          mark('host_novnc_http', 'ok' if p.returncode==0 else 'unavailable')
+          PY
