@@ -23,6 +23,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: dhole-agent-production
@@ -128,12 +129,33 @@ jobs:
         if: ${{ inputs.operation == 'restart' }}
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a dedicated read:packages credential when cross-repository
+          # package access has not been granted to this workflow's GITHUB_TOKEN.
+          # Neither credential is ever written to the image or logs.
+          GITHUB_TOKEN: ${{ secrets.NUGET_PACKAGES_READ_TOKEN || github.token }}
+          NUGET_PACKAGE_USER: ${{ vars.NUGET_PACKAGES_ACTOR || github.actor }}
         run: |
           set -euo pipefail
+          set +x
+          [[ -n "$GITHUB_TOKEN" && -n "$NUGET_PACKAGE_USER" ]] || {
+            echo "STANDBY_NUGET_CREDENTIAL_MISSING" >&2
+            exit 2
+          }
+          # Fail clearly before an expensive image build. A 403 means the
+          # package owner must grant Actions access to this repository or a
+          # dedicated read:packages token must be configured.
+          status="$(curl --silent --show-error --max-time 20 \
+            --output /dev/null --write-out '%{http_code}' \
+            --user "$NUGET_PACKAGE_USER:$GITHUB_TOKEN" \
+            "https://nuget.pkg.github.com/CustomCodeCR/download/customcodeframework.core/index.json")"
+          if [[ "$status" != 200 ]]; then
+            echo "STANDBY_NUGET_PACKAGE_ACCESS_REFUSED http_status=$status" >&2
+            echo "Grant DholeAgentService Actions access to CustomCodeFramework packages, or set NUGET_PACKAGES_READ_TOKEN (read:packages) and NUGET_PACKAGES_ACTOR." >&2
+            exit 2
+          fi
           tag="standby-inspector-$(git rev-parse --short=12 HEAD)"
           docker build --target worker-final \
-            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --build-arg "GITHUB_ACTOR=$NUGET_PACKAGE_USER" \
             --secret id=github_token,env=GITHUB_TOKEN \
             -t "dhole/agent-workers:$tag" .
           echo "STANDBY_AUTH_IMAGE=dhole/agent-workers:$tag" >> "$GITHUB_ENV"
