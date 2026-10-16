@@ -36,6 +36,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
              patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, RuntimeError("pruned")]), \
              patch.object(auth.executor, "healthy", return_value=True), \
              patch.object(auth.executor, "mount_name", return_value=("volume", "prod1_profiles")), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": ""})()), \
              patch.object(auth, "safe_run", return_value=json.dumps(metadata)):
             stopped_worker, result_volume = auth.guard_standby("prod2")
             self.assertIsNone(stopped_worker)
@@ -49,7 +50,9 @@ class StandbyAuthenticationTests(unittest.TestCase):
         with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
              patch.object(auth.executor, "generation_services", return_value=(
                  "dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
-             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, running_worker]), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy]), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": "worker-id\\n"})()), \
+             patch.object(auth, "safe_run", return_value=json.dumps([running_worker])), \
              patch.object(auth.executor, "healthy", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "standby_worker_must_remain_stopped"):
                 auth.guard_standby("prod2")
@@ -68,6 +71,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
              patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, RuntimeError("pruned")]), \
              patch.object(auth.executor, "healthy", return_value=True), \
              patch.object(auth.executor, "mount_name", return_value=("volume", "prod1_profiles")), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": ""})()), \
              patch.object(auth, "safe_run", return_value=json.dumps(metadata)):
             with self.assertRaisesRegex(RuntimeError, "standby_browser_volume_not_owned_by_generation"):
                 auth.guard_standby("prod2")
