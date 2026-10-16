@@ -119,6 +119,25 @@ def guard_standby(generation):
     return standby, volume
 
 
+
+def require_exclusive_browser_volume(volume, existing_viewer):
+    """Refuse to clear Chromium locks while another live container can use this volume."""
+    volume_info = json.loads(safe_run(["docker", "volume", "inspect", volume], 15))[0]
+    mountpoint = volume_info.get("Mountpoint", "")
+    running = safe_run(["docker", "ps", "-q"], 15).splitlines()
+    if not running:
+        return
+    containers = json.loads(safe_run(["docker", "inspect", *running], 30))
+    for container in containers:
+        if container.get("Id") == existing_viewer:
+            continue
+        for mount in container.get("Mounts") or []:
+            source = mount.get("Source") or ""
+            if (mount.get("Type") == "volume" and mount.get("Name") == volume) or (
+                mountpoint and (source == mountpoint or source.startswith(mountpoint + "/"))
+            ):
+                raise RuntimeError("standby_browser_volume_in_use")
+
 def prepare(generation, credential, script_path, image_override=None):
     guard_generation(generation)
     if not CREDENTIAL.fullmatch(credential):
@@ -135,6 +154,10 @@ def prepare(generation, credential, script_path, image_override=None):
         raise RuntimeError("single_active_queue_owner_required")
     name = viewer_name(generation)
     existing = find_viewer(name)
+    if existing:
+        inspect_existing(generation, credential)
+    # Exclusive use is mandatory before any Chromium Singleton* cleanup.
+    require_exclusive_browser_volume(volume, existing)
     if existing:
         # Only the SAME previously verified generation+credential viewer may
         # be reconciled, e.g. when an operator session expires after 30 min.
@@ -154,6 +177,7 @@ def prepare(generation, credential, script_path, image_override=None):
         "--publish", f"127.0.0.1:{port}:6080",
         "--network", "dhole", "--shm-size", "2g",
         "--security-opt", "no-new-privileges",
+        "--env", "STANDBY_PROFILE_LOCK_CLEANUP_ALLOWED=1",
         "--mount", "type=volume,source=" + volume + ",target=/data/browser-profiles",
         "--mount", "type=bind,source=" + str(script_path.resolve()) + ",target=/app/start-standby-auth.sh,readonly",
         "--entrypoint", "/bin/bash",
@@ -279,6 +303,7 @@ if __name__ == "__main__":
             "standby_viewer_failed_to_start", "standby_viewer_health_timeout",
             "untrusted_standby_image", "standby_docker_operation_failed",
             "viewer_discovery_failed", "ambiguous_standby_viewer",
+            "standby_browser_volume_in_use",
             "standby_account_not_visible_in_official_menu", "invalid_standby_identity",
             "unsafe_identity_output", "identity_output_required",
         }
