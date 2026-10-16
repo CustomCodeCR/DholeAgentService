@@ -141,17 +141,36 @@ class StandbyAuthenticationTests(unittest.TestCase):
         self.assertIn('["docker", "rm", existing]', source)
         self.assertNotIn('"docker", "volume", "rm"', source)
 
-    def test_restarting_viewer_keeps_persistent_profile_volume(self):
-        with patch.object(auth, "guard_standby"), \
-             patch.object(auth, "inspect_existing", return_value=(
-                 "ephemeral-only", {"State": {"Status": "running"}})), \
-             patch.object(auth, "safe_run") as docker, \
-             patch.object(auth, "prepare") as prepare:
+    def test_restarting_viewer_validates_before_stopping_existing(self):
+        with patch.object(auth, "prepare") as prepare, \
+             patch.object(auth, "safe_run") as docker:
             auth.restart_viewer("prod2", "b"*32, ROOT / "docker/start-standby-auth.sh")
-            self.assertEqual(docker.call_args.args[0],
-                             ["docker", "stop", "--time", "25", "ephemeral-only"])
-            prepare.assert_called_once()
-            self.assertNotIn("volume", str(docker.call_args_list))
+            prepare.assert_called_once_with(
+                "prod2", "b"*32, ROOT / "docker/start-standby-auth.sh", None)
+            docker.assert_not_called()
+
+    def test_exclusive_volume_guard_rejects_other_running_container(self):
+        import json
+        volume = "dhole-agent-prod2_browser-profiles"
+        metadata = [{"Mountpoint": "/var/lib/docker/volumes/prod2/_data"}]
+        containers = [{"Id": "other", "Mounts": [{
+            "Type": "volume", "Name": volume,
+            "Source": "/var/lib/docker/volumes/prod2/_data"}]}]
+        with patch.object(auth, "safe_run", side_effect=[
+                json.dumps(metadata), "other", json.dumps(containers)]):
+            with self.assertRaisesRegex(RuntimeError, "standby_browser_volume_in_use"):
+                auth.require_exclusive_browser_volume(volume, None)
+
+    def test_exclusive_volume_guard_allows_only_existing_viewer(self):
+        import json
+        volume = "dhole-agent-prod2_browser-profiles"
+        metadata = [{"Mountpoint": "/var/lib/docker/volumes/prod2/_data"}]
+        containers = [{"Id": "old-viewer", "Mounts": [{
+            "Type": "volume", "Name": volume,
+            "Source": "/var/lib/docker/volumes/prod2/_data"}]}]
+        with patch.object(auth, "safe_run", side_effect=[
+                json.dumps(metadata), "old-viewer", json.dumps(containers)]):
+            auth.require_exclusive_browser_volume(volume, "old-viewer")
 
     def test_finish_only_stops_ephemeral_viewer(self):
         container = {"State":{"Status":"running"}}
