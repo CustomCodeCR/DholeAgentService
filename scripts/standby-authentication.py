@@ -83,21 +83,39 @@ def guard_standby(generation):
     if active == generation:
         raise RuntimeError("target_already_active")
     project, api_name, worker_name, hermes_name = executor.generation_services(generation)
-    standby = executor.inspect(project, worker_name)
     api = executor.inspect(project, api_name)
     hermes = executor.inspect(project, hermes_name)
-    if standby["State"]["Status"] not in ("created", "exited"):
-        raise RuntimeError("standby_worker_must_remain_stopped")
     if not executor.healthy(api) or not executor.healthy(hermes):
         raise RuntimeError("standby_infrastructure_not_healthy")
+    # The dormant queue Worker can have been pruned after provisioning. An
+    # interactive browser session must not depend on that container existing.
+    # If it exists, however, it MUST remain stopped.
+    worker_ids = subprocess.run(
+        ["docker", "ps", "-aq",
+         "--filter", "label=com.docker.compose.project=" + project,
+         "--filter", "label=com.docker.compose.service=" + worker_name],
+        capture_output=True, text=True, timeout=15, check=True).stdout.splitlines()
+    if len(worker_ids) > 1:
+        raise RuntimeError("multiple_standby_workers_refused")
+    standby = json.loads(safe_run(["docker", "inspect", worker_ids[0]], 15))[0] if worker_ids else None
+    if standby is not None and standby["State"]["Status"] not in ("created", "exited"):
+        raise RuntimeError("standby_worker_must_remain_stopped")
     source_mount = executor.mount_name(active_worker, "/data/browser-profiles")
-    target_mount = executor.mount_name(standby, "/data/browser-profiles")
-    if source_mount == target_mount or target_mount[0] != "volume":
+    volume = project + "_browser-profiles"
+    volume_info = json.loads(safe_run(["docker", "volume", "inspect", volume], 15))
+    if len(volume_info) != 1 or volume_info[0].get("Name") != volume:
+        raise RuntimeError("standby_browser_volume_missing")
+    labels = volume_info[0].get("Labels") or {}
+    if labels.get("com.docker.compose.project") != project or (
+        labels.get("com.docker.compose.volume") != "browser-profiles"
+    ):
+        raise RuntimeError("standby_browser_volume_not_owned_by_generation")
+    if source_mount == ("volume", volume):
         raise RuntimeError("standby_browser_volume_not_isolated")
-    # The temporary browser-only viewer uses the CURRENT active Worker image,
-    # but exclusively the standby's own browser volume. A dormant Worker's old
-    # image never starts and image parity is still required by the final handoff.
-    return standby, target_mount[1]
+    if standby is not None and executor.mount_name(standby, "/data/browser-profiles") != ("volume", volume):
+        raise RuntimeError("standby_worker_volume_mismatch")
+    # The viewer runs the current active image, never an additional Worker.
+    return standby, volume
 
 
 def prepare(generation, credential, script_path):

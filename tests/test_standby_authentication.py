@@ -22,31 +22,58 @@ class StandbyAuthenticationTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
                 auth.viewer_port(bad)
 
-    def test_requires_inactive_isolated_worker_with_independent_volume(self):
+    def test_pre_auth_uses_own_volume_even_if_dormant_worker_is_pruned(self):
+        import json
         active = {"Image": "worker-image"}
-        target = {"Image": "worker-image", "State": {"Status": "exited"}}
         healthy = {"State": {"Status": "running"}}
+        volume = "dhole-agent-prod2_browser-profiles"
+        metadata = [{"Name": volume, "Labels": {
+            "com.docker.compose.project": "dhole-agent-prod2",
+            "com.docker.compose.volume": "browser-profiles"}}]
         with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
-             patch.object(auth.executor, "generation_services",
-                          return_value=("dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
-             patch.object(auth.executor, "inspect", side_effect=[target, healthy, healthy]), \
+             patch.object(auth.executor, "generation_services", return_value=(
+                 "dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, RuntimeError("pruned")]), \
              patch.object(auth.executor, "healthy", return_value=True), \
-             patch.object(auth.executor, "mount_name", side_effect=[("volume","prod1"),("volume","prod2")]):
-            item, volume = auth.guard_standby("prod2")
-            self.assertEqual(item, target)
-            self.assertEqual(volume, "prod2")
+             patch.object(auth.executor, "mount_name", return_value=("volume", "prod1_profiles")), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": ""})()), \
+             patch.object(auth, "safe_run", return_value=json.dumps(metadata)):
+            stopped_worker, result_volume = auth.guard_standby("prod2")
+            self.assertIsNone(stopped_worker)
+            self.assertEqual(result_volume, volume)
 
-    def test_standby_cannot_share_active_browser_volume(self):
-        active = {"Image": "img"}
-        stopped = {"Image": "img", "State": {"Status": "exited"}}
-        ok = {"State": {"Status": "running"}}
-        with patch.object(auth.executor, "find_running_generation", return_value=("prod1",active)), \
-             patch.object(auth.executor, "generation_services",
-                          return_value=("dhole-agent-prod2", "api", "worker", "hermes")), \
-             patch.object(auth.executor, "inspect",side_effect=[stopped,ok,ok]), \
+    def test_pre_auth_rejects_running_extra_worker(self):
+        import json
+        active = {"Image": "worker-image"}
+        healthy = {"State": {"Status": "running"}}
+        running_worker = {"State": {"Status": "running"}}
+        with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
+             patch.object(auth.executor, "generation_services", return_value=(
+                 "dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy]), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": "worker-id\\n"})()), \
+             patch.object(auth, "safe_run", return_value=json.dumps([running_worker])), \
+             patch.object(auth.executor, "healthy", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "standby_worker_must_remain_stopped"):
+                auth.guard_standby("prod2")
+
+    def test_pre_auth_rejects_untrusted_browser_volume(self):
+        import json
+        active = {"Image": "worker-image"}
+        healthy = {"State": {"Status": "running"}}
+        volume = "dhole-agent-prod2_browser-profiles"
+        metadata = [{"Name": volume, "Labels": {
+            "com.docker.compose.project": "another-project",
+            "com.docker.compose.volume": "browser-profiles"}}]
+        with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
+             patch.object(auth.executor, "generation_services", return_value=(
+                 "dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, RuntimeError("pruned")]), \
              patch.object(auth.executor, "healthy", return_value=True), \
-             patch.object(auth.executor, "mount_name",return_value=("volume","same")):
-            with self.assertRaisesRegex(RuntimeError,"standby_browser_volume_not_isolated"):
+             patch.object(auth.executor, "mount_name", return_value=("volume", "prod1_profiles")), \
+             patch.object(auth.subprocess, "run", return_value=type("RunResult", (), {"stdout": ""})()), \
+             patch.object(auth, "safe_run", return_value=json.dumps(metadata)):
+            with self.assertRaisesRegex(RuntimeError, "standby_browser_volume_not_owned_by_generation"):
                 auth.guard_standby("prod2")
 
     def test_workflow_repairs_only_dormant_worker_before_starting_viewer(self):
