@@ -40,6 +40,7 @@ echo "STANDBY_AUTH_VIEWER_READY"
 # Chromium writes directly into THIS generation's persistent browser volume.
 timeout --signal=TERM --kill-after=8s 1800 "$chrome" \
   --no-sandbox --disable-dev-shm-usage --no-first-run \
+  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
   --user-data-dir="$profile" --new-window https://www.maersk.com/ \
   >/tmp/standby-browser.log 2>&1 || true
 echo "STANDBY_AUTH_VIEWER_STOPPED"
