@@ -201,6 +201,15 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Verified
 
+      - name: Remove private transient account evidence from runner
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
+          [[ ! -L "$identity_file" ]] || exit 2
+          rm -f -- "$identity_file"
+
       - name: Record safe failure for operator
         if: ${{ failure() && inputs.operation != 'inspect' && env.GENERATION_PRIVATE_ENV != '' }}
         continue-on-error: true
