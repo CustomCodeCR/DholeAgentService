@@ -194,6 +194,15 @@ def prepare(generation, credential, script_path, image_override=None):
                 "--output", "/dev/null", f"http://127.0.0.1:{port}/vnc.html"
             ], capture_output=True, timeout=4)
             if p.returncode == 0:
+                # noVNC can start before Chrome. Require a live CDP endpoint
+                # before declaring the browser ready and updating DB state.
+                cdpr = subprocess.run(
+                    ["docker", "exec", name, "curl", "-fsS", "--max-time", "2",
+                     "--output", "/dev/null", "http://127.0.0.1:9222/json/version"],
+                    capture_output=True, timeout=4, check=False)
+                if cdpr.returncode != 0:
+                    time.sleep(1)
+                    continue
                 print("STANDBY_AUTH_VIEWER_READY generation=" + generation)
                 print("STANDBY_AUTH_HOST_LOOPBACK_PORT=" + str(port))
                 print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
