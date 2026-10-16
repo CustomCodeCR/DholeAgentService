@@ -22,10 +22,16 @@ def update(env_file, generation, credential, status):
         raise ValueError("invalid_credential")
     if status not in ("Preparing", "Ready", "Verified", "Failed"):
         raise ValueError("invalid_status")
-    expected = {"Preparing": "Requested", "Ready": "Preparing",
-                "Verified": "Finishing", "Failed": None}[status]
-    where = ("AND status='" + expected + "'" if expected else
-             "AND status IN ('Requested','Preparing','Ready','Finishing')")
+    # Restart is an authorized viewer refresh, not a new authentication
+    # request. A session already Ready remains Ready after a healthy restart.
+    # Do not reopen a Failed or Verified session.
+    allowed = {
+        "Preparing": ("Requested",),
+        "Ready": ("Preparing", "Ready"),
+        "Verified": ("Finishing",),
+        "Failed": ("Requested", "Preparing", "Ready", "Finishing"),
+    }[status]
+    where = "AND status IN (" + ",".join("'" + state + "'" for state in allowed) + ")"
     diagnostic = ("NULL" if status != "Failed" else "'standby_auth_workflow_failed'")
     query = f"""
       UPDATE agent.runtime_generation_auth_sessions
