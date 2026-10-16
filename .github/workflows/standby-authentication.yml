@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "prepare independent Chromium/noVNC or finish verified authorization"
+        description: "prepare, inspect signed-in account, restart viewer, or finish verified authorization"
         required: true
         type: choice
-        options: [prepare, finish]
+        options: [prepare, inspect, restart, finish]
       generation:
         description: "Pre-provisioned standby generation, never the active owner"
         required: true
@@ -52,12 +52,13 @@ jobs:
           [[ "$GENERATION" =~ ^prod([2-9]|[1-9][0-9]{1,2})$ ]] || exit 2
           [[ "${#GENERATION}" -le 7 ]] || exit 2
           [[ "$CREDENTIAL" =~ ^[a-f0-9]{32}$ ]] || exit 2
-          if [[ "$OPERATION" == prepare ]]; then
-            [[ "$CONFIRMATION" == PREPARE_STANDBY_AUTHENTICATION ]] || exit 2
-          else
-            [[ "$OPERATION" == finish &&
-               "$CONFIRMATION" == I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS ]] || exit 2
-          fi
+          case "$OPERATION" in
+            prepare) [[ "$CONFIRMATION" == PREPARE_STANDBY_AUTHENTICATION ]] ;;
+            inspect) [[ "$CONFIRMATION" == INSPECT_STANDBY_ACCOUNT ]] ;;
+            restart) [[ "$CONFIRMATION" == RESTART_STANDBY_ACCOUNT_VIEWER ]] ;;
+            finish) [[ "$CONFIRMATION" == I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS ]] ;;
+            *) exit 2 ;;
+          esac || exit 2
           python3 -m py_compile scripts/standby-authentication.py scripts/standby-auth-state.py
           bash -n docker/start-standby-auth.sh
           echo STANDBY_AUTH_INPUTS_VERIFIED
@@ -123,6 +124,47 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
 
+      - name: Restart only the isolated Chromium viewer with local CDP
+        if: ${{ inputs.operation == 'restart' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-authentication.py --operation restart \
+            --generation "$GENERATION" --credential "$CREDENTIAL"
+
+      - name: Mark restarted viewer ready
+        if: ${{ inputs.operation == 'restart' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
+
+      - name: Read actual authenticated account before inspection or closure
+        if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
+          python3 scripts/standby-authentication.py --operation inspect \
+            --generation "$GENERATION" --credential "$CREDENTIAL" \
+            --identity-output "$identity_file"
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" \
+            --identity-file "$identity_file"
+          rm -f "$identity_file"
+          echo STANDBY_MAERSK_ACCOUNT_PROOF_RECORDED
+
       - name: Close only standby viewer; preserve persistent browser profile
         if: ${{ inputs.operation == 'finish' }}
         shell: bash
@@ -160,7 +202,7 @@ jobs:
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Verified
 
       - name: Record safe failure for operator
-        if: ${{ failure() && env.GENERATION_PRIVATE_ENV != '' }}
+        if: ${{ failure() && inputs.operation != 'inspect' && env.GENERATION_PRIVATE_ENV != '' }}
         continue-on-error: true
         shell: bash
         env:
