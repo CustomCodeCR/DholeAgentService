@@ -38,7 +38,12 @@ internal static class StandbyAccountInspector
                 reason = "hub_identity_not_visible";
                 var identity = await ReadIdentityAsync(page);
                 if (identity is null)
+                {
+                    // Only a fixed set of structural reasons is exposed.
+                    // Never dump DOM text, account names, identifiers or tokens.
+                    reason = await page.EvaluateAsync<string>(JavaScriptDiagnostic);
                     continue;
+                }
 
                 if (!ValidIdentity(identity))
                 {
@@ -144,6 +149,43 @@ internal static class StandbyAccountInspector
         return identity.CustomerId.Length is >= 8 and <= 15
             && identity.CustomerId.All(ch => ch is >= '0' and <= '9');
     }
+
+    private const string JavaScriptDiagnostic = """
+        () => {
+            if (!/^\/hub(?:\/|$)/i.test(location.pathname))
+                return 'not_on_official_hub';
+            const lines = [];
+            const record = value => {
+                if (!value) return;
+                for (const part of value.split('\n')) {
+                    const line = part.trim().toLowerCase().replace(/:$/, '');
+                    if (line && line.length < 180) lines.push(line);
+                }
+            };
+            record(document.body?.innerText || '');
+            const walk = (root, depth) => {
+                if (depth > 8) return;
+                for (const el of root.querySelectorAll('*')) {
+                    if (!el.shadowRoot) continue;
+                    for (const node of el.shadowRoot.querySelectorAll('*')) {
+                        if (!node.children.length && node.getClientRects().length)
+                            record(node.textContent || '');
+                    }
+                    walk(el.shadowRoot, depth + 1);
+                }
+            };
+            walk(document, 0);
+            if (!lines.length) return 'hub_dom_empty';
+            if (lines.some(x => /access denied|verify you are human|captcha required/.test(x)))
+                return 'hub_challenge_detected';
+            const has = (...aliases) => lines.some(line =>
+                aliases.some(alias => line === alias || line.startsWith(alias + ':')));
+            if (!has('name', 'full name', 'display name')) return 'hub_name_label_missing';
+            if (!has('username', 'user name')) return 'hub_username_label_missing';
+            if (!has('customer id', 'customer number')) return 'hub_customer_label_missing';
+            return 'hub_identity_values_not_recognized';
+        }
+        """;
 
     private const string JavaScriptEvidence = """
         () => {
