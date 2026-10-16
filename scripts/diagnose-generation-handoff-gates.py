@@ -54,14 +54,26 @@ def verified_readiness(path, target, policy):
 def inspect_pair(target, active):
     try:
         proj, api_service, worker_service, hermes_service = executor.generation_services(target)
-        api = executor.inspect(proj, api_service)
-        worker = executor.inspect(proj, worker_service)
-        hermes = (executor.inspect("dhole-infrastructure", "hermes-agent")
-                  if hermes_service is None else executor.inspect(proj, hermes_service))
+        # Expose only a safe missing/present marker per expected Compose
+        # service. No docker inspect JSON, host paths, env or token is logged.
+        def inspect_gate(label, project, service):
+            try:
+                container = executor.inspect(project, service)
+            except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+                status(label + "_container", "missing_or_ambiguous")
+                raise
+            status(label + "_container", "present")
+            return container
+
+        api = inspect_gate("destination_api", proj, api_service)
+        worker = inspect_gate("destination_worker", proj, worker_service)
+        hermes = (inspect_gate("destination_hermes", "dhole-infrastructure", "hermes-agent")
+                  if hermes_service is None else
+                  inspect_gate("destination_hermes", proj, hermes_service))
         status("destination_api_hermes", "healthy" if executor.healthy(api) and executor.healthy(hermes) else "unhealthy")
         status("destination_worker", worker["State"]["Status"])
         source_proj, source_api, _, _ = executor.generation_services(active[0])
-        source_api_container = executor.inspect(source_proj, source_api)
+        source_api_container = inspect_gate("source_api", source_proj, source_api)
         status("worker_image_revision", "matches" if active[1]["Image"] == worker["Image"] else "different")
         status("api_image_revision", "matches" if source_api_container["Image"] == api["Image"] else "different")
         source_env, worker_env = executor.container_env(active[1]), executor.container_env(worker)
