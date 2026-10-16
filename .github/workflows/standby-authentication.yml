@@ -146,7 +146,7 @@ jobs:
           # dedicated read:packages token must be configured.
           # Pass credentials over stdin rather than exposing the token in the
           # curl process command line on the shared self-hosted runner.
-          status="$(printf 'user = "%s:%s"\\n' "$NUGET_PACKAGE_USER" "$GITHUB_TOKEN" | \
+          status="$(printf 'user = "%s:%s"\n' "$NUGET_PACKAGE_USER" "$GITHUB_TOKEN" | \
             curl --config - --silent --show-error --max-time 20 \
               --output /dev/null --write-out '%{http_code}' \
               "https://nuget.pkg.github.com/CustomCodeCR/download/customcodeframework.core/index.json")"
