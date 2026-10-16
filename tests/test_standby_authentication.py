@@ -29,8 +29,9 @@ class StandbyAuthenticationTests(unittest.TestCase):
         with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
              patch.object(auth.executor, "generation_services",
                           return_value=("dhole-agent-prod2", "dhole-agent-api", "dhole-agent-workers", "hermes-agent")), \
-             patch.object(auth.executor, "inspect", side_effect=[target, healthy, healthy]), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, target]), \
              patch.object(auth.executor, "healthy", return_value=True), \
+             patch.object(auth, "standby_browser_volume", return_value="prod2"), \
              patch.object(auth.executor, "mount_name", side_effect=[("volume","prod1"),("volume","prod2")]):
             item, volume = auth.guard_standby("prod2")
             self.assertEqual(item, target)
@@ -43,26 +44,75 @@ class StandbyAuthenticationTests(unittest.TestCase):
         with patch.object(auth.executor, "find_running_generation", return_value=("prod1",active)), \
              patch.object(auth.executor, "generation_services",
                           return_value=("dhole-agent-prod2", "api", "worker", "hermes")), \
-             patch.object(auth.executor, "inspect",side_effect=[stopped,ok,ok]), \
+             patch.object(auth.executor, "inspect",side_effect=[ok,ok,stopped]), \
              patch.object(auth.executor, "healthy", return_value=True), \
+             patch.object(auth, "standby_browser_volume", return_value="same"), \
              patch.object(auth.executor, "mount_name",return_value=("volume","same")):
             with self.assertRaisesRegex(RuntimeError,"standby_browser_volume_not_isolated"):
                 auth.guard_standby("prod2")
 
-    def test_workflow_repairs_only_dormant_worker_before_starting_viewer(self):
+    def test_browser_only_workflow_does_not_create_or_start_worker(self):
         workflow = (ROOT / ".github/workflows/standby-authentication.yml").read_text()
-        repair = "Safely repair missing dormant standby Worker before browser preparation"
-        claim = "Claim requested standby authentication"
-        viewer = "Start isolated temporary Chromium and loopback-only noVNC"
-        self.assertLess(workflow.index(repair), workflow.index(claim))
-        self.assertLess(workflow.index(repair), workflow.index(viewer))
-        step = workflow.split("- name: " + repair, 1)[1].split("- name: " + claim, 1)[0]
-        self.assertIn("inputs.operation == 'prepare'", step)
-        self.assertIn("scripts/provision-production-generation.sh", step)
-        self.assertIn('"$GENERATION" apply .dhole-system "$GENERATION_PRIVATE_ENV"', step)
-        self.assertNotIn("docker compose up", step)
-        self.assertNotIn("docker start", step)
-        self.assertNotIn("docker rm", step)
+        self.assertNotIn("scripts/provision-production-generation.sh", workflow)
+        self.assertNotIn("docker compose up", workflow)
+        self.assertNotIn("docker start dhole-agent-workers", workflow)
+        self.assertLess(workflow.index("Claim requested standby authentication"),
+                        workflow.index("Start isolated temporary Chromium"))
+
+    def test_dormant_worker_may_be_absent_for_browser_only_authentication(self):
+        active = {"Image": "img"}
+        healthy = {"State": {"Status": "running"}}
+        missing = RuntimeError("GENERATION_SWITCH_REFUSED: exactly one expected container is required: dhole-agent-prod2/dhole-agent-workers")
+        with patch.object(auth.executor, "find_running_generation", return_value=("prod1", active)), \
+             patch.object(auth.executor, "generation_services",
+                          return_value=("dhole-agent-prod2", "api", "worker", "hermes")), \
+             patch.object(auth.executor, "inspect", side_effect=[healthy, healthy, missing]), \
+             patch.object(auth.executor, "healthy", return_value=True), \
+             patch.object(auth, "standby_browser_volume", return_value="prod2-browser"), \
+             patch.object(auth.executor, "mount_name", return_value=("volume", "prod1-browser")):
+            item, volume = auth.guard_standby("prod2")
+            self.assertIsNone(item)
+            self.assertEqual(volume, "prod2-browser")
+
+    def test_volume_lookup_requires_existing_compose_owned_identity(self):
+        import types
+        import json
+        result = types.SimpleNamespace(returncode=0, stdout="prod2-profile-volume\\n")
+        identity = [{
+            "Name": "prod2-profile-volume",
+            "Labels": {
+                "com.docker.compose.project": "dhole-agent-prod2",
+                "com.docker.compose.volume": "browser-profiles"
+            }
+        }]
+        with patch.object(auth.subprocess, "run", return_value=result) as ls, \
+             patch.object(auth, "safe_run", return_value=json.dumps(identity)):
+            self.assertEqual(auth.standby_browser_volume("dhole-agent-prod2"),
+                             "prod2-profile-volume")
+            self.assertEqual(ls.call_args.args[0][0:3], ["docker", "volume", "ls"])
+        with patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                returncode=0, stdout="")):
+            with self.assertRaisesRegex(RuntimeError, "volume_missing_or_ambiguous"):
+                auth.standby_browser_volume("dhole-agent-prod2")
+        identity[0]["Labels"]["com.docker.compose.project"] = "dhole-agent-prod1"
+        with patch.object(auth.subprocess, "run", return_value=result), \
+             patch.object(auth, "safe_run", return_value=json.dumps(identity)):
+            with self.assertRaisesRegex(RuntimeError, "volume_identity_mismatch"):
+                auth.standby_browser_volume("dhole-agent-prod2")
+
+    def test_duplicate_prepare_keeps_healthy_live_viewer(self):
+        import types
+        with patch.object(auth, "guard_standby", return_value=(None, "volume")), \
+             patch.object(auth.executor, "find_running_generation",
+                          return_value=("prod1", {"Image": "img", "State": {"Status": "running"}})), \
+             patch.object(auth, "find_viewer", return_value="viewer"), \
+             patch.object(auth, "inspect_existing", return_value=("viewer", {
+                 "State": {"Status": "running"}})), \
+             patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=0)), \
+             patch.object(auth, "safe_run") as docker:
+            auth.prepare("prod2", "a" * 32, ROOT / "docker/start-standby-auth.sh")
+            docker.assert_not_called()
 
     def test_active_target_is_refused(self):
         with patch.object(auth.executor, "find_running_generation",
@@ -105,13 +155,11 @@ class StandbyAuthenticationTests(unittest.TestCase):
                 auth.inspect_account("prod2", "a"*32, output)
             self.assertFalse(output.exists())
 
-    def test_reprepare_existing_viewer_cannot_delete_profile(self):
-        # A timed-out 30-minute auth may leave a viewer behind; the next
-        # authorized prepare only stops/removes that exact ephemeral viewer.
+    def test_reprepare_never_removes_persistent_browser_profile(self):
         source = (ROOT / "scripts/standby-authentication.py").read_text()
         self.assertIn('inspect_existing(generation, credential)', source)
-        self.assertIn('["docker", "stop", "--time", "25", existing]', source)
         self.assertIn('["docker", "rm", existing]', source)
+        self.assertNotIn('["docker", "stop", "--time", "25", existing]', source)
         self.assertNotIn('"docker", "volume", "rm"', source)
 
     def test_restarting_viewer_keeps_persistent_profile_volume(self):
