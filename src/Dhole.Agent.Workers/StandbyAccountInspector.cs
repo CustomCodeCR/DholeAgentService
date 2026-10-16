@@ -46,6 +46,10 @@ internal static class StandbyAccountInspector
         catch (TimeoutException)
         {
         }
+        catch (Exception)
+        {
+            // Report only an unverified result; page contents and tokens stay private.
+        }
         Console.Error.WriteLine("STANDBY_MAERSK_ACCOUNT_NOT_VERIFIED");
         return 3;
     }
@@ -105,7 +109,7 @@ internal static class StandbyAccountInspector
             const customerId = grab('Customer ID', /^[0-9]{8,15}$/);
             const username = grab('Username', /^[A-Za-z0-9_.-]{3,64}$/);
             if (!displayName || !customerId || !username) return null;
-            return { displayName, username, customerId };
+            return { DisplayName: displayName, Username: username, CustomerId: customerId };
         }
         """;
 }
