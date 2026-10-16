@@ -72,6 +72,7 @@ jobs:
                       mark('profile_isolated',ma!=mb)
                       mark('target_is_volume',mb[0]=='volume')
                   mark('worker_image_revision_matches',target['Image']==active[1]['Image'])
+          safe('compose_standby_browser_volume',lambda:st.standby_browser_volume('dhole-agent-prod2'))
           exists=safe('viewer_discovery',lambda:st.find_viewer('dhole-standby-auth-prod2'))
           if exists:
               viewer=safe('viewer_inspection',lambda:json.loads(

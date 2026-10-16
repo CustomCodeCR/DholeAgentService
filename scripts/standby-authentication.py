@@ -78,26 +78,60 @@ def inspect_existing(generation, credential):
     return existing, viewer
 
 
+def standby_browser_volume(project):
+    """Look up ONLY the existing browser volume labelled by trusted Compose.
+
+    A dormant Worker container is optional during a browser-only login; its
+    persistent named volume is not. Never create or import another profile.
+    """
+    result = subprocess.run([
+        "docker", "volume", "ls", "--quiet",
+        "--filter", "label=com.docker.compose.project=" + project,
+        "--filter", "label=com.docker.compose.volume=browser-profiles"
+    ], capture_output=True, text=True, timeout=15, check=False)
+    if result.returncode:
+        raise RuntimeError("standby_browser_volume_lookup_failed")
+    volumes = [v for v in result.stdout.splitlines() if v]
+    if len(volumes) != 1:
+        raise RuntimeError("standby_browser_volume_missing_or_ambiguous")
+    details = json.loads(safe_run(["docker", "volume", "inspect", volumes[0]], 15))
+    if len(details) != 1 or details[0].get("Name") != volumes[0]:
+        raise RuntimeError("standby_browser_volume_identity_mismatch")
+    labels = details[0].get("Labels") or {}
+    if (labels.get("com.docker.compose.project") != project
+            or labels.get("com.docker.compose.volume") != "browser-profiles"):
+        raise RuntimeError("standby_browser_volume_identity_mismatch")
+    return volumes[0]
+
+
 def guard_standby(generation):
     active, active_worker = executor.find_running_generation()
     if active == generation:
         raise RuntimeError("target_already_active")
     project, api_name, worker_name, hermes_name = executor.generation_services(generation)
-    standby = executor.inspect(project, worker_name)
     api = executor.inspect(project, api_name)
     hermes = executor.inspect(project, hermes_name)
-    if standby["State"]["Status"] not in ("created", "exited"):
-        raise RuntimeError("standby_worker_must_remain_stopped")
     if not executor.healthy(api) or not executor.healthy(hermes):
         raise RuntimeError("standby_infrastructure_not_healthy")
+    # Handoff still requires a pre-provisioned, stopped Worker. Pre-authentication
+    # does not: the Worker may have been pruned while its named profile volume
+    # remains valid. If one exists, it MUST be inactive.
+    try:
+        standby = executor.inspect(project, worker_name)
+    except RuntimeError as ex:
+        if "exactly one expected container is required" not in str(ex):
+            raise RuntimeError("standby_worker_inspection_failed") from None
+        standby = None
+    if standby is not None and standby["State"]["Status"] not in ("created", "exited"):
+        raise RuntimeError("standby_worker_must_remain_stopped")
+    volume = standby_browser_volume(project)
     source_mount = executor.mount_name(active_worker, "/data/browser-profiles")
-    target_mount = executor.mount_name(standby, "/data/browser-profiles")
-    if source_mount == target_mount or target_mount[0] != "volume":
+    if source_mount == ("volume", volume):
         raise RuntimeError("standby_browser_volume_not_isolated")
-    # The temporary browser-only viewer uses the CURRENT active Worker image,
-    # but exclusively the standby's own browser volume. A dormant Worker's old
-    # image never starts and image parity is still required by the final handoff.
-    return standby, target_mount[1]
+    if standby is not None and executor.mount_name(
+            standby, "/data/browser-profiles") != ("volume", volume):
+        raise RuntimeError("standby_browser_volume_mismatch")
+    return standby, volume
 
 
 def prepare(generation, credential, script_path):
@@ -112,15 +146,23 @@ def prepare(generation, credential, script_path):
         raise RuntimeError("single_active_queue_owner_required")
     name = viewer_name(generation)
     existing = find_viewer(name)
+    port = viewer_port(generation)
     if existing:
-        # Only the SAME previously verified generation+credential viewer may
-        # be reconciled, e.g. when an operator session expires after 30 min.
-        # No persistent volume is removed and the active Worker is untouched.
+        # A repeated prepare must NEVER close an operator's healthy live VNC.
+        # If the viewer died it may be recreated without touching its volume.
         _, info = inspect_existing(generation, credential)
         if info["State"]["Status"] == "running":
-            safe_run(["docker", "stop", "--time", "25", existing], 45)
+            check = subprocess.run([
+                "curl", "-fsS", "--connect-timeout", "2", "--max-time", "3",
+                "--output", "/dev/null",
+                f"http://127.0.0.1:{port}/vnc.html"
+            ], capture_output=True, timeout=5, check=False)
+            if check.returncode != 0:
+                raise RuntimeError("existing_standby_viewer_unhealthy_use_restart")
+            print("STANDBY_AUTH_VIEWER_ALREADY_READY generation=" + generation)
+            print("STANDBY_AUTH_HOST_LOOPBACK_PORT=" + str(port))
+            return
         safe_run(["docker", "rm", existing])
-    port = viewer_port(generation)
     # Docker publishes only 127.0.0.1, reachable to the operator by SSH.
     safe_run([
         "docker", "run", "--detach", "--pull=never", "--name", name,
@@ -243,8 +285,23 @@ if __name__ == "__main__":
     try:
         main()
     except (RuntimeError, OSError, ValueError, KeyError, TypeError,
-            subprocess.SubprocessError):
-        # No Docker inspect data, credentials or raw provider output in logs.
-        print("STANDBY_AUTH_OPERATION_REFUSED: safety_preflight_or_runtime_failed",
-              file=sys.stderr)
+            subprocess.SubprocessError) as ex:
+        # Only safe, constant diagnostic codes. Never print raw Docker errors,
+        # inspect JSON, customer identity, profiles or credential values.
+        allowed = {
+            "target_already_active", "standby_worker_inspection_failed",
+            "standby_worker_must_remain_stopped",
+            "standby_infrastructure_not_healthy",
+            "standby_browser_volume_lookup_failed",
+            "standby_browser_volume_missing_or_ambiguous",
+            "standby_browser_volume_identity_mismatch",
+            "standby_browser_volume_not_isolated",
+            "standby_browser_volume_mismatch",
+            "existing_standby_viewer_unhealthy_use_restart",
+            "standby_viewer_failed_to_start", "standby_viewer_health_timeout",
+            "single_active_queue_owner_required", "standby_docker_operation_failed",
+            "standby_viewer_identity_mismatch", "standby_viewer_not_running",
+        }
+        code = str(ex) if str(ex) in allowed else "safety_preflight_or_runtime_failed"
+        print("STANDBY_AUTH_OPERATION_REFUSED: " + code, file=sys.stderr)
         sys.exit(2)
