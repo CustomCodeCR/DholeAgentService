@@ -94,8 +94,9 @@ def guard_standby(generation):
     target_mount = executor.mount_name(standby, "/data/browser-profiles")
     if source_mount == target_mount or target_mount[0] != "volume":
         raise RuntimeError("standby_browser_volume_not_isolated")
-    if standby["Image"] != active_worker["Image"]:
-        raise RuntimeError("standby_worker_image_mismatch")
+    # The temporary browser-only viewer uses the CURRENT active Worker image,
+    # but exclusively the standby's own browser volume. A dormant Worker's old
+    # image never starts and image parity is still required by the final handoff.
     return standby, target_mount[1]
 
 
@@ -106,6 +107,9 @@ def prepare(generation, credential, script_path):
     if script_path.is_symlink() or not script_path.is_file():
         raise RuntimeError("trusted_viewer_script_missing")
     worker, volume = guard_standby(generation)
+    active, active_worker = executor.find_running_generation()
+    if active == generation or active_worker["State"]["Status"] != "running":
+        raise RuntimeError("single_active_queue_owner_required")
     name = viewer_name(generation)
     existing = find_viewer(name)
     if existing:
@@ -127,7 +131,7 @@ def prepare(generation, credential, script_path):
         "--mount", "type=volume,source=" + volume + ",target=/data/browser-profiles",
         "--mount", "type=bind,source=" + str(script_path.resolve()) + ",target=/app/start-standby-auth.sh,readonly",
         "--entrypoint", "/bin/bash",
-        worker["Config"]["Image"],
+        active_worker["Image"],
         "/app/start-standby-auth.sh", credential
     ], 70)
     for _ in range(30):
