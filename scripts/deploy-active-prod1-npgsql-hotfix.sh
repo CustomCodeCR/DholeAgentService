@@ -184,6 +184,29 @@ for i in $(seq 1 35); do
   sleep 2
 done
 [[ "$pump" == 1 ]] || fail 'prod1 queue pump did not start'
+# Do not report a successful rollout if either API still advertises
+# githubDispatcherConfigured=false or the active Worker lacks its credential.
+# Docker inspect is captured in Python memory only; no token/value is logged.
+python3 - "$new_primary_api" "$new_api" "$new_worker" <<'PY'
+import json
+import subprocess
+import sys
+
+labels = ("primary_api", "prod1_api", "prod1_worker")
+for label, container in zip(labels, sys.argv[1:], strict=True):
+    info = json.loads(subprocess.run(
+        ["docker", "inspect", container], capture_output=True, text=True,
+        check=True, timeout=20).stdout)[0]
+    opts = dict(row.split("=", 1)
+                for row in info.get("Config", {}).get("Env", []) if "=" in row)
+    assert opts.get("GenerationOrchestrator__Enabled", "").lower() == "true", (
+        "generation orchestrator disabled for " + label)
+    assert opts.get("GenerationOrchestrator__GitHubToken"), (
+        "generation dispatcher credential missing for " + label)
+    assert opts.get("GenerationOrchestrator__ActionsRef") == "master", (
+        "generation workflow reference not master for " + label)
+    print("PROD1_GENERATION_RUNTIME_READY role=" + label)
+PY
 python3 - <<'PY'
 import importlib.util
 from pathlib import Path
