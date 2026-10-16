@@ -1,0 +1,50 @@
+name: Build isolated Maersk standby Inspector
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - src/Dhole.Agent.Workers/StandbyAccountInspector.cs
+      - scripts/standby-authentication.py
+      - docker/start-standby-auth.sh
+      - .github/workflows/build-standby-inspector.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dhole-agent-standby-inspector-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate standalone standby inspector
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/standby-authentication.py
+          bash -n docker/start-standby-auth.sh
+          python3 -m unittest discover -s tests -p 'test_standby_authentication.py' -v
+      - name: Build versioned Worker image without touching prod1
+        if: ${{ github.ref == 'refs/heads/master' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="standby-inspector-$(git rev-parse --short=12 HEAD)"
+          docker build --target worker-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-workers:$tag" .
+          docker image inspect "dhole/agent-workers:$tag" >/dev/null
+          echo "STANDBY_INSPECTOR_IMAGE_READY=$tag"
+          echo "Standby viewers require an authorized restart; prod1 and browser volumes are unchanged."
