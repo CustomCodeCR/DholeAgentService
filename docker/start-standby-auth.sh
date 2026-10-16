@@ -38,7 +38,7 @@ trap cleanup EXIT
 echo "STANDBY_AUTH_VIEWER_READY"
 # A bounded operator session; no credential submission or provider challenge bypass.
 # Chromium writes directly into THIS generation's persistent browser volume.
-timeout --signal=TERM --kill-after=8s 1800 "$chrome" \
+timeout --signal=TERM --kill-after=8s 5400 "$chrome" \
   --no-sandbox --disable-dev-shm-usage --no-first-run \
   --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
   --remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222 \
