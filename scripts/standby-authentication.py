@@ -154,10 +154,19 @@ def prepare(generation, credential, script_path, image_override=None):
         raise RuntimeError("single_active_queue_owner_required")
     name = viewer_name(generation)
     existing = find_viewer(name)
+    existing_info = None
     if existing:
-        inspect_existing(generation, credential)
+        _, existing_info = inspect_existing(generation, credential)
+        # docker ps -aq supplies the abbreviated ID, while docker inspect
+        # supplies the full ID. Compare full IDs when excluding only this
+        # specifically verified standby viewer from the volume owner guard.
+        viewer_full_id = existing_info.get("Id")
+        if not isinstance(viewer_full_id, str) or not re.fullmatch(r"[0-9a-f]{64}", viewer_full_id):
+            raise RuntimeError("standby_viewer_identity_mismatch")
+    else:
+        viewer_full_id = None
     # Exclusive use is mandatory before any Chromium Singleton* cleanup.
-    require_exclusive_browser_volume(volume, existing)
+    require_exclusive_browser_volume(volume, viewer_full_id)
     if existing:
         # Only the SAME previously verified generation+credential viewer may
         # be reconciled, e.g. when an operator session expires after 30 min.
