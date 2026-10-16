@@ -32,7 +32,19 @@ internal static class StandbyAccountInspector
                 if (!AllowedOfficialPage(page.Url))
                     continue;
 
+                // Inspect the authenticated Hub account without requiring
+                // the operator to open its menu manually.
                 var identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
+                if (identity is null && page.Url.Contains("/hub", StringComparison.OrdinalIgnoreCase))
+                {
+                    var account = page.GetByRole(AriaRole.Button,
+                        new() { Name = "Account", Exact = true });
+                    if (await account.CountAsync() == 1)
+                    {
+                        await account.ClickAsync(new() { Timeout = 2_000 });
+                        identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
+                    }
+                }
                 if (identity is null || !ValidIdentity(identity))
                     continue;
 
@@ -92,13 +104,13 @@ internal static class StandbyAccountInspector
 
     private const string JavaScriptEvidence = """
         () => {
-            // Only a visible, expanded Account menu is evidence of authentication.
-            // The public Maersk homepage, prices and generic avatar are insufficient.
+            // Verify account identity on a protected Hub page, not merely its URL.
+            if (!/^\/hub(?:\/|$)/i.test(location.pathname)) return null;
             const body = document.body;
             if (!body) return null;
             const text = (body.innerText || '').replace(/\r/g, '');
             if (!/(?:^|\n)\s*Account\s*(?:\n|$)/i.test(text)
-                || !/(?:^|\n)\s*Log out\s*(?:\n|$)/i.test(text)
+                || !/(?:^|\n)\s*(?:Log out|Logout|Sign out)\s*(?:\n|$)/i.test(text)
                 || /Access Denied|Verify you are human|captcha required/i.test(text))
                 return null;
             const grab = (label, pattern) => {
