@@ -16,7 +16,28 @@ port="$(part Port)"
 [[ "$db" =~ ^[A-Za-z0-9_]+$ && -n "$password" && -n "$user" ]] || exit 2
 host="${host:-postgres}"
 port="${port:-5432}"
-primary="$(docker ps -q --filter label=com.docker.compose.project=dhole --filter label=com.docker.compose.service=dhole-agent-workers)"
+primary="$(docker ps -q --filter label=com.docker.compose.project=dhole-agent-prod1 --filter label=com.docker.compose.service=dhole-agent-workers-prod1)"
+main_api="$(docker ps -q --filter label=com.docker.compose.project=dhole --filter label=com.docker.compose.service=dhole-agent-api)"
+prod1_api="$(docker ps -q --filter label=com.docker.compose.project=dhole-agent-prod1 --filter label=com.docker.compose.service=dhole-agent-api-prod1)"
+for role in primary_api prod1_api prod1_worker; do
+  case "$role" in
+    primary_api) target="$main_api" ;;
+    prod1_api) target="$prod1_api" ;;
+    prod1_worker) target="$primary" ;;
+  esac
+  if [[ -z "$target" || "$(printf '%s\n' "$target" | sed '/^$/d' | wc -l)" -ne 1 ]]; then
+    echo "GENERATION_DIAG_RUNTIME role=$role state=missing_or_ambiguous"
+    continue
+  fi
+  envlines="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$target")"
+  flag="$(printf '%s\n' "$envlines" | sed -n 's/^GenerationOrchestrator__Enabled=//p' | head -n1)"
+  actionref="$(printf '%s\n' "$envlines" | sed -n 's/^GenerationOrchestrator__ActionsRef=//p' | head -n1)"
+  tokenstate=missing
+  if printf '%s\n' "$envlines" | grep -q '^GenerationOrchestrator__GitHubToken=.'; then
+    tokenstate=present
+  fi
+  printf 'GENERATION_DIAG_RUNTIME role=%s enabled=%s token=%s ref=%s\n' "$role" "${flag:-unset}" "$tokenstate" "${actionref:-unset}"
+done
 if [[ "$(printf '%s\n' "$primary" | sed '/^$/d' | wc -l)" -eq 1 ]]; then
   running=yes
   settings="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$primary")"
@@ -42,6 +63,14 @@ sql="SELECT target_generation || '|' || status || '|' ||
 echo "GENERATION_DIAG_RECENT_REQUESTS target|status|diagnostic|age_min:"
 docker run --rm --network dhole -e PGPASSWORD="$password" postgres:17-alpine \
   psql -X -q -At -v ON_ERROR_STOP=1 -h "$host" -p "$port" -U "$user" -d "$db" -c "$sql"
+echo "GENERATION_DIAG_PROVISION_STATUS:"
+docker run --rm --network dhole -e PGPASSWORD="$password" postgres:17-alpine \
+  psql -X -q -At -v ON_ERROR_STOP=1 -h "$host" -p "$port" -U "$user" -d "$db" \
+  -c "SELECT generation || '|' || status || '|' || coalesce(diagnostic_code, 'none') FROM agent.runtime_generation_provisions ORDER BY generation LIMIT 20;"
+echo "GENERATION_DIAG_READINESS_STATUS:"
+docker run --rm --network dhole -e PGPASSWORD="$password" postgres:17-alpine \
+  psql -X -q -At -v ON_ERROR_STOP=1 -h "$host" -p "$port" -U "$user" -d "$db" \
+  -c "SELECT generation || '|ready=' || ready::text || '|authorized=' || provider_authorized::text || '|age_min=' || (extract(epoch from now()-verified_at_utc)::integer / 60)::text FROM agent.runtime_generation_readiness ORDER BY generation LIMIT 20;"
 for generation in prod1 prod2; do
   project="dhole-agent-$generation"
   if [[ "$generation" == prod1 ]]; then api_service=dhole-agent-api-prod1; worker_service=dhole-agent-workers-prod1;
