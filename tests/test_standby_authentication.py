@@ -70,6 +70,53 @@ class StandbyAuthenticationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"target_already_active"):
                 auth.guard_standby("prod2")
 
+    def test_browser_identity_inspection_only_uses_exact_standby_container(self):
+        import tempfile
+        import types
+        import json
+        identity = {"DisplayName": "Example Operator", "Username": "authorized01",
+                    "CustomerId": "1234567890"}
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(auth, "guard_standby"), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=0, stdout=json.dumps(identity), stderr="")) as execute:
+            output = Path(root) / "verified-identity.json"
+            auth.inspect_account("prod2", "a"*32, output)
+            self.assertEqual(json.loads(output.read_text()), identity)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(execute.call_args.args[0][:3],
+                             ["docker", "exec", "standby-viewer-id"])
+            self.assertIn("--standby-account-inspect", execute.call_args.args[0])
+
+    def test_identity_probe_rejects_unverified_account_without_writing(self):
+        import tempfile
+        import types
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(auth, "guard_standby"), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=3, stdout="", stderr="safe_error")):
+            output = Path(root) / "identity.json"
+            with self.assertRaisesRegex(RuntimeError,
+                                        "standby_account_not_visible_in_official_menu"):
+                auth.inspect_account("prod2", "a"*32, output)
+            self.assertFalse(output.exists())
+
+    def test_restarting_viewer_keeps_persistent_profile_volume(self):
+        with patch.object(auth, "guard_standby"), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 "ephemeral-only", {"State": {"Status": "running"}})), \
+             patch.object(auth, "safe_run") as docker, \
+             patch.object(auth, "prepare") as prepare:
+            auth.restart_viewer("prod2", "b"*32, ROOT / "docker/start-standby-auth.sh")
+            self.assertEqual(docker.call_args.args[0],
+                             ["docker", "stop", "--time", "25", "ephemeral-only"])
+            prepare.assert_called_once()
+            self.assertNotIn("volume", str(docker.call_args_list))
+
     def test_finish_only_stops_ephemeral_viewer(self):
         container = {"State":{"Status":"running"}}
         with patch.object(auth, "guard_standby"), \
