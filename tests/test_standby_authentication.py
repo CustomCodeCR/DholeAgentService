@@ -49,6 +49,21 @@ class StandbyAuthenticationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"standby_browser_volume_not_isolated"):
                 auth.guard_standby("prod2")
 
+    def test_workflow_repairs_only_dormant_worker_before_starting_viewer(self):
+        workflow = (ROOT / ".github/workflows/standby-authentication.yml").read_text()
+        repair = "Safely repair missing dormant standby Worker before browser preparation"
+        claim = "Claim requested standby authentication"
+        viewer = "Start isolated temporary Chromium and loopback-only noVNC"
+        self.assertLess(workflow.index(repair), workflow.index(claim))
+        self.assertLess(workflow.index(repair), workflow.index(viewer))
+        step = workflow.split("- name: " + repair, 1)[1].split("- name: " + claim, 1)[0]
+        self.assertIn("inputs.operation == 'prepare'", step)
+        self.assertIn("scripts/provision-production-generation.sh", step)
+        self.assertIn('"$GENERATION" apply .dhole-system "$GENERATION_PRIVATE_ENV"', step)
+        self.assertNotIn("docker compose up", step)
+        self.assertNotIn("docker start", step)
+        self.assertNotIn("docker rm", step)
+
     def test_active_target_is_refused(self):
         with patch.object(auth.executor, "find_running_generation",
                           return_value=("prod2",{"Image":"img"})):
