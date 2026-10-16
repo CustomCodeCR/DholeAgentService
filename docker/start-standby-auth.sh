@@ -11,6 +11,23 @@ profile="$root/$credential"
 [[ ! -L "$root" && ! -L "$profile" ]] || exit 2
 mkdir -p "$profile"
 chmod 700 "$profile"
+# The host orchestration has verified exclusive use of this generation's
+# browser volume. A prior container can leave Chromium's singleton symlinks
+# behind even when its Chrome process is gone. Never clear them unguarded.
+[[ "${STANDBY_PROFILE_LOCK_CLEANUP_ALLOWED:-}" == "1" ]] || {
+  echo "STANDBY_AUTH_PROFILE_LOCK_GUARD_MISSING" >&2
+  exit 2
+}
+for lock in SingletonLock SingletonSocket SingletonCookie; do
+  candidate="$profile/$lock"
+  if [[ -L "$candidate" || -f "$candidate" ]]; then
+    rm -f -- "$candidate"
+  elif [[ -e "$candidate" ]]; then
+    echo "STANDBY_AUTH_UNEXPECTED_SINGLETON_ENTRY" >&2
+    exit 2
+  fi
+done
+echo "STANDBY_AUTH_STALE_SINGLETON_LOCKS_CLEARED"
 Xvfb "$DISPLAY" -screen 0 1600x900x24 -nolisten tcp -ac >/tmp/standby-xvfb.log 2>&1 &
 xvfb_pid=$!
 for i in $(seq 1 40); do
@@ -38,10 +55,22 @@ trap cleanup EXIT
 echo "STANDBY_AUTH_VIEWER_READY"
 # A bounded operator session; no credential submission or provider challenge bypass.
 # Chromium writes directly into THIS generation's persistent browser volume.
+browser_started_at=$SECONDS
+set +e
 timeout --signal=TERM --kill-after=8s 5400 "$chrome" \
   --no-sandbox --disable-dev-shm-usage --no-first-run \
   --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
   --remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222 \
   --user-data-dir="$profile" --new-window https://www.maersk.com/ \
-  >/tmp/standby-browser.log 2>&1 || true
+  >/tmp/standby-browser.log 2>&1
+browser_exit=$?
+set -e
+if (( SECONDS - browser_started_at < 5 )); then
+  echo "STANDBY_AUTH_CHROMIUM_EARLY_EXIT status=$browser_exit" >&2
+  exit 1
+fi
+if [[ "$browser_exit" -ne 0 && "$browser_exit" -ne 124 ]]; then
+  echo "STANDBY_AUTH_CHROMIUM_UNEXPECTED_EXIT status=$browser_exit" >&2
+  exit 1
+fi
 echo "STANDBY_AUTH_VIEWER_STOPPED"
