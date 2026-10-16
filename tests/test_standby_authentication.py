@@ -77,7 +77,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
     def test_volume_lookup_requires_existing_compose_owned_identity(self):
         import types
         import json
-        result = types.SimpleNamespace(returncode=0, stdout="prod2-profile-volume\\n")
+        result = types.SimpleNamespace(returncode=0, stdout="prod2-profile-volume\n")
         identity = [{
             "Name": "prod2-profile-volume",
             "Labels": {
