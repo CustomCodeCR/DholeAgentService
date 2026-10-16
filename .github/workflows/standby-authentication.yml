@@ -124,6 +124,20 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
 
+      - name: Build patched standby Worker image without changing active prod1
+        if: ${{ inputs.operation == 'restart' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="standby-inspector-$(git rev-parse --short=12 HEAD)"
+          docker build --target worker-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-workers:$tag" .
+          echo "STANDBY_AUTH_IMAGE=dhole/agent-workers:$tag" >> "$GITHUB_ENV"
+
       - name: Restart only the isolated Chromium viewer with local CDP
         if: ${{ inputs.operation == 'restart' }}
         shell: bash
