@@ -126,6 +126,10 @@ def prepare(generation, credential, script_path, image_override=None):
     if script_path.is_symlink() or not script_path.is_file():
         raise RuntimeError("trusted_viewer_script_missing")
     worker, volume = guard_standby(generation)
+    if image_override:
+        if not re.fullmatch(r"dhole/agent-workers:standby-inspector-[0-9a-f]{12}", image_override):
+            raise RuntimeError("untrusted_standby_image")
+        safe_run(["docker", "image", "inspect", image_override], 15)
     active, active_worker = executor.find_running_generation()
     if active == generation or active_worker["State"]["Status"] != "running":
         raise RuntimeError("single_active_queue_owner_required")
@@ -142,10 +146,6 @@ def prepare(generation, credential, script_path, image_override=None):
     port = viewer_port(generation)
     # Docker publishes only 127.0.0.1, reachable to the operator by SSH.
     image = image_override or active_worker["Image"]
-    if image_override:
-        if not re.fullmatch(r"dhole/agent-workers:standby-inspector-[0-9a-f]{12}", image_override):
-            raise RuntimeError("untrusted_standby_image")
-        safe_run(["docker", "image", "inspect", image_override], 15)
     safe_run([
         "docker", "run", "--detach", "--pull=never", "--name", name,
         "--restart", "no", "--stop-timeout", "25",
@@ -233,11 +233,8 @@ def inspect_account(generation, credential, output):
 
 def restart_viewer(generation, credential, script_path, image_override=None):
     """Reopen the same persisted profile with local-only CDP; never copy cookies."""
-    guard_standby(generation)
-    container_id, viewer = inspect_existing(generation, credential)
-    if viewer["State"]["Status"] == "running":
-        safe_run(["docker", "stop", "--time", "25", container_id], 45)
-    # The prepare function verifies the exact viewer identity before removing it.
+    # prepare validates all standby protections and the replacement image
+    # before stopping or replacing the existing viewer.
     prepare(generation, credential, script_path, image_override)
 
 
@@ -269,6 +266,22 @@ if __name__ == "__main__":
     except (RuntimeError, OSError, ValueError, KeyError, TypeError,
             subprocess.SubprocessError):
         # No Docker inspect data, credentials or raw provider output in logs.
-        print("STANDBY_AUTH_OPERATION_REFUSED: safety_preflight_or_runtime_failed",
-              file=sys.stderr)
+        reason = sys.exc_info()[1]
+        known = {
+            "invalid_standby_generation", "generation_out_of_allowed_range",
+            "credential_id_invalid", "trusted_viewer_script_missing",
+            "target_already_active", "standby_infrastructure_not_healthy",
+            "multiple_standby_workers_refused", "standby_worker_must_remain_stopped",
+            "standby_browser_volume_missing", "standby_browser_volume_not_owned_by_generation",
+            "standby_browser_volume_not_isolated", "standby_worker_volume_mismatch",
+            "single_active_queue_owner_required", "standby_viewer_identity_mismatch",
+            "standby_viewer_not_running", "standby_viewer_no_longer_running",
+            "standby_viewer_failed_to_start", "standby_viewer_health_timeout",
+            "untrusted_standby_image", "standby_docker_operation_failed",
+            "viewer_discovery_failed", "ambiguous_standby_viewer",
+            "standby_account_not_visible_in_official_menu", "invalid_standby_identity",
+            "unsafe_identity_output", "identity_output_required",
+        }
+        code = str(reason) if isinstance(reason, RuntimeError) and str(reason) in known else "unexpected_runtime_failure"
+        print("STANDBY_AUTH_OPERATION_REFUSED: " + code, file=sys.stderr)
         sys.exit(2)
