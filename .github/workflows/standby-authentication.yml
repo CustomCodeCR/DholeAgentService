@@ -144,10 +144,12 @@ jobs:
           # Fail clearly before an expensive image build. A 403 means the
           # package owner must grant Actions access to this repository or a
           # dedicated read:packages token must be configured.
-          status="$(curl --silent --show-error --max-time 20 \
-            --output /dev/null --write-out '%{http_code}' \
-            --user "$NUGET_PACKAGE_USER:$GITHUB_TOKEN" \
-            "https://nuget.pkg.github.com/CustomCodeCR/download/customcodeframework.core/index.json")"
+          # Pass credentials over stdin rather than exposing the token in the
+          # curl process command line on the shared self-hosted runner.
+          status="$(printf 'user = "%s:%s"\\n' "$NUGET_PACKAGE_USER" "$GITHUB_TOKEN" | \
+            curl --config - --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' \
+              "https://nuget.pkg.github.com/CustomCodeCR/download/customcodeframework.core/index.json")"
           if [[ "$status" != 200 ]]; then
             echo "STANDBY_NUGET_PACKAGE_ACCESS_REFUSED http_status=$status" >&2
             echo "Grant DholeAgentService Actions access to CustomCodeFramework packages, or set NUGET_PACKAGES_READ_TOKEN (read:packages) and NUGET_PACKAGES_ACTOR." >&2
