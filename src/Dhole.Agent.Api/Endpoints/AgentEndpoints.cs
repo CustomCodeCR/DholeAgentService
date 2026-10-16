@@ -23,6 +23,7 @@ public static class AgentEndpoints
     {
         var root=app.MapGroup("/api/agents").WithTags("Agents").RequireAuthorization();
         root.MapProductionGenerationEndpoints();
+        root.MapStandbyAuthenticationEndpoints();
 
         var providers=root.MapGroup("/providers");
         providers.MapGet("/",async(IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<AgentProviderDto>>.Ok(await d.DispatchAsync(new GetAgentProvidersQuery(),ct)))).RequireScope(AgentScopeNames.ProvidersView);
