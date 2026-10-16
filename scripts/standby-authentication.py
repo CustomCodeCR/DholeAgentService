@@ -248,7 +248,7 @@ def inspect_account(generation, credential, output):
     if not isinstance(identity["DisplayName"], str) or not 4 <= len(identity["DisplayName"]) <= 100:
         raise RuntimeError("invalid_standby_identity")
     if not re.fullmatch(r"[0-9]{8,15}", identity["CustomerId"]) or (
-            not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", identity["Username"])):
+            not re.fullmatch(r"(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", identity["Username"])):
         raise RuntimeError("invalid_standby_identity")
     if output.is_symlink() or output.exists():
         raise RuntimeError("unsafe_identity_output")
