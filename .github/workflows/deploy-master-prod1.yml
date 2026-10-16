@@ -11,6 +11,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # Release 2026-10-13: detect authenticated Maersk booking-header identity on original profile PR #139.
 # Release 2026-10-13: detect authenticated account on Maersk official homepage and customer-code popover PR #142.
 # Release 2026-10-13: fix offscreen commodity option selection in Maersk searches PR #145.
+# Release 2026-10-15: restore GitHub generation dispatcher credential in protected prod1 runtime.
 on:
   push:
     branches: [master]
@@ -64,19 +65,28 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh
           bash -n scripts/maersk-phase8-backup.sh
-          python3 -m py_compile scripts/production-generation-executor.py scripts/production-generation-apply-request.py
+          python3 -m py_compile scripts/production-generation-executor.py scripts/production-generation-apply-request.py scripts/prepare-prod1-generation-env.py
+          python3 -m unittest discover -s tests -p 'test_prepare_prod1_generation_env.py' -v
           echo "MASTER_PROD1_RELEASE_SOURCE_VERIFIED sha=$GITHUB_SHA"
 
-      - name: Prepare production infrastructure without changing containers
+      - name: Prepare production infrastructure and private generation dispatcher credentials
         shell: bash
+        env:
+          GENERATION_ORCHESTRATOR_GITHUB_TOKEN: ${{ secrets.GENERATION_ORCHESTRATOR_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          set +x
+          [[ -n "$GENERATION_ORCHESTRATOR_GITHUB_TOKEN" ]] || {
+            echo 'PROD1_GENERATION_DISPATCH_REFUSED: scoped GitHub Actions secret is missing' >&2
+            exit 2
+          }
           git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
           mkdir -p "$RUNNER_TEMP/master-prod1-release"
           chmod 700 "$RUNNER_TEMP/master-prod1-release"
           bash .dhole-system/deploy/prepare-environments.sh \
             /opt/dhole/.env "$RUNNER_TEMP/master-prod1-release" >/dev/null
           chmod 600 "$RUNNER_TEMP/master-prod1-release/.env.production"
+          python3 scripts/prepare-prod1-generation-env.py "$RUNNER_TEMP/master-prod1-release/.env.production"
           echo "MASTER_PROD1_ENV=$RUNNER_TEMP/master-prod1-release/.env.production" >> "$GITHUB_ENV"
 
       - name: Build API and Worker from master SHA (do not replace latest yet)
