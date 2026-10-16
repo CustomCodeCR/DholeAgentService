@@ -55,6 +55,18 @@ internal static class StandbyAuthenticationEndpoints
             }).ToArray()));
         }).RequireScope(AgentScopeNames.BrowserProfilesView);
 
+        group.MapGet("/credentials", async (ServiceDbContext db, CancellationToken ct) =>
+        {
+            var credentials = await db.AgentCredentials.AsNoTracking()
+                .Join(db.AgentProviders.AsNoTracking(), c => c.ProviderId, p => p.Id,
+                    (c, p) => new { Credential = c, Provider = p })
+                .Where(x => x.Credential.IsActive && !x.Credential.IsDeleted &&
+                    x.Provider.IsActive && !x.Provider.IsDeleted && x.Provider.Code == "MAERSK")
+                .Select(x => new { id = x.Credential.Id, name = x.Credential.Name })
+                .ToListAsync(ct);
+            return Results.Ok(ApiResponse<object>.Ok(credentials));
+        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
         group.MapPost("/{generation}/prepare", async (
             string generation, PrepareStandbyAuthentication request,
             HttpContext http, ServiceDbContext db, IConfiguration configuration, CancellationToken ct) =>
@@ -209,13 +221,15 @@ internal static class StandbyAuthenticationEndpoints
 
     private static async Task UpdateStatusAsync(ServiceDbContext db, string generation,
         string expected, string newStatus, string code, CancellationToken ct)
-        => await ScalarAsync(db, """
+    {
+        _ = await ScalarAsync(db, """
             UPDATE agent.runtime_generation_auth_sessions
             SET status=@newStatus,diagnostic_code=@code,updated_at_utc=now()
             WHERE generation=@generation AND status=@expected
             RETURNING generation
             """, ct, ("generation", generation), ("expected", expected),
                 ("newStatus", newStatus), ("code", code));
+    }
 
     private static async Task<string?> ScalarAsync(ServiceDbContext db,
         string sql, CancellationToken ct, params (string Key, object Value)[] args)
