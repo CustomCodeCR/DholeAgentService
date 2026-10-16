@@ -163,7 +163,7 @@ internal static class StandbyAuthenticationEndpoints
                 SELECT credential_id::text
                 FROM agent.runtime_generation_auth_sessions
                 WHERE generation=@generation AND actor_id=@actor AND status='Ready'
-                  AND requested_at_utc>now()-interval '30 minutes'
+                  AND requested_at_utc>now()-interval '90 minutes'
                 """, ct, ("generation", generation), ("actor", actor));
             if (credential is null || !Guid.TryParse(credential, out var id))
                 return Results.Conflict(new { code = "standby_authentication_not_ready" });
@@ -193,7 +193,7 @@ internal static class StandbyAuthenticationEndpoints
                     account_name=NULL, account_username=NULL,
                     account_customer_id=NULL,account_verified_at_utc=NULL
                 WHERE generation=@generation AND actor_id=@actor AND status='Ready'
-                  AND requested_at_utc>now()-interval '30 minutes'
+                  AND requested_at_utc>now()-interval '90 minutes'
                 RETURNING credential_id::text
                 """, ct, ("generation", generation), ("actor", actor));
             if (credential is null || !Guid.TryParse(credential, out var id))
@@ -228,7 +228,7 @@ internal static class StandbyAuthenticationEndpoints
                 UPDATE agent.runtime_generation_auth_sessions
                 SET status='Finishing',updated_at_utc=now()
                 WHERE generation=@generation AND status='Ready'
-                  AND requested_at_utc>now()-interval '30 minutes'
+                  AND requested_at_utc>now()-interval '90 minutes'
                   AND actor_id=@actor
                   AND account_verified_at_utc > now()-interval '5 minutes'
                   AND account_username IS NOT NULL
@@ -294,7 +294,7 @@ internal static class StandbyAuthenticationEndpoints
             SET status='Expired', diagnostic_code='operator_session_expired',
                 updated_at_utc=now()
             WHERE status IN ('Requested','Preparing','Ready')
-              AND requested_at_utc < now() - interval '30 minutes'
+              AND requested_at_utc < now() - interval '90 minutes'
             """, ct);
     }
 
