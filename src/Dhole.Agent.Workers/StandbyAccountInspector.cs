@@ -103,20 +103,50 @@ internal static class StandbyAccountInspector
         if (targets.RootElement.ValueKind != JsonValueKind.Array)
             return (null, "cdp_targets_invalid");
 
+        var pageTargets = 0;
+        var hubTargets = 0;
+        var unusableHubTargets = 0;
         foreach (var target in targets.RootElement.EnumerateArray())
         {
             if (!target.TryGetProperty("type", out var type) ||
-                type.GetString() != "page" ||
-                !target.TryGetProperty("url", out var url) ||
-                !OfficialHubPage(url.GetString()) ||
-                !target.TryGetProperty("webSocketDebuggerUrl", out var websocket))
+                type.ValueKind != JsonValueKind.String ||
+                type.GetString() != "page")
                 continue;
 
-            if (!Uri.TryCreate(websocket.GetString(), UriKind.Absolute, out var endpoint) ||
-                endpoint.Scheme != "ws" || endpoint.Port != 9222 ||
-                !(endpoint.Host == "127.0.0.1" || endpoint.Host == "localhost") ||
-                !endpoint.AbsolutePath.StartsWith("/devtools/page/", StringComparison.Ordinal))
+            pageTargets++;
+            if (!target.TryGetProperty("url", out var url) ||
+                url.ValueKind != JsonValueKind.String ||
+                !OfficialHubPage(url.GetString()))
                 continue;
+
+            hubTargets++;
+
+            // Chromium may omit the debugger URL from /json/list even while
+            // advertising an existing target. Accept a validated page ID and
+            // construct only a loopback CDP page endpoint. Never follow an
+            // arbitrary remote target or inspect a non-Maersk page.
+            Uri? endpoint = null;
+            if (target.TryGetProperty("webSocketDebuggerUrl", out var websocket) &&
+                websocket.ValueKind == JsonValueKind.String &&
+                Uri.TryCreate(websocket.GetString(), UriKind.Absolute, out var advertised) &&
+                SafeLocalPageEndpoint(advertised))
+            {
+                endpoint = advertised;
+            }
+            else if (target.TryGetProperty("id", out var identifier) &&
+                     identifier.ValueKind == JsonValueKind.String &&
+                     System.Text.RegularExpressions.Regex.IsMatch(
+                         identifier.GetString() ?? "", @"^[A-Za-z0-9-]{8,128}$"))
+            {
+                var id = identifier.GetString();
+                endpoint = new Uri("ws://127.0.0.1:9222/devtools/page/" + id);
+            }
+
+            if (endpoint is null)
+            {
+                unusableHubTargets++;
+                continue;
+            }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
             using var socket = new System.Net.WebSockets.ClientWebSocket();
@@ -139,8 +169,20 @@ internal static class StandbyAccountInspector
             return (null, "cdp_hub_account_identity_not_visible");
         }
 
-        return (null, "cdp_hub_target_not_found");
+        return (null, pageTargets == 0 ? "cdp_no_page_targets" :
+            hubTargets == 0 ? "cdp_no_official_hub_page" :
+            unusableHubTargets > 0 ? "cdp_hub_target_unaddressable" :
+            "cdp_hub_target_not_found");
     }
+
+    private static bool SafeLocalPageEndpoint(Uri endpoint) =>
+        endpoint.Scheme == "ws" &&
+        endpoint.Port == 9222 &&
+        (endpoint.Host == "127.0.0.1" || endpoint.Host == "localhost") &&
+        endpoint.AbsolutePath.StartsWith("/devtools/page/", StringComparison.Ordinal) &&
+        endpoint.UserInfo.Length == 0 &&
+        string.IsNullOrEmpty(endpoint.Query) &&
+        string.IsNullOrEmpty(endpoint.Fragment);
 
     private static async Task<JsonElement> EvaluateViaCDPAsync(
         System.Net.WebSockets.ClientWebSocket socket, string expression,
