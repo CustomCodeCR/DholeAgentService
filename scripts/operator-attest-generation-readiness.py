@@ -157,7 +157,9 @@ def main():
         refuse("manual_master_operator_workflow_required")
     if args.confirmation != CONFIRMATION:
         refuse("independent_provider_verification_not_attested")
-    if args.generation not in ("prod1", "prod2"):
+    if (not re.fullmatch(r"prod[1-9][0-9]*", args.generation)
+            or len(args.generation) > 64
+            or int(args.generation[4:]) > 200):
         refuse("unsupported_target")
 
     spec = importlib.util.spec_from_file_location(
