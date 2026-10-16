@@ -5,6 +5,14 @@ using Dhole.Agent.Workers.DependencyInjection;
 using Dhole.Agent.Application.DependencyInjection;
 using Dhole.Agent.Persistence.DependencyInjection;
 
+// A stand-alone, non-hosted mode for the isolated standby browser only.
+// Do not start scheduled jobs, queue consumers or application services here.
+if (args.Length == 1 && args[0] == "--standby-account-inspect")
+{
+    Environment.ExitCode = await Dhole.Agent.Workers.StandbyAccountInspector.RunAsync();
+    return;
+}
+
 var contentRoot = Path.Combine(Directory.GetCurrentDirectory(), "src", "Dhole.Agent.Workers");
 if (!Directory.Exists(contentRoot))
 {

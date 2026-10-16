@@ -94,8 +94,9 @@ def guard_standby(generation):
     target_mount = executor.mount_name(standby, "/data/browser-profiles")
     if source_mount == target_mount or target_mount[0] != "volume":
         raise RuntimeError("standby_browser_volume_not_isolated")
-    if standby["Image"] != active_worker["Image"]:
-        raise RuntimeError("standby_worker_image_mismatch")
+    # The temporary browser-only viewer uses the CURRENT active Worker image,
+    # but exclusively the standby's own browser volume. A dormant Worker's old
+    # image never starts and image parity is still required by the final handoff.
     return standby, target_mount[1]
 
 
@@ -106,13 +107,18 @@ def prepare(generation, credential, script_path):
     if script_path.is_symlink() or not script_path.is_file():
         raise RuntimeError("trusted_viewer_script_missing")
     worker, volume = guard_standby(generation)
+    active, active_worker = executor.find_running_generation()
+    if active == generation or active_worker["State"]["Status"] != "running":
+        raise RuntimeError("single_active_queue_owner_required")
     name = viewer_name(generation)
     existing = find_viewer(name)
     if existing:
-        # Never terminate a different existing viewer or reuse its profile.
+        # Only the SAME previously verified generation+credential viewer may
+        # be reconciled, e.g. when an operator session expires after 30 min.
+        # No persistent volume is removed and the active Worker is untouched.
         _, info = inspect_existing(generation, credential)
-        if info["State"]["Status"] != "exited":
-            raise RuntimeError("standby_viewer_already_exists")
+        if info["State"]["Status"] == "running":
+            safe_run(["docker", "stop", "--time", "25", existing], 45)
         safe_run(["docker", "rm", existing])
     port = viewer_port(generation)
     # Docker publishes only 127.0.0.1, reachable to the operator by SSH.
@@ -127,7 +133,7 @@ def prepare(generation, credential, script_path):
         "--mount", "type=volume,source=" + volume + ",target=/data/browser-profiles",
         "--mount", "type=bind,source=" + str(script_path.resolve()) + ",target=/app/start-standby-auth.sh,readonly",
         "--entrypoint", "/bin/bash",
-        worker["Config"]["Image"],
+        active_worker["Image"],
         "/app/start-standby-auth.sh", credential
     ], 70)
     for _ in range(30):
@@ -164,17 +170,71 @@ def finish(generation, credential):
     print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
 
 
+
+def inspect_account(generation, credential, output):
+    """Read only the expanded Account panel in this generation's live Chrome."""
+    guard_standby(generation)
+    container_id, viewer = inspect_existing(generation, credential)
+    if viewer["State"]["Status"] != "running":
+        raise RuntimeError("standby_viewer_no_longer_running")
+    # Never print this command's stdout/stderr: they may include account details.
+    outcome = subprocess.run(
+        ["docker", "exec", container_id, "dotnet",
+         "/app/Dhole.Agent.Workers.dll", "--standby-account-inspect"],
+        capture_output=True, text=True, timeout=30, check=False)
+    if outcome.returncode != 0:
+        raise RuntimeError("standby_account_not_visible_in_official_menu")
+    identity = json.loads(outcome.stdout)
+    if not isinstance(identity, dict) or sorted(identity) != [
+            "CustomerId", "DisplayName", "Username"]:
+        raise RuntimeError("invalid_standby_identity")
+    if not isinstance(identity["DisplayName"], str) or not 4 <= len(identity["DisplayName"]) <= 100:
+        raise RuntimeError("invalid_standby_identity")
+    if not re.fullmatch(r"[0-9]{8,15}", identity["CustomerId"]) or (
+            not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", identity["Username"])):
+        raise RuntimeError("invalid_standby_identity")
+    if output.is_symlink() or output.exists():
+        raise RuntimeError("unsafe_identity_output")
+    fd = output.open("x", encoding="utf-8")
+    try:
+        output.chmod(0o600)
+        with fd:
+            json.dump(identity, fd, ensure_ascii=False)
+    finally:
+        if output.is_file():
+            output.chmod(0o600)
+    print("STANDBY_MAERSK_ACCOUNT_DETECTED")
+    print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
+
+
+def restart_viewer(generation, credential, script_path):
+    """Reopen the same persisted profile with local-only CDP; never copy cookies."""
+    guard_standby(generation)
+    container_id, viewer = inspect_existing(generation, credential)
+    if viewer["State"]["Status"] == "running":
+        safe_run(["docker", "stop", "--time", "25", container_id], 45)
+    # The prepare function verifies the exact viewer identity before removing it.
+    prepare(generation, credential, script_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--operation", choices=("prepare", "finish"), required=True)
+    parser.add_argument("--operation", choices=("prepare", "restart", "inspect", "finish"), required=True)
     parser.add_argument("--generation", required=True)
     parser.add_argument("--credential", required=True)
+    parser.add_argument("--identity-output", default="")
     args = parser.parse_args()
     guard_generation(args.generation)
     if not CREDENTIAL.fullmatch(args.credential):
         raise RuntimeError("credential_id_invalid")
     if args.operation == "prepare":
         prepare(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh")
+    elif args.operation == "restart":
+        restart_viewer(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh")
+    elif args.operation == "inspect":
+        if not args.identity_output:
+            raise RuntimeError("identity_output_required")
+        inspect_account(args.generation, args.credential, Path(args.identity_output))
     else:
         finish(args.generation, args.credential)
 
