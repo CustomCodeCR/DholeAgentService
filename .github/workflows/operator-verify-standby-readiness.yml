@@ -7,8 +7,7 @@ on:
     inputs:
       generation:
         description: "Already-provisioned standby independently verified by the operator"
-        type: choice
-        options: [prod1, prod2]
+        type: string
         required: true
       confirmation:
         description: "Only after checking authorized provider access on this specific standby (not CAPTCHA/429/denied): enter I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS"
