@@ -149,6 +149,26 @@ class StandbyAuthenticationTests(unittest.TestCase):
                 "prod2", "b"*32, ROOT / "docker/start-standby-auth.sh", None)
             docker.assert_not_called()
 
+    def test_reprepare_uses_full_verified_docker_id_for_volume_guard(self):
+        # docker ps -aq returns 12 hex characters, docker inspect uses 64.
+        # Passing the abbreviated ID causes the viewer to reject itself.
+        full_id = "a" * 64
+        short_id = full_id[:12]
+        volume = "dhole-agent-prod2_browser-profiles"
+        with patch.object(auth, "guard_standby", return_value=(None, volume)), \
+             patch.object(auth.executor, "find_running_generation", return_value=(
+                 "prod1", {"State": {"Status": "running"}, "Image": "worker-image"})), \
+             patch.object(auth, "find_viewer", return_value=short_id), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 short_id, {"Id": full_id})), \
+             patch.object(auth, "require_exclusive_browser_volume",
+                          side_effect=RuntimeError("guard_checked")) as guard, \
+             patch.object(auth, "safe_run") as docker:
+            with self.assertRaisesRegex(RuntimeError, "guard_checked"):
+                auth.prepare("prod2", "b" * 32, ROOT / "docker/start-standby-auth.sh")
+            guard.assert_called_once_with(volume, full_id)
+            docker.assert_not_called()
+
     def test_exclusive_volume_guard_rejects_other_running_container(self):
         import json
         volume = "dhole-agent-prod2_browser-profiles"
