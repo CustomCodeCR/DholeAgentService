@@ -17,7 +17,10 @@ internal static class StandbyAccountInspector
         try
         {
             using var playwright = await Playwright.CreateAsync();
-            await using var browser = await playwright.Chromium.ConnectOverCDPAsync(
+            // Do not close the externally running Chromium: it owns the
+            // operator's persisted standby session. The probe process exits
+            // after inspecting and only its CDP connection is dropped.
+            var browser = await playwright.Chromium.ConnectOverCDPAsync(
                 "http://127.0.0.1:9222", new BrowserTypeConnectOverCDPOptions
                 {
                     Timeout = 8_000
