@@ -1,0 +1,158 @@
+name: Standby Maersk authentication (browser-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "prepare independent Chromium/noVNC or finish verified authorization"
+        required: true
+        type: choice
+        options: [prepare, finish]
+      generation:
+        description: "Pre-provisioned standby generation, never the active owner"
+        required: true
+        type: string
+      credential_id:
+        description: "Authorized active Maersk credential UUID, not a secret"
+        required: true
+        type: string
+      confirmation:
+        description: "Exact explicit confirmation, issued by authorized Agent API"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  standby:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Validate generation, operator intent and trusted scripts
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/master ]] || exit 2
+          [[ "$GENERATION" =~ ^prod([2-9]|[1-9][0-9]{1,2})$ ]] || exit 2
+          [[ "${#GENERATION}" -le 7 ]] || exit 2
+          [[ "$CREDENTIAL" =~ ^[a-f0-9]{32}$ ]] || exit 2
+          if [[ "$OPERATION" == prepare ]]; then
+            [[ "$CONFIRMATION" == PREPARE_STANDBY_AUTHENTICATION ]] || exit 2
+          else
+            [[ "$OPERATION" == finish &&
+               "$CONFIRMATION" == I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS ]] || exit 2
+          fi
+          python3 -m py_compile scripts/standby-authentication.py scripts/standby-auth-state.py
+          bash -n docker/start-standby-auth.sh
+          echo STANDBY_AUTH_INPUTS_VERIFIED
+
+      - name: Prepare protected database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/standby-authentication"
+          chmod 700 "$RUNNER_TEMP/standby-authentication"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/standby-authentication" >/dev/null
+          chmod 600 "$RUNNER_TEMP/standby-authentication/.env.production"
+          echo "GENERATION_PRIVATE_ENV=$RUNNER_TEMP/standby-authentication/.env.production" >> "$GITHUB_ENV"
+
+      - name: Claim requested standby authentication
+        if: ${{ inputs.operation == 'prepare' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Preparing
+
+      - name: Start isolated temporary Chromium and loopback-only noVNC
+        if: ${{ inputs.operation == 'prepare' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-authentication.py --operation prepare \
+            --generation "$GENERATION" --credential "$CREDENTIAL"
+
+      - name: Mark browser ready for manual login
+        if: ${{ inputs.operation == 'prepare' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
+
+      - name: Close only standby viewer; preserve persistent browser profile
+        if: ${{ inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-authentication.py --operation finish \
+            --generation "$GENERATION" --credential "$CREDENTIAL"
+
+      - name: Require independent provider authorization and technical readiness
+        if: ${{ inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/operator-attest-generation-readiness.py \
+            --generation "$GENERATION" --confirmation "$CONFIRMATION" \
+            --env-file "$GENERATION_PRIVATE_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
+          echo STANDBY_AUTH_ATTESTED_WORKER_REMAINS_STOPPED
+
+      - name: Mark standby independently verified
+        if: ${{ inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Verified
+
+      - name: Record safe failure for operator
+        if: ${{ failure() && env.GENERATION_PRIVATE_ENV != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set +e
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Failed
+          echo STANDBY_AUTH_OPERATOR_ATTENTION_REQUIRED
