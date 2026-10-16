@@ -134,7 +134,9 @@ def record_identity(env_file, generation, credential, identity_file):
         WHERE generation='{generation}'
           AND credential_id='{credential}'::uuid
           AND status IN ('Ready','Finishing')
-          AND requested_at_utc > now() - interval '30 minutes'
+          -- Standby Chromium's interactive session is bounded to 90 minutes.
+          -- Inspection requires a live, authenticated viewer immediately before this update.
+          AND requested_at_utc > now() - interval '90 minutes'
         RETURNING generation;
     """
     result = apply.sql(apply.parse_db(env_file), query, stage="standby_account_identity")
