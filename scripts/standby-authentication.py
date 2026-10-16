@@ -90,10 +90,14 @@ def guard_standby(generation):
     # The dormant queue Worker can have been pruned after provisioning. An
     # interactive browser session must not depend on that container existing.
     # If it exists, however, it MUST remain stopped.
-    try:
-        standby = executor.inspect(project, worker_name)
-    except (RuntimeError, ValueError):
-        standby = None
+    worker_ids = subprocess.run(
+        ["docker", "ps", "-aq",
+         "--filter", "label=com.docker.compose.project=" + project,
+         "--filter", "label=com.docker.compose.service=" + worker_name],
+        capture_output=True, text=True, timeout=15, check=True).stdout.splitlines()
+    if len(worker_ids) > 1:
+        raise RuntimeError("multiple_standby_workers_refused")
+    standby = json.loads(safe_run(["docker", "inspect", worker_ids[0]], 15))[0] if worker_ids else None
     if standby is not None and standby["State"]["Status"] not in ("created", "exited"):
         raise RuntimeError("standby_worker_must_remain_stopped")
     source_mount = executor.mount_name(active_worker, "/data/browser-profiles")
