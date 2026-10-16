@@ -70,9 +70,160 @@ internal static class StandbyAccountInspector
             reason = "unexpected_inspection_error";
         }
 
+        // A Chrome page can be present in /json/list but absent from the
+        // Playwright context list. Inspect only verified loopback page targets.
+        try
+        {
+            var fallback = await InspectDirectPageTargetAsync();
+            if (fallback.Identity is not null)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(fallback.Identity));
+                return 0;
+            }
+            reason = fallback.Reason;
+        }
+        catch (Exception)
+        {
+            reason = "cdp_direct_target_inspection_failed";
+        }
+
         Console.Error.WriteLine("STANDBY_MAERSK_ACCOUNT_NOT_VERIFIED reason=" + reason);
         return 3;
     }
+
+
+    // Playwright may not enumerate an existing Chromium tab even when Chrome's
+    // local /json/list exposes it. Use that local page target as a read-only
+    // fallback; do not navigate, handle cookies, or touch a queue Worker.
+    private static async Task<(Identity? Identity, string Reason)> InspectDirectPageTargetAsync()
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+        var targetJson = await http.GetStringAsync("http://127.0.0.1:9222/json/list");
+        using var targets = JsonDocument.Parse(targetJson);
+        if (targets.RootElement.ValueKind != JsonValueKind.Array)
+            return (null, "cdp_targets_invalid");
+
+        foreach (var target in targets.RootElement.EnumerateArray())
+        {
+            if (!target.TryGetProperty("type", out var type) ||
+                type.GetString() != "page" ||
+                !target.TryGetProperty("url", out var url) ||
+                !OfficialHubPage(url.GetString()) ||
+                !target.TryGetProperty("webSocketDebuggerUrl", out var websocket))
+                continue;
+
+            if (!Uri.TryCreate(websocket.GetString(), UriKind.Absolute, out var endpoint) ||
+                endpoint.Scheme != "ws" || endpoint.Port != 9222 ||
+                !(endpoint.Host == "127.0.0.1" || endpoint.Host == "localhost") ||
+                !endpoint.AbsolutePath.StartsWith("/devtools/page/", StringComparison.Ordinal))
+                continue;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            using var socket = new System.Net.WebSockets.ClientWebSocket();
+            await socket.ConnectAsync(endpoint, cts.Token);
+
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                var result = await EvaluateViaCDPAsync(socket, "(" + JavaScriptEvidence + ")()", cts.Token);
+                if (result.ValueKind == JsonValueKind.Object)
+                {
+                    var account = result.Deserialize<Identity>();
+                    if (account is not null && ValidIdentity(account))
+                        return (account, "verified");
+                }
+
+                if (attempt == 0)
+                    await EvaluateViaCDPAsync(socket, "(" + JavaScriptOpenAccount + ")()", cts.Token);
+                await Task.Delay(400, cts.Token);
+            }
+            return (null, "cdp_hub_account_identity_not_visible");
+        }
+
+        return (null, "cdp_hub_target_not_found");
+    }
+
+    private static async Task<JsonElement> EvaluateViaCDPAsync(
+        System.Net.WebSockets.ClientWebSocket socket, string expression,
+        CancellationToken cancellationToken)
+    {
+        const int requestId = 1;
+        var packet = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            id = requestId,
+            method = "Runtime.evaluate",
+            @params = new { expression, returnByValue = true, awaitPromise = true }
+        });
+        await socket.SendAsync(new ArraySegment<byte>(packet),
+            System.Net.WebSockets.WebSocketMessageType.Text, true, cancellationToken);
+
+        var buffer = new byte[16_384];
+        using var output = new MemoryStream();
+        while (true)
+        {
+            var received = await socket.ReceiveAsync(
+                new ArraySegment<byte>(buffer), cancellationToken);
+            if (received.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+                throw new InvalidOperationException("Page target closed during inspection");
+            if (output.Length + received.Count > 1_048_576)
+                throw new InvalidOperationException("CDP reply exceeds size limit");
+            output.Write(buffer, 0, received.Count);
+            if (!received.EndOfMessage)
+                continue;
+
+            using var document = JsonDocument.Parse(output.ToArray());
+            output.SetLength(0);
+            var response = document.RootElement;
+            if (!response.TryGetProperty("id", out var id) ||
+                id.GetInt32() != requestId)
+                continue;
+
+            if (response.TryGetProperty("result", out var result) &&
+                result.TryGetProperty("result", out var value) &&
+                value.TryGetProperty("value", out var serialized))
+                return serialized.Clone();
+            return default;
+        }
+    }
+
+    private static bool OfficialHubPage(string? address)
+    {
+        if (!AllowedOfficialPage(address) ||
+            !Uri.TryCreate(address, UriKind.Absolute, out var uri))
+            return false;
+        return uri.AbsolutePath.Equals("/hub", StringComparison.OrdinalIgnoreCase) ||
+            uri.AbsolutePath.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private const string JavaScriptOpenAccount = """
+        () => {
+            const selectors = [
+                'button[aria-label*="account" i]',
+                'button[aria-label*="profile" i]',
+                '[role="button"][aria-label*="account" i]',
+                '[role="button"][aria-label*="profile" i]',
+                'button[title*="account" i]',
+                '[data-testid*="account" i]',
+                '[data-testid*="profile" i]'
+            ];
+            const find = (root, depth) => {
+                if (depth > 6) return null;
+                for (const item of root.querySelectorAll(selectors.join(','))) {
+                    if (item.getClientRects().length && !item.disabled) return item;
+                }
+                for (const item of root.querySelectorAll('*')) {
+                    if (item.shadowRoot) {
+                        const found = find(item.shadowRoot, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+            const control = find(document, 0);
+            if (!control) return false;
+            control.click();
+            return true;
+        }
+        """;
 
     private static async Task<Identity?> ReadIdentityAsync(IPage page)
     {
