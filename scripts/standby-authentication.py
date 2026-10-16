@@ -7,6 +7,7 @@ mounted standby Chromium directory is exposed through loopback-only SSH VNC.
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -118,7 +119,7 @@ def guard_standby(generation):
     return standby, volume
 
 
-def prepare(generation, credential, script_path):
+def prepare(generation, credential, script_path, image_override=None):
     guard_generation(generation)
     if not CREDENTIAL.fullmatch(credential):
         raise RuntimeError("credential_id_invalid")
@@ -140,6 +141,11 @@ def prepare(generation, credential, script_path):
         safe_run(["docker", "rm", existing])
     port = viewer_port(generation)
     # Docker publishes only 127.0.0.1, reachable to the operator by SSH.
+    image = image_override or active_worker["Image"]
+    if image_override:
+        if not re.fullmatch(r"dhole/agent-workers:standby-inspector-[0-9a-f]{12}", image_override):
+            raise RuntimeError("untrusted_standby_image")
+        safe_run(["docker", "image", "inspect", image_override], 15)
     safe_run([
         "docker", "run", "--detach", "--pull=never", "--name", name,
         "--restart", "no", "--stop-timeout", "25",
@@ -151,7 +157,7 @@ def prepare(generation, credential, script_path):
         "--mount", "type=volume,source=" + volume + ",target=/data/browser-profiles",
         "--mount", "type=bind,source=" + str(script_path.resolve()) + ",target=/app/start-standby-auth.sh,readonly",
         "--entrypoint", "/bin/bash",
-        active_worker["Image"],
+        image,
         "/app/start-standby-auth.sh", credential
     ], 70)
     for _ in range(30):
@@ -225,14 +231,14 @@ def inspect_account(generation, credential, output):
     print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
 
 
-def restart_viewer(generation, credential, script_path):
+def restart_viewer(generation, credential, script_path, image_override=None):
     """Reopen the same persisted profile with local-only CDP; never copy cookies."""
     guard_standby(generation)
     container_id, viewer = inspect_existing(generation, credential)
     if viewer["State"]["Status"] == "running":
         safe_run(["docker", "stop", "--time", "25", container_id], 45)
     # The prepare function verifies the exact viewer identity before removing it.
-    prepare(generation, credential, script_path)
+    prepare(generation, credential, script_path, image_override)
 
 
 def main():
@@ -248,7 +254,7 @@ def main():
     if args.operation == "prepare":
         prepare(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh")
     elif args.operation == "restart":
-        restart_viewer(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh")
+        restart_viewer(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh", os.environ.get("STANDBY_AUTH_IMAGE"))
     elif args.operation == "inspect":
         if not args.identity_output:
             raise RuntimeError("identity_output_required")
