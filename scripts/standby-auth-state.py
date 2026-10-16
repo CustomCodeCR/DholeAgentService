@@ -111,9 +111,9 @@ def record_identity(env_file, generation, credential, identity_file):
     name, username, customer = (
         record["DisplayName"], record["Username"], record["CustomerId"])
     if not isinstance(name, str) or not 4 <= len(name) <= 100 or (
-        not all(c.isalpha() or c in " -." for c in name)):
+        not all(c.isalpha() or c in " -.'" for c in name)):
         raise ValueError("invalid_name")
-    if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", username):
+    if not isinstance(username, str) or not re.fullmatch(r"(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", username):
         raise ValueError("invalid_username")
     if not isinstance(customer, str) or not re.fullmatch(r"[0-9]{8,15}", customer):
         raise ValueError("invalid_customer_id")
