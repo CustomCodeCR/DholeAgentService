@@ -46,7 +46,7 @@ jobs:
             echo "STANDBY_NUGET_CREDENTIAL_MISSING" >&2
             exit 2
           }
-          status="$(printf 'user = "%s:%s"\\n' "$NUGET_PACKAGE_USER" "$GITHUB_TOKEN" | \
+          status="$(printf 'user = "%s:%s"\n' "$NUGET_PACKAGE_USER" "$GITHUB_TOKEN" | \
             curl --config - --silent --show-error --max-time 20 \
               --output /dev/null --write-out '%{http_code}' \
               "https://nuget.pkg.github.com/CustomCodeCR/download/customcodeframework.core/index.json")"
