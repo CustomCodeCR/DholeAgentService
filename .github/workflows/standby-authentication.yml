@@ -158,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
-            --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
+            --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready --restart-ready
 
       - name: Read actual authenticated account before inspection or closure
         if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
