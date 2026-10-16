@@ -143,8 +143,9 @@ internal static class StandbyAccountInspector
             return false;
         if (identity.DisplayName.Any(ch => char.IsControl(ch) || ch is '"'))
             return false;
-        if (identity.Username.Length is < 3 or > 64 ||
-            !identity.Username.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '.' or '-'))
+        if (identity.Username is null || identity.Username.Length is < 3 or > 128 ||
+            !(System.Text.RegularExpressions.Regex.IsMatch(identity.Username, @"^[A-Za-z0-9_.-]{3,64}$") ||
+              System.Text.RegularExpressions.Regex.IsMatch(identity.Username, @"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")))
             return false;
         return identity.CustomerId.Length is >= 8 and <= 15
             && identity.CustomerId.All(ch => ch is >= '0' and <= '9');
@@ -230,7 +231,7 @@ internal static class StandbyAccountInspector
             };
             const valid = {
                 DisplayName: /^[\p{L}][\p{L} .'-]{3,99}$/u,
-                Username: /^[A-Za-z0-9_.-]{3,64}$/,
+                Username: /^(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})$/,
                 CustomerId: /^[0-9]{8,15}$/
             };
             const fields = {};
