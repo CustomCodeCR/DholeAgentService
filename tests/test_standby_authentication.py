@@ -105,6 +105,15 @@ class StandbyAuthenticationTests(unittest.TestCase):
                 auth.inspect_account("prod2", "a"*32, output)
             self.assertFalse(output.exists())
 
+    def test_reprepare_existing_viewer_cannot_delete_profile(self):
+        # A timed-out 30-minute auth may leave a viewer behind; the next
+        # authorized prepare only stops/removes that exact ephemeral viewer.
+        source = (ROOT / "scripts/standby-authentication.py").read_text()
+        self.assertIn('inspect_existing(generation, credential)', source)
+        self.assertIn('["docker", "stop", "--time", "25", existing]', source)
+        self.assertIn('["docker", "rm", existing]', source)
+        self.assertNotIn('"docker", "volume", "rm"', source)
+
     def test_restarting_viewer_keeps_persistent_profile_volume(self):
         with patch.object(auth, "guard_standby"), \
              patch.object(auth, "inspect_existing", return_value=(
