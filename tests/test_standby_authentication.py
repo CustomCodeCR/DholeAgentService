@@ -101,7 +101,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
         import tempfile
         import types
         import json
-        identity = {"DisplayName": "Example Operator", "Username": "authorized01",
+        identity = {"DisplayName": "Example Operator", "Username": "operator@example.com",
                     "CustomerId": "1234567890"}
         with tempfile.TemporaryDirectory() as root, \
              patch.object(auth, "guard_standby"), \
