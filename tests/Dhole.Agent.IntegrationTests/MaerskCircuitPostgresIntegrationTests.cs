@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
@@ -254,6 +255,83 @@ public sealed class MaerskCircuitPostgresIntegrationTests
         finally { await db.Database.EnsureDeletedAsync(); }
     }
 
+    [TestMethod]
+    public async Task CircuitTransitions_QueueOneEmailForOpenAndOneForVerifiedClose()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(db);
+            var breaker = CreateCircuit(db, notificationsEnabled: true);
+            var executionId = Guid.NewGuid();
+            await breaker.RecordFailureAsync(providerId, executionId, "maersk_hcaptcha_required");
+            await breaker.RecordFailureAsync(providerId, executionId, "maersk_hcaptcha_required");
+
+            var emails = await db.OutboxMessages.AsNoTracking()
+                .Where(x => x.EventName == "notifications.notification.requested")
+                .ToListAsync();
+            Assert.AreEqual(1, emails.Count, "Repeated Open failures must not duplicate email.");
+            using (var payload = JsonDocument.Parse(emails[0].PayloadJson))
+            {
+                Assert.AreEqual("Email", payload.RootElement.GetProperty("channel").GetString());
+                Assert.IsTrue(payload.RootElement.GetProperty("subject").GetString()!.Contains("ACTIVADO"));
+                Assert.AreEqual("mlang@castrofallas.com",
+                    payload.RootElement.GetProperty("recipients")[0].GetProperty("address").GetString());
+                Assert.AreEqual("rsibaja@castrofallas.com",
+                    payload.RootElement.GetProperty("payload").GetProperty("cc")[0].GetString());
+                Assert.AreEqual("maulangbonilla.18@gmail.com",
+                    payload.RootElement.GetProperty("payload").GetProperty("cc")[1].GetString());
+            }
+
+            await SeedAuthenticatedProfileAsync(db, providerId);
+            Assert.IsTrue(await breaker.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Provider authentication verified by the operator", true));
+            Assert.IsFalse(await breaker.ResetByOperatorAsync(providerId, Guid.NewGuid(),
+                "Repeated reset after successful verification", true));
+
+            emails = await db.OutboxMessages.AsNoTracking()
+                .Where(x => x.EventName == "notifications.notification.requested")
+                .ToListAsync();
+            Assert.AreEqual(2, emails.Count, "One Open and one Closed message expected.");
+            using var closed = JsonDocument.Parse(emails.Single(x =>
+                x.PayloadJson.Contains("DESACTIVADO")).PayloadJson);
+            Assert.AreEqual("Email", closed.RootElement.GetProperty("channel").GetString());
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
+    [TestMethod]
+    public async Task SuccessfulTechnicalProbe_QueuesClosedNotificationOnlyOnce()
+    {
+        var connection = ConnectionOrInconclusive();
+        if (connection is null) return;
+        await using var db = CreateDb(connection);
+        await db.Database.MigrateAsync();
+        try
+        {
+            var providerId = await SeedProviderAsync(db);
+            var breaker = CreateCircuit(db, notificationsEnabled: true);
+            for (var i = 0; i < 3; i++)
+                await breaker.RecordFailureAsync(providerId, Guid.NewGuid(), "maersk_offer_timeout");
+            Assert.AreEqual(1, await db.OutboxMessages.CountAsync(
+                x => x.EventName == "notifications.notification.requested"));
+
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE agent.maersk_circuits SET open_until_utc = NOW() - INTERVAL '1 second' WHERE provider_id = {providerId}");
+            var probe = Guid.NewGuid();
+            Assert.IsTrue(await breaker.TryEnterAsync(providerId, probe));
+            await breaker.RecordSuccessAsync(providerId, probe);
+            await breaker.RecordSuccessAsync(providerId, probe);
+            Assert.AreEqual("Closed", (await breaker.GetAsync(providerId)).State);
+            Assert.AreEqual(2, await db.OutboxMessages.CountAsync(
+                x => x.EventName == "notifications.notification.requested"));
+        }
+        finally { await db.Database.EnsureDeletedAsync(); }
+    }
+
     private static async Task<BrowserProfile> SeedAuthenticatedProfileAsync(
         ServiceDbContext db, Guid providerId)
     {
@@ -288,13 +366,19 @@ public sealed class MaerskCircuitPostgresIntegrationTests
     private static ServiceDbContext CreateDb(string connection)
         => new(new DbContextOptionsBuilder<ServiceDbContext>().UseNpgsql(connection, npgsql => npgsql.EnableRetryOnFailure()).Options);
 
-    private static PostgresMaerskCircuitBreaker CreateCircuit(ServiceDbContext db)
+    private static PostgresMaerskCircuitBreaker CreateCircuit(
+        ServiceDbContext db, bool notificationsEnabled = false)
         => new(db, Options.Create(new MaerskCircuitOptions
         {
             Enabled = true,
             TransientFailureThreshold = 3,
             TechnicalCooldownSeconds = 300,
             ProviderCooldownSeconds = 900
+        }), Options.Create(new MaerskCircuitNotificationsOptions
+        {
+            Enabled = notificationsEnabled,
+            To = "mlang@castrofallas.com",
+            Cc = ["rsibaja@castrofallas.com", "maulangbonilla.18@gmail.com"]
         }));
 
     private static async Task<Guid> SeedProviderAsync(ServiceDbContext db)
