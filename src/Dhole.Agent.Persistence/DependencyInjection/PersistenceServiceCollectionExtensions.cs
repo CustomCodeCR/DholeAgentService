@@ -29,6 +29,8 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<Dhole.Agent.Application.Abstractions.Runtime.IAgentQueueLeaseStore, PostgresAgentQueueLeaseStore>();
         services.Configure<Dhole.Agent.Application.Runtime.MaerskCircuitOptions>(
             configuration.GetSection(Dhole.Agent.Application.Runtime.MaerskCircuitOptions.SectionName));
+        services.Configure<Dhole.Agent.Application.Runtime.MaerskCircuitNotificationsOptions>(
+            configuration.GetSection(Dhole.Agent.Application.Runtime.MaerskCircuitNotificationsOptions.SectionName));
         services.AddScoped<Dhole.Agent.Application.Abstractions.Runtime.IMaerskCircuitBreaker, PostgresMaerskCircuitBreaker>();
         services.AddScoped<MaerskExecutionResumeService>();
         services.Configure<Dhole.Agent.Application.Runtime.MaerskMonitoringOptions>(
