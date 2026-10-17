@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text.Json;
+using CustomCodeFramework.Messaging.Outbox;
 using Dhole.Agent.Application.Abstractions.Runtime;
 using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Domain.Agents;
@@ -13,9 +16,12 @@ namespace Dhole.Agent.Persistence.Repositories;
 /// </summary>
 public sealed class PostgresMaerskCircuitBreaker(
     ServiceDbContext db,
-    IOptions<MaerskCircuitOptions> configured) : IMaerskCircuitBreaker
+    IOptions<MaerskCircuitOptions> configured,
+    IOptions<MaerskCircuitNotificationsOptions>? notificationSettings = null) : IMaerskCircuitBreaker
 {
     private readonly MaerskCircuitOptions _options = configured.Value;
+    private readonly MaerskCircuitNotificationsOptions _notifications =
+        notificationSettings?.Value ?? new MaerskCircuitNotificationsOptions();
 
     public async Task<MaerskCircuitSnapshot> GetAsync(Guid providerId, CancellationToken ct = default)
     {
@@ -149,6 +155,10 @@ public sealed class PostgresMaerskCircuitBreaker(
         if (current.State == "Open"
             && (previousRow.State != "Open" || previousRow.ReasonCode != current.ReasonCode))
             await AuditAsync(providerId, "Opened", normalized, null, null, ct);
+        // Do not email again when the breaker is already Open.
+        if (current.State == "Open" && previousRow.State != "Open")
+            await EnqueueCircuitEmailAsync(providerId, "Open", current.ReasonCode,
+                current.RequiresOperator, null, ct);
         await tx.CommitAsync(ct);
         });
     }
