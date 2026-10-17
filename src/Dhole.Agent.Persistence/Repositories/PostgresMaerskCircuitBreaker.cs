@@ -167,24 +167,40 @@ public sealed class PostgresMaerskCircuitBreaker(
     {
         if (!_options.Enabled) return;
         ValidateProvider(providerId);
-        var previous = await GetAsync(providerId, ct);
-        if (previous.State == "Open" || previous.RequiresOperator) return;
+        // Commit the close, audit and email outbox atomically under a row lock.
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var previous = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
+                $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+            if (previous is null || previous.State == "Open" || previous.RequiresOperator)
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
+            var changed = await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                UPDATE agent.maersk_circuits
+                SET state = 'Closed', requires_operator = false,
+                    reason_code = NULL, open_until_utc = NULL,
+                    consecutive_failures = 0, probe_execution_id = NULL,
+                    updated_at_utc = NOW()
+                WHERE provider_id = {providerId}
+                  AND requires_operator = false
+                  AND (state = 'Closed'
+                       OR (state = 'HalfOpen' AND probe_execution_id = {executionId}))
+                """, ct);
 
-        var changed = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-            UPDATE agent.maersk_circuits
-            SET state = 'Closed', requires_operator = false,
-                reason_code = NULL, open_until_utc = NULL,
-                consecutive_failures = 0, probe_execution_id = NULL,
-                updated_at_utc = NOW()
-            WHERE provider_id = {providerId}
-              AND requires_operator = false
-              AND (state = 'Closed'
-                   OR (state = 'HalfOpen' AND probe_execution_id = {executionId}))
-            """, ct);
-
-        if (changed > 0 && previous.State == "HalfOpen")
-            await AuditAsync(providerId, "ProbeSucceeded", null, null, null, ct);
+            if (changed > 0 && previous.State == "HalfOpen")
+            {
+                await AuditAsync(providerId, "ProbeSucceeded", null, null, null, ct);
+                await EnqueueCircuitEmailAsync(providerId, "Closed", previous.ReasonCode,
+                    false, "Prueba técnica satisfactoria", ct);
+            }
+            await tx.CommitAsync(ct);
+        });
     }
 
     public async Task<bool> ResetByOperatorAsync(
@@ -258,7 +274,11 @@ public sealed class PostgresMaerskCircuitBreaker(
               )
             """, ct);
         if (affected == 1)
+        {
             await AuditAsync(providerId, "OperatorReset", null, actorId, reason.Trim(), ct);
+            await EnqueueCircuitEmailAsync(providerId, "Closed", current.ReasonCode,
+                false, $"Restablecimiento verificado por operador {actorId}", ct);
+        }
         await tx.CommitAsync(ct);
         return affected == 1;
         });
