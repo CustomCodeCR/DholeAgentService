@@ -284,6 +284,71 @@ public sealed class PostgresMaerskCircuitBreaker(
         });
     }
 
+    private async Task EnqueueCircuitEmailAsync(
+        Guid providerId, string state, string? reasonCode, bool requiresOperator,
+        string? action, CancellationToken ct)
+    {
+        if (!_notifications.Enabled) return;
+        _notifications.Validate();
+
+        var opened = state == "Open";
+        var stateName = opened ? "ACTIVADO (OPEN)" : "DESACTIVADO (CLOSED)";
+        var timestamp = DateTime.UtcNow;
+        // Costa Rica uses UTC-06:00 year-round.
+        var costaRicaTime = new DateTimeOffset(timestamp, TimeSpan.Zero)
+            .ToOffset(TimeSpan.FromHours(-6)).ToString("dd/MM/yyyy HH:mm:ss 'UTC-06:00'");
+        var safeReason = WebUtility.HtmlEncode(
+            string.IsNullOrWhiteSpace(reasonCode) ? "Sin motivo registrado" : reasonCode);
+        var safeAction = WebUtility.HtmlEncode(action ?? (opened
+            ? "El circuito impide nuevas ejecuciones hasta que se cumpla la política de recuperación."
+            : "El circuito permite nuevamente ejecuciones."));
+        var subject = $"[Dhole Agent] Maersk - Breaker {stateName}";
+        var body = $"""
+            <html><body>
+            <h2>Maersk: Circuit Breaker {stateName}</h2>
+            <p><strong>Estado:</strong> {stateName}</p>
+            <p><strong>Fecha/hora (Costa Rica):</strong> {costaRicaTime}</p>
+            <p><strong>Motivo:</strong> {safeReason}</p>
+            <p><strong>Requiere intervención manual:</strong> {(requiresOperator ? "Sí" : "No")}</p>
+            <p><strong>Detalle:</strong> {safeAction}</p>
+            <p><strong>Proveedor:</strong> Maersk ({providerId})</p>
+            <p>Notificación automática de Dhole Agent. No modifica estados, sesiones ni perfiles.</p>
+            </body></html>
+            """;
+
+        // The state and email request use the same PostgreSQL transaction.
+        // Agent's existing outbox publishes to dhole.notifications.events,
+        // where DholeNotificationsService sends the email with CC recipients.
+        var payload = new
+        {
+            notificationType = "maersk_circuit_state_changed",
+            channel = "Email",
+            entityType = "MaerskCircuit",
+            entityId = providerId.ToString(),
+            subject,
+            body,
+            maxAttempts = 5,
+            recipients = new[]
+            {
+                new { userId = (Guid?)null, address = _notifications.To, displayName = (string?)null }
+            },
+            payload = new { cc = _notifications.Cc }
+        };
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            EventId = Guid.NewGuid(),
+            EventType = "MaerskCircuitStateChanged",
+            EventName = "notifications.notification.requested",
+            SourceService = "DholeAgentService",
+            PayloadJson = JsonSerializer.Serialize(payload),
+            CorrelationId = providerId.ToString("N"),
+            Status = OutboxMessageStatus.Pending,
+            RetryCount = 0,
+            CreatedAtUtc = timestamp
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
     private async Task EnsureRowAsync(Guid providerId, CancellationToken ct)
     {
         await db.Database.ExecuteSqlInterpolatedAsync(
