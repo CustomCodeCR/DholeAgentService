@@ -31,7 +31,7 @@ internal static class StandbyViewerGateway
         int.TryParse(name.AsSpan(4), out var n) && n <= 200;
 
     private static string Prefix(string generation) => Root + generation + "/viewer";
-    private static string CookieName(string generation) => "__Secure-dhole-standby-" + generation;
+    private static string CookieName(string generation) => "dhole_standby_viewer_" + generation;
     private static string Key(string token) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
@@ -206,7 +206,9 @@ internal static class StandbyViewerGateway
             uri.Host == "sistema.logisticacastrofallas.com")) ||
             (uri.Scheme == "http" && (uri.Host == "localhost" ||
             uri.Host == "127.0.0.1") && uri.Port == 5173) ||
-            (uri.Scheme == context.Request.Scheme &&
+            // The API is normally behind TLS termination. Its internal
+            // Request.Scheme can be http while the browser Origin is https.
+            (uri.Scheme == "https" &&
             uri.Authority.Equals(context.Request.Host.Value, StringComparison.OrdinalIgnoreCase));
     }
 
