@@ -40,7 +40,34 @@ class StandbyAuthStateTests(unittest.TestCase):
             self.assertTrue(queries[0].lstrip().startswith("SELECT"))
             self.assertIn("status='Ready'", queries[-1])
             self.assertNotIn("ALTER TABLE", "\n".join(queries))
-            self.assertIn("status IN ('Preparing','Ready','Failed')", queries[-1])
+            self.assertIn("status IN ('Requested','Preparing','Ready','Failed')", queries[-1])
+            self.assertIn("requested_at_utc > now() - interval '90 minutes'", queries[-1])
+            self.assertNotIn("requested_at_utc=now()", queries[-1])
+
+    def test_recent_requested_session_is_reconciled_after_healthy_viewer(self):
+        with patch.object(state.apply, "parse_db", return_value={}), \
+             patch.object(state.apply, "sql", side_effect=["4", "Requested", "prod2"]) as sql, \
+             patch.object(state.subprocess, "run",
+                          side_effect=[live_viewer(), SimpleNamespace(returncode=0)]):
+            state.restart_ready("unused.env", "prod2", CREDENTIAL)
+            self.assertEqual(sql.call_count, 3)
+            self.assertIn("requested_at_utc >", sql.call_args.args[1])
+
+    def test_expired_request_requires_new_api_authorization(self):
+        with patch.object(state.apply, "parse_db", return_value={}), \
+             patch.object(state.apply, "sql", side_effect=["4", "Expired"]) as sql, \
+             patch.object(state.subprocess, "run",
+                          side_effect=[live_viewer(), SimpleNamespace(returncode=0)]):
+            with self.assertRaisesRegex(ValueError, "standby_auth_session_expired"):
+                state.restart_ready("unused.env", "prod2", CREDENTIAL)
+            self.assertEqual(sql.call_count, 2)
+
+    def test_reconciliation_checks_request_age_in_database(self):
+        with patch.object(state.apply, "sql", return_value="Expired") as sql:
+            self.assertEqual(
+                state.get_session_status({}, "prod2", CREDENTIAL), "Expired")
+            query = sql.call_args.args[1]
+            self.assertIn("requested_at_utc <= now() - interval '90 minutes'", query)
 
     def test_missing_authorized_request_does_not_mutate_state(self):
         with patch.object(state.apply, "parse_db", return_value={}), \
