@@ -274,17 +274,49 @@ def finish(generation, credential):
 
 
 
+def resolve_probe_image():
+    """Select the latest local, versioned Hub-only Inspector build.
+
+    The probe runs in a disposable container sharing only the viewer's
+    loopback network namespace. It never replaces the signed-in Chromium,
+    mounts its profile, or starts the queue Worker.
+    """
+    selected = os.environ.get("STANDBY_HUB_PROBE_IMAGE", "")
+    if selected:
+        if not re.fullmatch(r"dhole/agent-workers:standby-inspector-[a-f0-9]{12}", selected):
+            raise RuntimeError("untrusted_standby_image")
+        safe_run(["docker", "image", "inspect", selected], 15)
+        return selected
+    tags = safe_run([
+        "docker", "image", "ls", "--filter",
+        "reference=dhole/agent-workers:standby-inspector-*",
+        "--format", "{{.Repository}}:{{.Tag}}"
+    ], 15).splitlines()
+    for image in tags:
+        if re.fullmatch(r"dhole/agent-workers:standby-inspector-[a-f0-9]{12}", image):
+            return image
+    raise RuntimeError("standby_inspector_image_missing")
+
+
 def inspect_account(generation, credential, output):
     """Read only the expanded Account panel in this generation's live Chrome."""
     guard_standby(generation)
     container_id, viewer = inspect_existing(generation, credential)
     if viewer["State"]["Status"] != "running":
         raise RuntimeError("standby_viewer_no_longer_running")
-    # Never print this command's stdout/stderr: they may include account details.
+    # The current viewer may have been started before the Hub-only Inspector
+    # was built. Use the newest versioned Inspector from the trusted host,
+    # sharing just the viewer's network namespace (local CDP port 9222).
+    # No browser/profile restart, credentials, mounts or queue consumers.
+    probe_image = resolve_probe_image()
     outcome = subprocess.run(
-        ["docker", "exec", container_id, "dotnet",
+        ["docker", "run", "--rm", "--pull=never",
+         "--network", "container:" + container_id,
+         "--read-only", "--cap-drop", "ALL",
+         "--security-opt", "no-new-privileges",
+         "--entrypoint", "dotnet", probe_image,
          "/app/Dhole.Agent.Workers.dll", "--standby-account-inspect"],
-        capture_output=True, text=True, timeout=30, check=False)
+        capture_output=True, text=True, timeout=45, check=False)
     if outcome.returncode != 0:
         raise RuntimeError("standby_hub_not_authenticated")
     proof = json.loads(outcome.stdout)
@@ -359,6 +391,7 @@ if __name__ == "__main__":
             "standby_browser_volume_in_use",
             "standby_hub_not_authenticated", "invalid_standby_hub_proof",
             "unsafe_identity_output", "identity_output_required",
+            "standby_inspector_image_missing",
         }
         code = str(reason) if isinstance(reason, RuntimeError) and str(reason) in known else "unexpected_runtime_failure"
         print("STANDBY_AUTH_OPERATION_REFUSED: " + code, file=sys.stderr)
