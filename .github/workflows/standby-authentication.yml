@@ -212,6 +212,7 @@ jobs:
             --status Ready --restart-ready
 
       - name: Read actual authenticated account before inspection or closure
+        id: inspect_browser
         if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
         shell: bash
         env:
@@ -224,11 +225,35 @@ jobs:
           python3 scripts/standby-authentication.py --operation inspect \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --identity-output "$identity_file"
+
+      - name: Record verified account evidence in PostgreSQL
+        if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --identity-file "$identity_file"
           rm -f "$identity_file"
           echo STANDBY_MAERSK_ACCOUNT_PROOF_RECORDED
+
+      - name: Record operator-friendly account inspection failure
+        if: ${{ failure() && inputs.operation == 'inspect' && steps.inspect_browser.outcome == 'failure' && env.GENERATION_PRIVATE_ENV != '' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          # Record only a fixed diagnostic code. Never retain provider HTML,
+          # browser cookies, identity values or a false Verified status.
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" \
+            --inspection-diagnostic standby_account_not_visible_in_official_menu
 
       - name: Close only standby viewer; preserve persistent browser profile
         if: ${{ inputs.operation == 'finish' }}
