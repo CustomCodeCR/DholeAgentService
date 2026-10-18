@@ -1,0 +1,49 @@
+name: Diagnose live standby dispatcher configuration
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/diagnose-standby-dispatcher-runtime.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read safe effective configuration and gateway routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, subprocess
+          def inspect(project,service):
+              ids=subprocess.check_output(["docker","ps","-q",
+                  "--filter","label=com.docker.compose.project="+project,
+                  "--filter","label=com.docker.compose.service="+service],text=True).splitlines()
+              if len(ids)!=1:
+                  print("DISPATCHER_DIAG role="+project+"/"+service+" error=missing_or_ambiguous")
+                  return
+              c=json.loads(subprocess.check_output(["docker","inspect",ids[0]],text=True))[0]
+              env=dict(x.split("=",1) for x in c["Config"]["Env"] if "=" in x)
+              enabled=env.get("GenerationOrchestrator__Enabled","").lower()
+              present=bool(env.get("GenerationOrchestrator__GitHubToken",""))
+              ref=env.get("GenerationOrchestrator__ActionsRef","")
+              print("DISPATCHER_DIAG role="+project+"/"+service+
+                    " enabled="+(enabled if enabled in ("true","false") else "missing")+
+                    " token_present="+str(present).lower()+
+                    " actions_ref_master="+str(ref=="master").lower()+
+                    " running="+str(c["State"]["Status"]=="running").lower())
+              if service=="api-gateway":
+                  route=env.get("AGENT_HTTP_URL","")
+                  print("GATEWAY_AGENT_BACKEND_EXPECTED="+str(route=="http://dhole-agent-api:8080").lower())
+          inspect("dhole","dhole-agent-api")
+          inspect("dhole-agent-prod1","dhole-agent-api-prod1")
+          inspect("dhole","api-gateway")
+          PY
