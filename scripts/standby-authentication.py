@@ -312,7 +312,8 @@ def inspect_account(generation, credential, output):
     outcome = subprocess.run(
         ["docker", "run", "--rm", "--pull=never",
          "--network", "container:" + container_id,
-         "--read-only", "--cap-drop", "ALL",
+         "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
+         "--cap-drop", "ALL",
          "--security-opt", "no-new-privileges",
          "--entrypoint", "dotnet", probe_image,
          "/app/Dhole.Agent.Workers.dll", "--standby-account-inspect"],
