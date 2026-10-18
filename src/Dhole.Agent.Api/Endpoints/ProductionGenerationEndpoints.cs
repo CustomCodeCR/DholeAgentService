@@ -60,7 +60,7 @@ internal static class ProductionGenerationEndpoints
         );
         INSERT INTO agent.runtime_generation_rules(code,enabled)
         VALUES ('manual',true),('scheduled',false),
-               ('technical_failure',false),('data_quality',false)
+               ('technical_failure',true),('data_quality',false)
         ON CONFLICT (code) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS agent.runtime_generation_requests (
