@@ -89,12 +89,40 @@ class StandbyAuthStateTests(unittest.TestCase):
                 state.restart_ready("unused.env", "prod2", CREDENTIAL)
             self.assertEqual(sql.call_count, 2)
 
+    def test_hub_proof_is_persisted_without_personal_identity_fields(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            proof_file = Path(root) / "proof.json"
+            proof_file.write_text(json.dumps({"HubAuthenticated": True}))
+            proof_file.chmod(0o600)
+            with patch.object(state.apply, "parse_db", return_value={}), \
+                 patch.object(state.apply, "sql", side_effect=["4", "Ready", "prod3"]) as sql:
+                state.record_identity("unused.env", "prod3", CREDENTIAL, proof_file)
+                query = sql.call_args.args[1]
+                self.assertIn("account_verified_at_utc=now()", query)
+                self.assertIn("account_name=NULL", query)
+                self.assertIn("account_username=NULL", query)
+                self.assertIn("account_customer_id=NULL", query)
+                self.assertIn("generation='prod3'", query)
+
+    def test_hub_proof_cannot_be_faked_with_url_or_false_value(self):
+        import tempfile
+        for invalid in ({"HubAuthenticated": False}, {"Url": "https://maersk.com/hub"},
+                        {"HubAuthenticated": True, "Username": "fake"}):
+            with tempfile.TemporaryDirectory() as root:
+                proof_file = Path(root) / "proof.json"
+                proof_file.write_text(json.dumps(invalid))
+                proof_file.chmod(0o600)
+                with self.assertRaisesRegex(ValueError, "invalid_hub_proof"):
+                    state.record_identity("unused.env", "prod2", CREDENTIAL, proof_file)
+
     def test_identity_probe_failure_is_visible_without_revoking_ready_session(self):
         with patch.object(state.apply, "parse_db", return_value={}), \
              patch.object(state.apply, "sql", return_value="prod2") as sql:
             state.record_inspection_failure(
                 "unused.env", "prod2", CREDENTIAL,
-                "standby_account_not_visible_in_official_menu")
+                "standby_hub_not_authenticated")
             query = sql.call_args.args[1]
             self.assertIn("diagnostic_code=", query)
             self.assertIn("status='Ready'", query)
