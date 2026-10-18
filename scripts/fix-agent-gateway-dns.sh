@@ -4,7 +4,19 @@ set -Eeuo pipefail
 set +x
 [[ "$GITHUB_REF" == refs/heads/master && -r "$DHOLE_GATEWAY_ENV" ]] || exit 2
 export DHOLE_ENV_FILE="$DHOLE_GATEWAY_ENV" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest
-compose(){ docker compose --env-file "$DHOLE_ENV_FILE" -f .dhole-system/deploy/docker-compose.services.yml -p dhole "$@"; }
+base=/opt/dhole/docker-compose.services.yml
+[[ -r "$base" ]] || exit 2
+route_dir="$RUNNER_TEMP/agent-gateway-route"
+mkdir -p "$route_dir"
+chmod 700 "$route_dir"
+cat > "$route_dir/pin.yml" <<'YAML'
+services:
+  api-gateway:
+    environment:
+      AGENT_HTTP_URL: http://dhole-dhole-agent-api-1:8080
+      Gateway__Routes__11__Destination: http://dhole-dhole-agent-api-1:8080
+YAML
+compose(){ docker compose --env-file "$DHOLE_ENV_FILE" -f "$base" -f "$route_dir/pin.yml" -p dhole "$@"; }
 compose config -q
 python3 - <<'PY'
 import json,os,subprocess
@@ -27,7 +39,9 @@ assert len(env(main).get("GenerationOrchestrator__GitHubToken",""))>=20
 assert env(standby).get("GenerationOrchestrator__Enabled","").lower()!="true"
 actual=env(gateway)
 manifest=json.loads(subprocess.check_output(["docker","compose","--env-file",os.environ["DHOLE_ENV_FILE"],
-    "-f",".dhole-system/deploy/docker-compose.services.yml","-p","dhole","config","--format","json"],text=True))
+    "-f","/opt/dhole/docker-compose.services.yml",
+    "-f",os.environ["RUNNER_TEMP"]+"/agent-gateway-route/pin.yml",
+    "-p","dhole","config","--format","json"],text=True))
 proposed=manifest["services"]["api-gateway"]["environment"]
 unique="http://dhole-dhole-agent-api-1:8080"
 assert proposed.get("AGENT_HTTP_URL")==unique and proposed.get("Gateway__Routes__11__Destination")==unique, "GATEWAY_FIX_REFUSED: unique gateway target absent"
@@ -47,7 +61,7 @@ for name,value in (("gateway-id",gateway["Id"]),("gateway-image",gateway["Image"
     with open(state+"/"+name,"w") as out: out.write(value)
 with open(state+"/rollback.yml","w") as out:
     out.write("services:\n  api-gateway:\n    environment:\n")
-    out.write("      AGENT_HTTP_URL: http://dhole-agent-api:8080\n")
+    out.write("      AGENT_HTTP_URL: "+actual.get("AGENT_HTTP_URL","http://dhole-agent-api:8080")+"\n")
     out.write("      Gateway__Routes__11__Destination: "+old+"\n")
 print("GATEWAY_FIX_DNS_COLLISION_CONFIRMED primary_and_prod2_distinct=true")
 print("GATEWAY_FIX_UNRELATED_SETTINGS_UNCHANGED")
@@ -62,7 +76,7 @@ rollback(){
   trap - EXIT
   if [[ "$changed" == 1 && "$completed" == 0 ]]; then
     echo GATEWAY_FIX_ROLLBACK_STARTED
-    compose -f "$directory/rollback.yml" up -d --no-deps --no-build --pull never --force-recreate api-gateway || true
+    docker compose --env-file "$DHOLE_ENV_FILE" -f "$base" -f "$directory/rollback.yml" -p dhole up -d --no-deps --no-build --pull never --force-recreate api-gateway || true
   fi
   exit "$rc"
 }
