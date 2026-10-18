@@ -6,6 +6,10 @@ on:
     paths:
       - src/Dhole.Agent.Workers/StandbyAccountInspector.cs
       - scripts/standby-authentication.py
+      - scripts/standby-hub-auto-inspect.py
+      - tests/test_standby_authentication.py
+      - tests/test_standby_auth_state.py
+      - tests/test_standby_auth_auto.py
       - docker/start-standby-auth.sh
       - .github/workflows/build-standby-inspector.yml
   workflow_dispatch:
