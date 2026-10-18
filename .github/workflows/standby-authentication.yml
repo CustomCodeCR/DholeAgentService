@@ -211,7 +211,7 @@ jobs:
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --status Ready --restart-ready
 
-      - name: Read actual authenticated account before inspection or closure
+      - name: Verify authenticated Maersk Hub before inspection or closure
         id: inspect_browser
         if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
         shell: bash
@@ -221,12 +221,12 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
+          identity_file="$RUNNER_TEMP/standby-authentication/hub-proof.json"
           python3 scripts/standby-authentication.py --operation inspect \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --identity-output "$identity_file"
 
-      - name: Record verified account evidence in PostgreSQL
+      - name: Record verified Hub dashboard evidence in PostgreSQL
         if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
         shell: bash
         env:
@@ -234,14 +234,14 @@ jobs:
           CREDENTIAL: ${{ inputs.credential_id }}
         run: |
           set -euo pipefail
-          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
+          identity_file="$RUNNER_TEMP/standby-authentication/hub-proof.json"
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --identity-file "$identity_file"
           rm -f "$identity_file"
-          echo STANDBY_MAERSK_ACCOUNT_PROOF_RECORDED
+          echo STANDBY_MAERSK_HUB_PROOF_RECORDED
 
-      - name: Record operator-friendly account inspection failure
+      - name: Record safe Hub inspection failure
         if: ${{ failure() && inputs.operation == 'inspect' && steps.inspect_browser.outcome == 'failure' && env.GENERATION_PRIVATE_ENV != '' }}
         shell: bash
         env:
@@ -253,7 +253,7 @@ jobs:
           # browser cookies, identity values or a false Verified status.
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
-            --inspection-diagnostic standby_account_not_visible_in_official_menu
+            --inspection-diagnostic standby_hub_not_authenticated
 
       - name: Close only standby viewer; preserve persistent browser profile
         if: ${{ inputs.operation == 'finish' }}
@@ -296,7 +296,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          identity_file="$RUNNER_TEMP/standby-authentication/verified-identity.json"
+          identity_file="$RUNNER_TEMP/standby-authentication/hub-proof.json"
           [[ ! -L "$identity_file" ]] || exit 2
           rm -f -- "$identity_file"
 
