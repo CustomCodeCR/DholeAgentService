@@ -34,6 +34,11 @@ jobs:
                                   ("dhole-agent-prod1","dhole-agent-api-prod1"),
                                   ("dhole-agent-prod2","dhole-agent-api")):
               for item in containers(project,service):
+                  networks=item["NetworkSettings"]["Networks"]
+                  for name,n in networks.items():
+                      print("DIAG_AGENT_NETWORK project="+project+" network="+name+
+                            " ipv4="+str(n.get("IPAddress") or "-")+
+                            " aliases="+",".join(n.get("Aliases") or []))
                   env=options(item)
                   enabled=env.get("GenerationOrchestrator__Enabled","")
                   token=env.get("GenerationOrchestrator__GitHubToken","")
@@ -46,6 +51,11 @@ jobs:
                       " actions_ref_master="+str(ref=="master")+
                       " state="+item["State"]["Status"])
           for item in containers("dhole","api-gateway"):
+              print("DIAG_GATEWAY_CONTAINER="+item["Name"])
+              command=["docker","exec",item["Id"],"getent","ahostsv4","dhole-agent-api"]
+              lookup=subprocess.run(command,capture_output=True,text=True,timeout=8)
+              addresses=sorted(set(re.findall(r"^([0-9.]+)\\s",lookup.stdout,re.M)))
+              print("DIAG_GATEWAY_RESOLUTION="+",".join(addresses or ["unavailable"]))
               env=options(item)
               print("DIAG_GATEWAY agent_http_host="+
                     str(urllib.parse.urlsplit(env.get("AGENT_HTTP_URL","")).hostname or "missing"))
