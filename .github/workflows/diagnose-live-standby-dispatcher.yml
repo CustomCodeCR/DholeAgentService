@@ -50,8 +50,8 @@ jobs:
               print("DIAG_GATEWAY agent_http_host="+
                     str(urllib.parse.urlsplit(env.get("AGENT_HTTP_URL","")).hostname or "missing"))
               for name,value in env.items():
-                  if re.fullmatch(r"Gateway__Routes__\d+__(Destination|Prefix)",name) and
-                       ("/agents" in value or "agent-api" in value):
+                  if (re.fullmatch(r"Gateway__Routes__\d+__(Destination|Prefix)", name)
+                          and ("/agents" in value or "agent-api" in value)):
                       safe=urllib.parse.urlsplit(value).hostname if name.endswith("Destination") else value
                       print("DIAG_GATEWAY_CONFIG key="+name+" value="+str(safe))
           PY
