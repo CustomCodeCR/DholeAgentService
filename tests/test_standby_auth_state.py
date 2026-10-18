@@ -89,6 +89,25 @@ class StandbyAuthStateTests(unittest.TestCase):
                 state.restart_ready("unused.env", "prod2", CREDENTIAL)
             self.assertEqual(sql.call_count, 2)
 
+    def test_identity_probe_failure_is_visible_without_revoking_ready_session(self):
+        with patch.object(state.apply, "parse_db", return_value={}), \
+             patch.object(state.apply, "sql", return_value="prod2") as sql:
+            state.record_inspection_failure(
+                "unused.env", "prod2", CREDENTIAL,
+                "standby_account_not_visible_in_official_menu")
+            query = sql.call_args.args[1]
+            self.assertIn("diagnostic_code=", query)
+            self.assertIn("status='Ready'", query)
+            self.assertIn("account_verified_at_utc IS NULL", query)
+            self.assertNotIn("status='Failed'", query)
+            self.assertNotIn("status='Verified'", query)
+
+    def test_identity_probe_diagnostic_rejects_untrusted_provider_text(self):
+        with self.assertRaisesRegex(ValueError, "invalid_inspection_diagnostic"):
+            state.record_inspection_failure(
+                "unused.env", "prod2", CREDENTIAL,
+                "name=someone@example.com")
+
     def test_missing_migration_is_reported_without_alter_table(self):
         with patch.object(state.apply, "parse_db", return_value={}), \
              patch.object(state.apply, "sql", return_value="2") as sql, \
