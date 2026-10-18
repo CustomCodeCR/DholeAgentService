@@ -93,7 +93,10 @@ def update(env_file, generation, credential, status):
     """
     result = apply.sql(apply.parse_db(env_file), query, stage="standby_auth_status")
     if status != "Failed" and result.strip() != generation:
-        raise ValueError("standby_auth_state_changed")
+        # Differentiate a missing API-authorized request from a disallowed
+        # transition (e.g. Failed -> Preparing, or Verified -> Ready).
+        get_session_status(apply.parse_db(env_file), generation, credential)
+        raise ValueError("standby_auth_transition_not_allowed")
 
 
 def restart_ready(env_file, generation, credential):
