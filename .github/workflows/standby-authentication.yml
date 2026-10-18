@@ -32,7 +32,7 @@ concurrency:
 jobs:
   standby:
     runs-on: [self-hosted, linux, x64, dhole]
-    timeout-minutes: 8
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +62,7 @@ jobs:
             *) exit 2 ;;
           esac || exit 2
           python3 -m py_compile scripts/standby-authentication.py scripts/standby-auth-state.py
+          bash -n scripts/ensure-standby-hub-probe.sh
           bash -n docker/start-standby-auth.sh
           python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
           echo STANDBY_AUTH_INPUTS_VERIFIED
@@ -218,6 +219,19 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --status Ready --restart-ready
+
+      - name: Ensure current Hub Inspector is available on this Docker host
+        if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.NUGET_PACKAGES_READ_TOKEN || github.token }}
+          NUGET_PACKAGE_USER: ${{ vars.NUGET_PACKAGES_ACTOR || github.actor }}
+        run: |
+          set -euo pipefail
+          # GitHub Actions may run on a different self-hosted runner or a
+          # previous image may have been pruned. Build a trusted Inspector
+          # image only when absent. This does not touch the running viewer.
+          bash scripts/ensure-standby-hub-probe.sh
 
       - name: Verify authenticated Maersk Hub before inspection or closure
         id: inspect_browser
