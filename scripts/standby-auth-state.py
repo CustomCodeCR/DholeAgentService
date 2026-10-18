@@ -27,8 +27,7 @@ SAFE_STATE_FAILURES = {
     "standby_auth_session_finishing", "standby_auth_session_verified",
     "standby_auth_transition_not_allowed",
     "standby_auth_state_changed", "unprotected_identity_file",
-    "invalid_identity", "invalid_name", "invalid_username",
-    "invalid_customer_id", "stale_or_mismatched_standby_identity",
+    "invalid_hub_proof", "stale_or_mismatched_standby_identity",
     "invalid_inspection_diagnostic",
     "identity_reset_refused", "operation_required",
 }
@@ -170,27 +169,18 @@ def restart_ready(env_file, generation, credential):
 
 
 def record_identity(env_file, generation, credential, identity_file):
+    """Persist authenticated Hub evidence; no personal account fields needed."""
     if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
-        int(generation[4:]) > 200
-    ) or not re.fullmatch(r"[0-9a-f]{32}", credential):
+            int(generation[4:]) > 200) or not re.fullmatch(r"[0-9a-f]{32}", credential):
         raise ValueError("invalid_standby_target")
     if identity_file.is_symlink() or not identity_file.is_file() or (
             identity_file.stat().st_mode & 0o077):
         raise ValueError("unprotected_identity_file")
-    record = json.loads(identity_file.read_text(encoding="utf-8"))
-    if not isinstance(record, dict) or set(record) != {"DisplayName","Username","CustomerId"}:
-        raise ValueError("invalid_identity")
-    name, username, customer = (
-        record["DisplayName"], record["Username"], record["CustomerId"])
-    if not isinstance(name, str) or not 4 <= len(name) <= 100 or (
-        not all(c.isalpha() or c in " -.'" for c in name)):
-        raise ValueError("invalid_name")
-    if not isinstance(username, str) or not re.fullmatch(r"(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", username):
-        raise ValueError("invalid_username")
-    if not isinstance(customer, str) or not re.fullmatch(r"[0-9]{8,15}", customer):
-        raise ValueError("invalid_customer_id")
-    def quoted(value):
-        return "'" + value.replace("'", "''") + "'"
+    proof = json.loads(identity_file.read_text(encoding="utf-8"))
+    # Never treat a URL-only result, identity strings or arbitrary JSON as a
+    # trusted provider session. Inspector must attest live private Hub widgets.
+    if not isinstance(proof, dict) or proof != {"HubAuthenticated": True}:
+        raise ValueError("invalid_hub_proof")
     db = apply.parse_db(env_file)
     require_account_columns(db)
     current = get_session_status(db, generation, credential)
@@ -198,30 +188,28 @@ def record_identity(env_file, generation, credential, identity_file):
         refuse_disallowed_status(current)
     query = f"""
         UPDATE agent.runtime_generation_auth_sessions SET
-            account_name={quoted(name)},
-            account_username={quoted(username)},
-            account_customer_id={quoted(customer)},
+            account_name=NULL,
+            account_username=NULL,
+            account_customer_id=NULL,
             account_verified_at_utc=now(),
             diagnostic_code=NULL, updated_at_utc=now()
         WHERE generation='{generation}'
           AND credential_id='{credential}'::uuid
           AND status IN ('Ready','Finishing')
-          -- Standby Chromium's interactive session is bounded to 90 minutes.
-          -- Inspection requires a live, authenticated viewer immediately before this update.
           AND requested_at_utc > now() - interval '90 minutes'
         RETURNING generation;
     """
-    result = apply.sql(db, query, stage="standby_account_identity")
+    result = apply.sql(db, query, stage="standby_hub_proof")
     if result.splitlines()[-1:] != [generation]:
         raise ValueError("stale_or_mismatched_standby_identity")
-    print("STANDBY_MAERSK_ACCOUNT_IDENTITY_SAVED")
+    print("STANDBY_MAERSK_HUB_PROOF_SAVED")
 
 
 def record_inspection_failure(env_file, generation, credential, code):
     # The operator's manual inspection may fail while the viewer remains
     # usable. Preserve Ready (so it can be retried) and record no identity.
     # No arbitrary text from a provider or subprocess can enter this column.
-    if code != "standby_account_not_visible_in_official_menu":
+    if code != "standby_hub_not_authenticated":
         raise ValueError("invalid_inspection_diagnostic")
     if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
             int(generation[4:]) > 200) or not re.fullmatch(r"[0-9a-f]{32}", credential):
@@ -240,7 +228,7 @@ def record_inspection_failure(env_file, generation, credential, code):
     if result.strip() != generation:
         # Do not overwrite a Verified, Expired, Failed or replaced request.
         refuse_disallowed_status(get_session_status(db, generation, credential))
-    print("STANDBY_MAERSK_ACCOUNT_INSPECTION_RETRY_AVAILABLE")
+    print("STANDBY_MAERSK_HUB_INSPECTION_RETRY_AVAILABLE")
 
 
 def reset_identity(env_file, generation, credential):
