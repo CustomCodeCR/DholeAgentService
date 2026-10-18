@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "prepare, inspect signed-in account, restart viewer, or finish verified authorization"
+        description: "prepare, inspect, restart, reconcile existing viewer state, or finish"
         required: true
         type: choice
-        options: [prepare, inspect, restart, finish]
+        options: [prepare, inspect, restart, reconcile, finish]
       generation:
         description: "Pre-provisioned standby generation, never the active owner"
         required: true
@@ -57,6 +57,7 @@ jobs:
             prepare) [[ "$CONFIRMATION" == PREPARE_STANDBY_AUTHENTICATION ]] ;;
             inspect) [[ "$CONFIRMATION" == INSPECT_STANDBY_ACCOUNT ]] ;;
             restart) [[ "$CONFIRMATION" == RESTART_STANDBY_ACCOUNT_VIEWER ]] ;;
+            reconcile) [[ "$CONFIRMATION" == RECONCILE_STANDBY_VIEWER_STATE ]] ;;
             finish) [[ "$CONFIRMATION" == I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS ]] ;;
             *) exit 2 ;;
           esac || exit 2
@@ -184,6 +185,31 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready --restart-ready
 
+      - name: Verify existing standby viewer without restarting Chromium
+        if: ${{ inputs.operation == 'reconcile' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-authentication.py --operation check \
+            --generation "$GENERATION" --credential "$CREDENTIAL"
+
+      - name: Reconcile only the authenticated standby viewer readiness state
+        if: ${{ inputs.operation == 'reconcile' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          # Checks the exact live viewer, current CDP health and persisted
+          # authorized request before setting Ready. Never sets Verified.
+          python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
+            --generation "$GENERATION" --credential "$CREDENTIAL" \
+            --status Ready --restart-ready
+
       - name: Read actual authenticated account before inspection or closure
         if: ${{ inputs.operation == 'inspect' || inputs.operation == 'finish' }}
         shell: bash
@@ -249,7 +275,7 @@ jobs:
           rm -f -- "$identity_file"
 
       - name: Record safe failure for operator
-        if: ${{ failure() && inputs.operation != 'inspect' && env.GENERATION_PRIVATE_ENV != '' }}
+        if: ${{ failure() && inputs.operation != 'inspect' && inputs.operation != 'reconcile' && env.GENERATION_PRIVATE_ENV != '' }}
         continue-on-error: true
         shell: bash
         env:
