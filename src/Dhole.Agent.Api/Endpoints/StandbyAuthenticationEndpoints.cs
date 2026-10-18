@@ -64,6 +64,12 @@ internal static class StandbyAuthenticationEndpoints
             }).ToArray()));
         }).RequireScope(AgentScopeNames.BrowserProfilesView);
 
+        // Browser access is issued only through a scoped authenticated
+        // request. The iframe and websocket use a short-lived HttpOnly cookie,
+        // never a bearer token in a browser URL.
+        group.MapPost("/{generation}/viewer/access", StandbyViewerGateway.IssueAsync)
+            .RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
         group.MapGet("/credentials", async (ServiceDbContext db, CancellationToken ct) =>
         {
             var credentials = await db.AgentCredentials.AsNoTracking()
