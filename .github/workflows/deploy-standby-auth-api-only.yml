@@ -1,0 +1,88 @@
+name: Fix standby authentication completion on the live Agent API
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/deploy-standby-auth-api-only.yml
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy_primary_api_only:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate exact protected source and API completion rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || exit 2
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || exit 2
+          bash -n scripts/deploy-standby-auth-api-only.sh
+          python3 -m unittest discover -s tests -p test_standby_auth_completion_contract.py -v
+          python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
+
+      - name: Prepare private runtime with existing authorized dispatcher
+        shell: bash
+        env:
+          GENERATION_ORCHESTRATOR_GITHUB_TOKEN: ${{ secrets.GENERATION_ORCHESTRATOR_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          set +x
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          umask 077
+          mkdir -p "$RUNNER_TEMP/standby-auth-api-runtime"
+          chmod 700 "$RUNNER_TEMP/standby-auth-api-runtime"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/standby-auth-api-runtime" >/dev/null
+          runtime="$RUNNER_TEMP/standby-auth-api-runtime/.env.production"
+          [[ -f "$runtime" && ! -L "$runtime" ]] || exit 2
+          chmod 600 "$runtime"
+          python3 scripts/prepare-prod1-generation-env.py "$runtime"
+          echo "SAFE_AGENT_API_ENV=$runtime" >> "$GITHUB_ENV"
+
+      - name: Build only versioned API image
+        shell: bash
+        env:
+          PACKAGE_TOKEN: ${{ secrets.NUGET_PACKAGES_READ_TOKEN || github.token }}
+          PACKAGE_USER: ${{ vars.NUGET_PACKAGES_ACTOR || github.actor }}
+        run: |
+          set -euo pipefail
+          [[ -n "$PACKAGE_TOKEN" && -n "$PACKAGE_USER" ]] || exit 2
+          test "$(df -Pk / | awk 'NR==2{print $4}')" -ge 5242880
+          export GITHUB_TOKEN="$PACKAGE_TOKEN"
+          docker build --pull --target api-final \
+            --build-arg "GITHUB_ACTOR=$PACKAGE_USER" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-api:standby-auth-api-$GITHUB_RUN_ID" .
+          docker image inspect "dhole/agent-api:standby-auth-api-$GITHUB_RUN_ID" >/dev/null
+
+      - name: Replace only gateway-facing Agent API with automatic rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/deploy-standby-auth-api-only.sh
+
+      - name: Discard protected transient runtime
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          folder="$RUNNER_TEMP/standby-auth-api-runtime"
+          [[ -d "$folder" && ! -L "$folder" ]] || exit 2
+          rm -f "$folder/.env.production"
+          rm -f "$RUNNER_TEMP/standby-api-only/worker-id" \
+            "$RUNNER_TEMP/standby-api-only/worker-image" \
+            "$RUNNER_TEMP/standby-api-only/key-volume" \
+            "$RUNNER_TEMP/standby-api-only/old-api-image"
