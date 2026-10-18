@@ -128,3 +128,26 @@ An infrastructure-provisioned environment is not automatically an authorized pro
 If the Actions request fails, the current environment is retained or the executor initiates rollback. Check `diagnostic_code` and host health before any operator retry. A failed provisioning job does not delete previous volumes.
 
 The five-minute bound is a **target**, not a promise: workflow scheduling, provider authorization and business job draining may block or reject a transition. Never bypass a circuit breaker to satisfy this latency objective.
+
+
+## GitHub Actions-only operational control (2026-10-18)
+
+The workflow [**Agent production generation control (Actions)**](../.github/workflows/production-generation-actions.yml) is a single entry point for running production generation maintenance from GitHub Actions on the existing protected, self-hosted `dhole` runner. No production Docker command is issued by merely pushing changes to `master` or `develop`; those pushes run lint/regression checks only.
+
+From **DholeAgentService → Actions → Agent production generation control (Actions) → Run workflow** select `master` and one operation:
+
+| Operation | Result |
+| --- | --- |
+| `inspect` | Reports active Worker, Docker technical failure evidence, and whether provider circuit/jobs block changes; read-only |
+| `reconcile` | Persists the generation of the unique actual running Worker into PostgreSQL; fails closed on ambiguity |
+| `provision-check` | Read-only check for the selected `prodN` infrastructure |
+| `provision` | Registers the selected numbered generation and prepares an isolated API, Hermes, persistent volumes and dormant Worker. Requires `PROVISION_INDEPENDENT_GENERATION`. Does **not** authenticate to Maersk or transfer processing |
+| `preflight` | Validates a recently operator-authorized target, matching images, separate volumes, healthy API/Hermes, a stopped standby Worker, no running executions, and a clear provider circuit, without switching |
+| `switch` | Executes the selected authorized `prodN` handoff with the existing guarded executor and rollback. Requires `AUTHORIZE_VERIFIED_WORKER_HANDOFF`. Afterwards reconciles active-generation state against Docker |
+| `technical-recovery` | Evaluates an actual failed/unhealthy Docker Worker/API/Hermes, selects the next **previously authorized and healthy** `prodN` in numeric order, and performs the same guarded handoff |
+
+A scheduled GitHub Actions invocation runs `technical-recovery` **every five minutes** (best effort; subject to GitHub scheduling and runner availability). It does not fire based on a CAPTCHA, login challenge, provider access denial, HTTP 403/429, or circuit-breaker activation alone. Technical recovery requires concrete Docker failure evidence **and** all of the handoff gates; a stopped/ambiguous original Worker cannot be guessed as the owner. A missing or expired operator attestation results in no cutover. A blocked provider circuit, running jobs, incompatible images, or failing health checks also prevents the switch.
+
+For a `prod1 → prod2` maintenance handoff: run `inspect`, then `provision-check`/`provision` on `prod2` if needed; independently verify that standby's authorized provider access; run the existing [**Operator-verify standby provider readiness**](../.github/workflows/operator-verify-standby-readiness.yml) Action; then run `preflight`, followed by `switch` with the exact confirmation string. The preflight/attestation expires after 60 minutes and must be refreshed if stale.
+
+The wrapper uses the existing `production-generation-orchestrator.py`, `production-generation-executor.py`, and `production-generation-status-sync.sh` scripts without disabling circuit restrictions, copying browser sessions or manufacturing readiness. State/event deduplication, cooldown, exclusive workflow concurrency and rollback remain enabled. A completed Git commit does **not** prove a production Actions job ran: inspect that workflow's run and confirm `GENERATION_ACTIONS_HANDOFF_CONFIRMED` plus one uniquely active Worker before reporting success.
