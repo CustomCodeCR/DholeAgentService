@@ -19,7 +19,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: dhole-agent-standby-inspector-build
+  group: dhole-agent-standby-inspector-build-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
