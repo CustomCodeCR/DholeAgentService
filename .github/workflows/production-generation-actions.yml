@@ -1,0 +1,142 @@
+name: Agent production generation control (Actions)
+
+# One production control plane. Only independently healthy/authorized standbys
+# may receive work. The scheduled trigger is a real Docker failure, not a
+# CAPTCHA, rate limit, HTTP 403, login denial or open provider circuit.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Inspect, provision or switch a verified generation"
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - reconcile
+          - provision-check
+          - provision
+          - preflight
+          - switch
+          - technical-recovery
+      generation:
+        description: "Destination prodN (used by provision, preflight and switch)"
+        type: string
+        required: false
+        default: prod2
+      confirmation:
+        description: "For provision: PROVISION_INDEPENDENT_GENERATION; for switch: AUTHORIZE_VERIFIED_WORKER_HANDOFF"
+        type: string
+        required: false
+  schedule:
+    - cron: '*/5 * * * *'
+  push:
+    branches: [master, develop]
+    paths:
+      - .github/workflows/production-generation-actions.yml
+      - scripts/production-generation-actions.py
+      - tests/test_production_generation_actions.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: \${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate generation controls without contacting production
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/production-generation-actions.py
+          python3 -m unittest discover -s tests -p 'test_production_generation_actions.py' -v
+          bash -n scripts/provision-production-generation.sh
+          bash -n scripts/production-generation-status-sync.sh
+          echo 'GENERATION_ACTIONS_DEFINITION_VALIDATED_NO_DEPLOY'
+
+  operate:
+    if: \${{ github.event_name != 'push' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 25
+    steps:
+      - name: Checkout trusted master controls
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Check protected host and validate requested operation
+        shell: bash
+        env:
+          SELECTED_OPERATION: \${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
+          TARGET_GENERATION: \${{ inputs.generation }}
+          OPERATOR_CONFIRMATION: \${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || {
+            echo 'GENERATION_ACTIONS_REFUSED: protected_master_only' >&2; exit 2;
+          }
+          [[ -f /opt/dhole/.env && -r /opt/dhole/.env ]] || {
+            echo 'GENERATION_ACTIONS_REFUSED: production_env_missing' >&2; exit 2;
+          }
+          case "$SELECTED_OPERATION" in
+            inspect|reconcile|provision-check|provision|preflight|switch|technical-recovery) ;;
+            *) echo 'GENERATION_ACTIONS_REFUSED: invalid_operation' >&2; exit 2 ;;
+          esac
+          if [[ "$SELECTED_OPERATION" == provision || "$SELECTED_OPERATION" == switch ]]; then
+            if [[ "$SELECTED_OPERATION" == provision ]]; then
+              [[ "$OPERATOR_CONFIRMATION" == PROVISION_INDEPENDENT_GENERATION ]] || exit 2
+            else
+              [[ "$OPERATOR_CONFIRMATION" == AUTHORIZE_VERIFIED_WORKER_HANDOFF ]] || exit 2
+            fi
+          fi
+          if [[ "$SELECTED_OPERATION" == provision* || "$SELECTED_OPERATION" == preflight || "$SELECTED_OPERATION" == switch ]]; then
+            [[ "$TARGET_GENERATION" =~ ^prod[1-9][0-9]*$ && "\${#TARGET_GENERATION}" -le 64 ]] || exit 2
+          fi
+          python3 -m py_compile scripts/production-generation-actions.py
+          python3 -m unittest discover -s tests -p 'test_production_generation_actions.py' -v
+          echo 'GENERATION_ACTIONS_REQUEST_VALIDATED'
+
+      - name: Prepare protected production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cloned=false
+          for attempt in 1 2 3 4 5; do
+            rm -rf .dhole-system
+            if git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system; then
+              cloned=true; break
+            fi
+            if [[ "$attempt" -lt 5 ]]; then sleep $((attempt * 10)); fi
+          done
+          [[ "$cloned" == true ]] || {
+            echo 'GENERATION_ACTIONS_REFUSED: system_checkout_failed' >&2; exit 1;
+          }
+          mkdir -p "$RUNNER_TEMP/generation-actions"
+          chmod 700 "$RUNNER_TEMP/generation-actions"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/generation-actions" >/dev/null
+          chmod 600 "$RUNNER_TEMP/generation-actions/.env.production"
+          echo "GENERATION_ACTIONS_ENV=$RUNNER_TEMP/generation-actions/.env.production" >> "$GITHUB_ENV"
+
+      - name: Execute verified generation control on the host
+        shell: bash
+        env:
+          SELECTED_OPERATION: \${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
+          TARGET_GENERATION: \${{ inputs.generation }}
+          OPERATOR_CONFIRMATION: \${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production-generation-actions.py \
+            --operation "$SELECTED_OPERATION" \
+            --target "\${TARGET_GENERATION:-}" \
+            --confirmation "\${OPERATOR_CONFIRMATION:-}" \
+            --system-dir .dhole-system \
+            --env-file "$GENERATION_ACTIONS_ENV" \
+            --state-dir "$HOME/.local/state/dhole-production-generation"
