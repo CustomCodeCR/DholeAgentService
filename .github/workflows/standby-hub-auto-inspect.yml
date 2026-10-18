@@ -1,0 +1,68 @@
+name: Automatically verify signed-in Maersk standby Hubs
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-standby-hub-auto-inspection
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Validate safe automatic Hub probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/standby-hub-auto-inspect.py \
+            scripts/standby-authentication.py scripts/standby-auth-state.py
+          python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
+          echo STANDBY_HUB_AUTO_INSPECTION_SAFE
+
+      - name: Prepare private production database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          git clone --depth 1 --branch master \
+            https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          umask 077
+          mkdir -p "$RUNNER_TEMP/standby-hub-auto-inspection"
+          chmod 700 "$RUNNER_TEMP/standby-hub-auto-inspection"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/standby-hub-auto-inspection" >/dev/null
+          chmod 600 "$RUNNER_TEMP/standby-hub-auto-inspection/.env.production"
+          echo "STANDBY_PRIVATE_ENV=$RUNNER_TEMP/standby-hub-auto-inspection/.env.production" >> "$GITHUB_ENV"
+
+      - name: Verify only current API-authorized Ready standby Hubs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Runs in the self-hosted production infrastructure; the operator
+          # only needs to sign in to the actual isolated browser's Maersk Hub.
+          # The auto-inspector uses a separate up-to-date disposable probe
+          # container and does NOT restart or alter the authenticated viewer.
+          python3 scripts/standby-hub-auto-inspect.py \
+            --env-file "$STANDBY_PRIVATE_ENV"
+
+      - name: Discard temporary database configuration
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file="$RUNNER_TEMP/standby-hub-auto-inspection/.env.production"
+          [[ ! -L "$env_file" ]] || exit 2
+          rm -f -- "$env_file"
