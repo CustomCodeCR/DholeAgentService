@@ -228,22 +228,74 @@ internal static class StandbyAuthenticationEndpoints
                 || string.IsNullOrWhiteSpace(token))
                 return Results.Conflict(new { code = "github_dispatcher_not_configured" });
             await ExpireAsync(db, ct);
-            // A readiness attestation is forbidden unless the operator explicitly
-            // confirms legitimate access in the STILL OPEN isolated Chromium.
+            // A scoped, authenticated operator must explicitly confirm the
+            // legitimate provider session. The request creator may be a
+            // different authorized operator; that should not prevent closure.
+            // Never accept a URL-only proof, an expired authorization or an
+            // active generation. The DB update is atomic against retries.
             var credential = await ScalarAsync(db, """
-                UPDATE agent.runtime_generation_auth_sessions
+                UPDATE agent.runtime_generation_auth_sessions AS session
                 SET status='Finishing',updated_at_utc=now()
-                WHERE generation=@generation AND status='Ready'
-                  AND requested_at_utc>now()-interval '90 minutes'
-                  AND actor_id=@actor
-                  -- A fresh signed-in Maersk Hub proof is sufficient
-                  -- for every isolated standby generation (prod2 onward).
-                  -- No username, display name or customer code is required.
-                  AND account_verified_at_utc > now()-interval '5 minutes'
-                RETURNING credential_id::text
-                """, ct, ("generation", generation), ("actor", actor));
+                WHERE session.generation=@generation AND session.status='Ready'
+                  AND session.requested_at_utc>now()-interval '90 minutes'
+                  AND session.account_verified_at_utc>now()-interval '5 minutes'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM agent.runtime_generation_state AS owner
+                    WHERE owner.singleton=true
+                      AND owner.active_generation=session.generation
+                  )
+                RETURNING session.credential_id::text
+                """, ct, ("generation", generation));
             if (credential is null || !Guid.TryParse(credential, out var credentialId))
-                return Results.Conflict(new { code = "standby_auth_session_not_ready_or_wrong_operator" });
+            {
+                // A second click after the first successful dispatch must not
+                // turn the UI red or enqueue another finalization.
+                var currentStatus = await ScalarAsync(db, """
+                    SELECT status
+                    FROM agent.runtime_generation_auth_sessions
+                    WHERE generation=@generation
+                    """, ct, ("generation", generation));
+                if (currentStatus == "Finishing")
+                    return Results.Accepted(
+                        "/api/agents/runtime-generations/authentication/",
+                        new { generation, status = "Finishing",
+                              activeGenerationUnchanged = true,
+                              alreadyProcessing = true });
+                if (currentStatus == "Verified")
+                    return Results.Ok(new { generation, status = "Verified",
+                        activeGenerationUnchanged = true });
+                if (currentStatus == "Ready")
+                {
+                    var reason = await ScalarAsync(db, """
+                        SELECT CASE
+                          WHEN requested_at_utc<=now()-interval '90 minutes'
+                            THEN 'standby_auth_session_expired'
+                          WHEN account_verified_at_utc IS NULL
+                            THEN 'standby_hub_not_verified'
+                          WHEN account_verified_at_utc<=now()-interval '5 minutes'
+                            THEN 'standby_hub_proof_expired'
+                          WHEN EXISTS (
+                            SELECT 1 FROM agent.runtime_generation_state r
+                            WHERE r.singleton=true AND r.active_generation=@generation
+                          ) THEN 'standby_generation_already_active'
+                          ELSE 'standby_completion_state_changed'
+                        END
+                        FROM agent.runtime_generation_auth_sessions
+                        WHERE generation=@generation
+                        """, ct, ("generation", generation));
+                    return Results.Conflict(new { code =
+                        reason ?? "standby_completion_state_changed" });
+                }
+                return Results.Conflict(new { code =
+                    currentStatus switch
+                    {
+                        "Expired" => "standby_auth_session_expired",
+                        "Requested" or "Preparing" => "standby_authentication_not_ready",
+                        "Failed" => "standby_authentication_failed",
+                        null => "standby_authentication_not_found",
+                        _ => "standby_completion_state_changed"
+                    } });
+            }
             if (!await DispatchAsync(token, "finish", generation, credentialId,
                 "I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS", ct))
             {
