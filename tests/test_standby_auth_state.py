@@ -83,7 +83,9 @@ class StandbyAuthStateTests(unittest.TestCase):
              patch.object(state.apply, "sql", side_effect=["4", "Verified"]) as sql, \
              patch.object(state.subprocess, "run",
                           side_effect=[live_viewer(), SimpleNamespace(returncode=0)]):
-            with self.assertRaisesRegex(ValueError, "standby_auth_transition_not_allowed"):
+            # A previously verified identity must never be overwritten by
+            # reconciliation. The refusal is now intentionally state-specific.
+            with self.assertRaisesRegex(ValueError, "standby_auth_session_verified"):
                 state.restart_ready("unused.env", "prod2", CREDENTIAL)
             self.assertEqual(sql.call_count, 2)
 
