@@ -222,6 +222,19 @@ def prepare(generation, credential, script_path, image_override=None):
     raise RuntimeError("standby_viewer_health_timeout")
 
 
+def check_viewer(generation, credential):
+    """Confirm a live isolated viewer for a DB-only reconciliation; no restart."""
+    _, volume = guard_standby(generation)
+    _, viewer = inspect_existing(generation, credential)
+    if viewer["State"]["Status"] != "running":
+        raise RuntimeError("standby_viewer_no_longer_running")
+    full_id = viewer.get("Id")
+    if not isinstance(full_id, str) or not re.fullmatch(r"[0-9a-f]{64}", full_id):
+        raise RuntimeError("standby_viewer_identity_mismatch")
+    require_exclusive_browser_volume(volume, full_id)
+    print("STANDBY_AUTH_EXISTING_VIEWER_ISOLATED")
+
+
 def finish(generation, credential):
     guard_standby(generation)
     name = viewer_name(generation)
@@ -282,7 +295,7 @@ def restart_viewer(generation, credential, script_path, image_override=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--operation", choices=("prepare", "restart", "inspect", "finish"), required=True)
+    parser.add_argument("--operation", choices=("prepare", "restart", "check", "inspect", "finish"), required=True)
     parser.add_argument("--generation", required=True)
     parser.add_argument("--credential", required=True)
     parser.add_argument("--identity-output", default="")
@@ -294,6 +307,8 @@ def main():
         prepare(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh")
     elif args.operation == "restart":
         restart_viewer(args.generation, args.credential, ROOT / "docker/start-standby-auth.sh", os.environ.get("STANDBY_AUTH_IMAGE"))
+    elif args.operation == "check":
+        check_viewer(args.generation, args.credential)
     elif args.operation == "inspect":
         if not args.identity_output:
             raise RuntimeError("identity_output_required")
