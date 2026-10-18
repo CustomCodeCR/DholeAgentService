@@ -263,7 +263,14 @@ jobs:
             --generation "$GENERATION" --credential "$CREDENTIAL" \
             --inspection-diagnostic standby_hub_not_authenticated
 
-      - name: Close only standby viewer; preserve persistent browser profile
+      # Provider authentication and Worker handoff readiness are two
+      # independent states. The proof was just obtained from the private
+      # authenticated Hub and persisted above. Do NOT run the production
+      # handoff attestation here: it deliberately refuses an open provider
+      # circuit, active jobs, absent dormant Worker and incompatible images.
+      # Those restrictions remain mandatory when a future Worker handoff
+      # is requested through the independent guarded executor.
+      - name: Mark authenticated Hub independently verified
         if: ${{ inputs.operation == 'finish' }}
         shell: bash
         env:
@@ -271,34 +278,25 @@ jobs:
           CREDENTIAL: ${{ inputs.credential_id }}
         run: |
           set -euo pipefail
-          python3 scripts/standby-authentication.py --operation finish \
-            --generation "$GENERATION" --credential "$CREDENTIAL"
-
-      - name: Require independent provider authorization and technical readiness
-        if: ${{ inputs.operation == 'finish' }}
-        shell: bash
-        env:
-          GENERATION: ${{ inputs.generation }}
-          CONFIRMATION: ${{ inputs.confirmation }}
-        run: |
-          set -euo pipefail
-          python3 scripts/operator-attest-generation-readiness.py \
-            --generation "$GENERATION" --confirmation "$CONFIRMATION" \
-            --env-file "$GENERATION_PRIVATE_ENV" \
-            --state-dir "$HOME/.local/state/dhole-production-generation"
-          echo STANDBY_AUTH_ATTESTED_WORKER_REMAINS_STOPPED
-
-      - name: Mark standby independently verified
-        if: ${{ inputs.operation == 'finish' }}
-        shell: bash
-        env:
-          GENERATION: ${{ inputs.generation }}
-          CREDENTIAL: ${{ inputs.credential_id }}
-        run: |
-          set -euo pipefail
+          # Verified attests ONLY that the operator-approved standby browser
+          # rendered Maersk Hub. It is NOT technical readiness to switch
+          # Workers and never releases Maersk's circuit breaker.
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Verified
+          echo STANDBY_HUB_AUTHENTICATION_VERIFIED_WORKER_UNCHANGED
 
+      - name: Close only authenticated standby viewer; preserve browser profile
+        if: ${{ inputs.operation == 'finish' }}
+        shell: bash
+        env:
+          GENERATION: ${{ inputs.generation }}
+          CREDENTIAL: ${{ inputs.credential_id }}
+        run: |
+          set -euo pipefail
+          # Close the temporary noVNC/Chromium instance AFTER registration,
+          # never before, and never delete its persistent browser profile.
+          python3 scripts/standby-authentication.py --operation finish \
+            --generation "$GENERATION" --credential "$CREDENTIAL"
       - name: Remove private transient account evidence from runner
         if: ${{ always() }}
         shell: bash
