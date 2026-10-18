@@ -236,9 +236,10 @@ internal static class StandbyAuthenticationEndpoints
                 WHERE generation=@generation AND status='Ready'
                   AND requested_at_utc>now()-interval '90 minutes'
                   AND actor_id=@actor
+                  -- A fresh signed-in Maersk Hub proof is sufficient
+                  -- for every isolated standby generation (prod2 onward).
+                  -- No username, display name or customer code is required.
                   AND account_verified_at_utc > now()-interval '5 minutes'
-                  AND account_username IS NOT NULL
-                  AND account_customer_id IS NOT NULL
                 RETURNING credential_id::text
                 """, ct, ("generation", generation), ("actor", actor));
             if (credential is null || !Guid.TryParse(credential, out var credentialId))
