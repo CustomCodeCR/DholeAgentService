@@ -29,6 +29,7 @@ SAFE_STATE_FAILURES = {
     "standby_auth_state_changed", "unprotected_identity_file",
     "invalid_identity", "invalid_name", "invalid_username",
     "invalid_customer_id", "stale_or_mismatched_standby_identity",
+    "invalid_inspection_diagnostic",
     "identity_reset_refused", "operation_required",
 }
 
@@ -216,6 +217,32 @@ def record_identity(env_file, generation, credential, identity_file):
     print("STANDBY_MAERSK_ACCOUNT_IDENTITY_SAVED")
 
 
+def record_inspection_failure(env_file, generation, credential, code):
+    # The operator's manual inspection may fail while the viewer remains
+    # usable. Preserve Ready (so it can be retried) and record no identity.
+    # No arbitrary text from a provider or subprocess can enter this column.
+    if code != "standby_account_not_visible_in_official_menu":
+        raise ValueError("invalid_inspection_diagnostic")
+    if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
+            int(generation[4:]) > 200) or not re.fullmatch(r"[0-9a-f]{32}", credential):
+        raise ValueError("invalid_standby_target")
+    db = apply.parse_db(env_file)
+    result = apply.sql(db, f"""
+        UPDATE agent.runtime_generation_auth_sessions
+        SET diagnostic_code='{code}', updated_at_utc=now()
+        WHERE generation='{generation}'
+          AND credential_id='{credential}'::uuid
+          AND status='Ready'
+          AND requested_at_utc > now() - interval '90 minutes'
+          AND account_verified_at_utc IS NULL
+        RETURNING generation;
+    """, stage="standby_account_inspection_failure")
+    if result.strip() != generation:
+        # Do not overwrite a Verified, Expired, Failed or replaced request.
+        refuse_disallowed_status(get_session_status(db, generation, credential))
+    print("STANDBY_MAERSK_ACCOUNT_INSPECTION_RETRY_AVAILABLE")
+
+
 def reset_identity(env_file, generation, credential):
     if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
         int(generation[4:]) > 200
@@ -242,6 +269,7 @@ def main():
     parser.add_argument("--credential",required=True)
     parser.add_argument("--status",required=False)
     parser.add_argument("--identity-file")
+    parser.add_argument("--inspection-diagnostic")
     parser.add_argument("--reset-identity",action="store_true")
     parser.add_argument("--restart-ready",action="store_true")
     args=parser.parse_args()
@@ -249,6 +277,12 @@ def main():
         if args.status != "Ready" or args.identity_file or args.reset_identity:
             raise ValueError("invalid_restart_ready_options")
         restart_ready(args.env_file, args.generation, args.credential)
+    elif args.inspection_diagnostic:
+        if args.identity_file or args.reset_identity or args.status:
+            raise ValueError("invalid_inspection_diagnostic")
+        record_inspection_failure(
+            args.env_file, args.generation, args.credential,
+            args.inspection_diagnostic)
     elif args.identity_file:
         record_identity(args.env_file,args.generation,args.credential,Path(args.identity_file))
     elif args.reset_identity:
