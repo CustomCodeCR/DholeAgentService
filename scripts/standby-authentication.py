@@ -286,27 +286,23 @@ def inspect_account(generation, credential, output):
          "/app/Dhole.Agent.Workers.dll", "--standby-account-inspect"],
         capture_output=True, text=True, timeout=30, check=False)
     if outcome.returncode != 0:
-        raise RuntimeError("standby_account_not_visible_in_official_menu")
-    identity = json.loads(outcome.stdout)
-    if not isinstance(identity, dict) or sorted(identity) != [
-            "CustomerId", "DisplayName", "Username"]:
-        raise RuntimeError("invalid_standby_identity")
-    if not isinstance(identity["DisplayName"], str) or not 4 <= len(identity["DisplayName"]) <= 100:
-        raise RuntimeError("invalid_standby_identity")
-    if not re.fullmatch(r"[0-9]{8,15}", identity["CustomerId"]) or (
-            not re.fullmatch(r"(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", identity["Username"])):
-        raise RuntimeError("invalid_standby_identity")
+        raise RuntimeError("standby_hub_not_authenticated")
+    proof = json.loads(outcome.stdout)
+    # The official Hub dashboard itself is the evidence for prod2+.
+    # Account name, username and Customer ID are neither read nor required.
+    if not isinstance(proof, dict) or proof != {"HubAuthenticated": True}:
+        raise RuntimeError("invalid_standby_hub_proof")
     if output.is_symlink() or output.exists():
         raise RuntimeError("unsafe_identity_output")
     fd = output.open("x", encoding="utf-8")
     try:
         output.chmod(0o600)
         with fd:
-            json.dump(identity, fd, ensure_ascii=False)
+            json.dump(proof, fd)
     finally:
         if output.is_file():
             output.chmod(0o600)
-    print("STANDBY_MAERSK_ACCOUNT_DETECTED")
+    print("STANDBY_MAERSK_HUB_AUTHENTICATED")
     print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
 
 
@@ -361,7 +357,7 @@ if __name__ == "__main__":
             "untrusted_standby_image", "standby_docker_operation_failed",
             "viewer_discovery_failed", "ambiguous_standby_viewer",
             "standby_browser_volume_in_use",
-            "standby_account_not_visible_in_official_menu", "invalid_standby_identity",
+            "standby_hub_not_authenticated", "invalid_standby_hub_proof",
             "unsafe_identity_output", "identity_output_required",
         }
         code = str(reason) if isinstance(reason, RuntimeError) and str(reason) in known else "unexpected_runtime_failure"
