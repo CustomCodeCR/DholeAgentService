@@ -46,8 +46,8 @@ def main():
     environment = os.environ.copy()
     environment["PGPASSWORD"] = settings["Password"]
     result = subprocess.run([
-        "docker", "run", "--rm", "--network", "dhole", "-e", "PGPASSWORD",
-        "postgres:16-alpine", "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1",
+        "docker", "run", "--rm", "--pull=never", "--network", "dhole", "-e", "PGPASSWORD",
+        "postgres:17-alpine", "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1",
         "-h", settings.get("Host", "postgres"),
         "-p", settings.get("Port", "5432"),
         "-U", settings["Username"], "-d", settings["Database"],
