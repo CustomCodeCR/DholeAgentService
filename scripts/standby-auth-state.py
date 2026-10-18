@@ -14,6 +14,54 @@ spec = importlib.util.spec_from_file_location(
 apply = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(apply)
 
+
+# Fixed, non-sensitive state diagnostics. Never print SQL, database errors,
+# identity attributes, secrets, or raw Docker output to Actions logs.
+SAFE_STATE_FAILURES = {
+    "invalid_generation", "invalid_credential", "invalid_status",
+    "invalid_standby_target", "invalid_restart_ready_options",
+    "restarted_viewer_not_found", "restarted_viewer_not_healthy",
+    "restarted_chromium_not_ready", "restarted_standby_state_changed",
+    "standby_auth_schema_missing", "standby_auth_session_missing",
+    "standby_auth_transition_not_allowed",
+    "standby_auth_state_changed", "unprotected_identity_file",
+    "invalid_identity", "invalid_name", "invalid_username",
+    "invalid_customer_id", "stale_or_mismatched_standby_identity",
+    "identity_reset_refused", "operation_required",
+}
+
+
+def require_account_columns(db):
+    # Schema evolution belongs to migrations, not an operator's read/write
+    # authentication workflow (the production DB role may not own the table).
+    present = apply.sql(db, """
+        SELECT count(DISTINCT column_name)
+        FROM information_schema.columns
+        WHERE table_schema = 'agent'
+          AND table_name = 'runtime_generation_auth_sessions'
+          AND column_name IN (
+            'account_name', 'account_username', 'account_customer_id',
+            'account_verified_at_utc');
+    """, stage="standby_auth_schema_preflight")
+    if present.strip() != "4":
+        raise ValueError("standby_auth_schema_missing")
+
+
+def get_session_status(db, generation, credential):
+    current = apply.sql(db, f"""
+        SELECT COALESCE((
+            SELECT status::text
+            FROM agent.runtime_generation_auth_sessions
+            WHERE generation='{generation}' AND credential_id='{credential}'::uuid
+            ORDER BY requested_at_utc DESC
+            LIMIT 1
+        ), 'Missing');
+    """, stage="standby_auth_session_preflight").strip()
+    if current == "Missing":
+        raise ValueError("standby_auth_session_missing")
+    return current
+
+
 def update(env_file, generation, credential, status):
     if not re.fullmatch(r"prod(?:[2-9]|[1-9][0-9]{1,2})", generation) or (
         int(generation[4:]) > 200
@@ -73,14 +121,15 @@ def restart_ready(env_file, generation, credential):
         capture_output=True, timeout=8, check=False)
     if probe.returncode:
         raise ValueError("restarted_chromium_not_ready")
-    # Failed may be retried only after this explicit, healthy restart.
-    # Invalidate any previous identity proof; the next inspect must re-attest.
+    # Failed may be retried only after a healthy, explicitly authorized
+    # viewer reconciliation. A previous Verified proof cannot be overridden.
+    db = apply.parse_db(env_file)
+    require_account_columns(db)
+    current = get_session_status(db, generation, credential)
+    if current not in ("Preparing", "Ready", "Failed"):
+        raise ValueError("standby_auth_transition_not_allowed")
+    # Invalidate any previous identity proof; a new inspect must re-attest.
     query = f"""
-      ALTER TABLE agent.runtime_generation_auth_sessions
-        ADD COLUMN IF NOT EXISTS account_name text,
-        ADD COLUMN IF NOT EXISTS account_username text,
-        ADD COLUMN IF NOT EXISTS account_customer_id text,
-        ADD COLUMN IF NOT EXISTS account_verified_at_utc timestamptz;
       UPDATE agent.runtime_generation_auth_sessions
       SET status='Ready', diagnostic_code=NULL,
           account_name=NULL, account_username=NULL, account_customer_id=NULL,
@@ -91,7 +140,7 @@ def restart_ready(env_file, generation, credential):
         AND status IN ('Preparing','Ready','Failed')
       RETURNING generation;
     """
-    result = apply.sql(apply.parse_db(env_file), query, stage="standby_auth_restart_ready")
+    result = apply.sql(db, query, stage="standby_auth_restart_ready")
     if result.splitlines()[-1:] != [generation]:
         raise ValueError("restarted_standby_state_changed")
     print("STANDBY_AUTH_STATE_RECORDED status=Ready")
@@ -119,12 +168,12 @@ def record_identity(env_file, generation, credential, identity_file):
         raise ValueError("invalid_customer_id")
     def quoted(value):
         return "'" + value.replace("'", "''") + "'"
+    db = apply.parse_db(env_file)
+    require_account_columns(db)
+    current = get_session_status(db, generation, credential)
+    if current not in ("Ready", "Finishing"):
+        raise ValueError("standby_auth_transition_not_allowed")
     query = f"""
-        ALTER TABLE agent.runtime_generation_auth_sessions
-            ADD COLUMN IF NOT EXISTS account_name text,
-            ADD COLUMN IF NOT EXISTS account_username text,
-            ADD COLUMN IF NOT EXISTS account_customer_id text,
-            ADD COLUMN IF NOT EXISTS account_verified_at_utc timestamptz;
         UPDATE agent.runtime_generation_auth_sessions SET
             account_name={quoted(name)},
             account_username={quoted(username)},
@@ -139,7 +188,7 @@ def record_identity(env_file, generation, credential, identity_file):
           AND requested_at_utc > now() - interval '90 minutes'
         RETURNING generation;
     """
-    result = apply.sql(apply.parse_db(env_file), query, stage="standby_account_identity")
+    result = apply.sql(db, query, stage="standby_account_identity")
     if result.splitlines()[-1:] != [generation]:
         raise ValueError("stale_or_mismatched_standby_identity")
     print("STANDBY_MAERSK_ACCOUNT_IDENTITY_SAVED")
@@ -191,6 +240,12 @@ def main():
 if __name__=="__main__":
     try:
         main()
-    except (ValueError,OSError,apply.GateError):
-        print("STANDBY_AUTH_STATE_UPDATE_REFUSED",file=sys.stderr)
+    except (ValueError, OSError, apply.GateError) as error:
+        # Report only allowlisted reason codes; never expose SQL, private
+        # account fields, database credentials or raw subprocess stderr.
+        reason = str(error) if isinstance(error, ValueError) and str(error) in SAFE_STATE_FAILURES else (
+            "postgres_operation_failed" if isinstance(error, apply.GateError) else
+            "unexpected_state_update_failure"
+        )
+        print("STANDBY_AUTH_STATE_UPDATE_REFUSED reason=" + reason, file=sys.stderr)
         sys.exit(2)
