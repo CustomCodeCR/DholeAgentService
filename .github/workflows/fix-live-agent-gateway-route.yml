@@ -28,6 +28,9 @@ jobs:
           [[ "$GITHUB_REF" == refs/heads/master ]] || exit 2
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           bash -n scripts/fix-agent-gateway-dns.sh
+          # The existing gateway Compose manifest is the immutable baseline.
+          # Do not promote unrelated CRM/Dynamics routes with this repair.
+          test -r /opt/dhole/docker-compose.services.yml
           echo GATEWAY_FIX_SOURCE_VERIFIED
 
       - name: Prepare protected runtime and exact infrastructure
@@ -63,4 +66,4 @@ jobs:
           rm -f "$folder/.env.production" "$folder/.env.staging"
           rm -f "$folder/gateway-id" "$folder/gateway-image" "$folder/worker-id"
           rm -f "$folder/worker-image" "$folder/main-api-id" "$folder/standby-api-id"
-          rm -f "$folder/rollback.yml"
+          rm -f "$folder/rollback.yml" "$folder/pin.yml"
