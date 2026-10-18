@@ -127,6 +127,14 @@ jobs:
           python3 scripts/standby-auth-state.py --env-file "$GENERATION_PRIVATE_ENV" \
             --generation "$GENERATION" --credential "$CREDENTIAL" --status Ready
 
+      - name: Check existing signed-in Hub after browser preparation
+        if: ${{ inputs.operation == 'prepare' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/standby-hub-auto-inspect.py --env-file "$GENERATION_PRIVATE_ENV"
+
       - name: Build patched standby Worker image without changing active prod1
         if: ${{ inputs.operation == 'restart' }}
         shell: bash
