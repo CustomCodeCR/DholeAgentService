@@ -76,10 +76,25 @@ def run(env_file):
             inspect_once(env_file, generation, credential)
             print("STANDBY_HUB_AUTO_VERIFIED generation=" + generation)
         except (RuntimeError, ValueError, OSError, json.JSONDecodeError,
-                apply.GateError):
-            # A missing, logged-out or closing viewer must remain unverified.
-            # No account information or raw subprocess stderr is logged.
-            print("STANDBY_HUB_AUTO_PENDING generation=" + generation)
+                apply.GateError) as error:
+            # Only non-sensitive, explicitly approved reason codes may leave
+            # the runner. Never print provider text, identity or raw errors.
+            allowed = {
+                "standby_inspector_image_missing",
+                "standby_hub_not_authenticated",
+                "invalid_standby_hub_proof",
+                "standby_viewer_not_running",
+                "standby_viewer_no_longer_running",
+                "standby_infrastructure_not_healthy",
+                "standby_viewer_identity_mismatch",
+                "stale_or_mismatched_standby_identity",
+            }
+            reason = str(error) if isinstance(error, RuntimeError) and str(error) in allowed else (
+                str(error) if isinstance(error, ValueError) and str(error) in allowed else
+                "inspection_or_database_unavailable"
+            )
+            print("STANDBY_HUB_AUTO_PENDING generation=" + generation +
+                  " reason=" + reason)
 
 
 def main():
