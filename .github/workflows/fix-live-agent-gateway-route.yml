@@ -31,7 +31,7 @@ jobs:
           # The existing gateway Compose manifest is the immutable baseline.
           # Do not promote unrelated CRM/Dynamics routes with this repair.
           test -r /opt/dhole/docker-compose.services.yml
-          # Live CRM values are preserved; only the Agent destination changes.
+          # Existing and absent CRM settings are preserved; only Agent changes.
           echo GATEWAY_FIX_SOURCE_VERIFIED
 
       - name: Prepare protected runtime and exact infrastructure
