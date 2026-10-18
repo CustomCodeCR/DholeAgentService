@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   validate:
-    if: \${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -62,7 +62,7 @@ jobs:
           echo 'GENERATION_ACTIONS_DEFINITION_VALIDATED_NO_DEPLOY'
 
   operate:
-    if: \${{ github.event_name != 'push' }}
+    if: ${{ github.event_name != 'push' }}
     runs-on: [self-hosted, linux, x64, dhole]
     timeout-minutes: 25
     steps:
@@ -74,9 +74,9 @@ jobs:
       - name: Check protected host and validate requested operation
         shell: bash
         env:
-          SELECTED_OPERATION: \${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
-          TARGET_GENERATION: \${{ inputs.generation }}
-          OPERATOR_CONFIRMATION: \${{ inputs.confirmation }}
+          SELECTED_OPERATION: ${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
+          TARGET_GENERATION: ${{ inputs.generation }}
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/master ]] || {
@@ -97,7 +97,7 @@ jobs:
             fi
           fi
           if [[ "$SELECTED_OPERATION" == provision* || "$SELECTED_OPERATION" == preflight || "$SELECTED_OPERATION" == switch ]]; then
-            [[ "$TARGET_GENERATION" =~ ^prod[1-9][0-9]*$ && "\${#TARGET_GENERATION}" -le 64 ]] || exit 2
+            [[ "$TARGET_GENERATION" =~ ^prod[1-9][0-9]*$ && "${#TARGET_GENERATION}" -le 64 ]] || exit 2
           fi
           python3 -m py_compile scripts/production-generation-actions.py
           python3 -m unittest discover -s tests -p 'test_production_generation_actions.py' -v
@@ -128,15 +128,15 @@ jobs:
       - name: Execute verified generation control on the host
         shell: bash
         env:
-          SELECTED_OPERATION: \${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
-          TARGET_GENERATION: \${{ inputs.generation }}
-          OPERATOR_CONFIRMATION: \${{ inputs.confirmation }}
+          SELECTED_OPERATION: ${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
+          TARGET_GENERATION: ${{ inputs.generation }}
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           python3 scripts/production-generation-actions.py \
             --operation "$SELECTED_OPERATION" \
-            --target "\${TARGET_GENERATION:-}" \
-            --confirmation "\${OPERATOR_CONFIRMATION:-}" \
+            --target "${TARGET_GENERATION:-}" \
+            --confirmation "${OPERATOR_CONFIRMATION:-}" \
             --system-dir .dhole-system \
             --env-file "$GENERATION_ACTIONS_ENV" \
             --state-dir "$HOME/.local/state/dhole-production-generation"
