@@ -23,6 +23,8 @@ SAFE_STATE_FAILURES = {
     "restarted_viewer_not_found", "restarted_viewer_not_healthy",
     "restarted_chromium_not_ready", "restarted_standby_state_changed",
     "standby_auth_schema_missing", "standby_auth_session_missing",
+    "standby_auth_session_expired", "standby_auth_session_requested",
+    "standby_auth_session_finishing", "standby_auth_session_verified",
     "standby_auth_transition_not_allowed",
     "standby_auth_state_changed", "unprotected_identity_file",
     "invalid_identity", "invalid_name", "invalid_username",
@@ -50,7 +52,12 @@ def require_account_columns(db):
 def get_session_status(db, generation, credential):
     current = apply.sql(db, f"""
         SELECT COALESCE((
-            SELECT status::text
+            SELECT CASE
+                WHEN status IN ('Requested','Preparing','Ready','Failed')
+                     AND requested_at_utc <= now() - interval '90 minutes'
+                THEN 'Expired'
+                ELSE status::text
+            END
             FROM agent.runtime_generation_auth_sessions
             WHERE generation='{generation}' AND credential_id='{credential}'::uuid
             ORDER BY requested_at_utc DESC
@@ -60,6 +67,17 @@ def get_session_status(db, generation, credential):
     if current == "Missing":
         raise ValueError("standby_auth_session_missing")
     return current
+
+
+def refuse_disallowed_status(current):
+    # Only fixed known states leave the runner, never an arbitrary DB value.
+    codes = {
+        "Expired": "standby_auth_session_expired",
+        "Requested": "standby_auth_session_requested",
+        "Finishing": "standby_auth_session_finishing",
+        "Verified": "standby_auth_session_verified",
+    }
+    raise ValueError(codes.get(current, "standby_auth_transition_not_allowed"))
 
 
 def update(env_file, generation, credential, status):
@@ -95,8 +113,8 @@ def update(env_file, generation, credential, status):
     if status != "Failed" and result.strip() != generation:
         # Differentiate a missing API-authorized request from a disallowed
         # transition (e.g. Failed -> Preparing, or Verified -> Ready).
-        get_session_status(apply.parse_db(env_file), generation, credential)
-        raise ValueError("standby_auth_transition_not_allowed")
+        current = get_session_status(apply.parse_db(env_file), generation, credential)
+        refuse_disallowed_status(current)
 
 
 def restart_ready(env_file, generation, credential):
@@ -129,18 +147,19 @@ def restart_ready(env_file, generation, credential):
     db = apply.parse_db(env_file)
     require_account_columns(db)
     current = get_session_status(db, generation, credential)
-    if current not in ("Preparing", "Ready", "Failed"):
-        raise ValueError("standby_auth_transition_not_allowed")
+    if current not in ("Requested", "Preparing", "Ready", "Failed"):
+        refuse_disallowed_status(current)
     # Invalidate any previous identity proof; a new inspect must re-attest.
     query = f"""
       UPDATE agent.runtime_generation_auth_sessions
       SET status='Ready', diagnostic_code=NULL,
           account_name=NULL, account_username=NULL, account_customer_id=NULL,
           account_verified_at_utc=NULL,
-          requested_at_utc=now(), updated_at_utc=now()
+          updated_at_utc=now()
       WHERE generation='{generation}'
         AND credential_id='{credential}'::uuid
-        AND status IN ('Preparing','Ready','Failed')
+        AND status IN ('Requested','Preparing','Ready','Failed')
+        AND requested_at_utc > now() - interval '90 minutes'
       RETURNING generation;
     """
     result = apply.sql(db, query, stage="standby_auth_restart_ready")
@@ -175,7 +194,7 @@ def record_identity(env_file, generation, credential, identity_file):
     require_account_columns(db)
     current = get_session_status(db, generation, credential)
     if current not in ("Ready", "Finishing"):
-        raise ValueError("standby_auth_transition_not_allowed")
+        refuse_disallowed_status(current)
     query = f"""
         UPDATE agent.runtime_generation_auth_sessions SET
             account_name={quoted(name)},
