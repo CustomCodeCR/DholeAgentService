@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: dhole-standby-hub-auto-inspection
@@ -16,7 +17,7 @@ jobs:
   inspect:
     if: ${{ github.ref == 'refs/heads/master' }}
     runs-on: [self-hosted, linux, x64, dhole]
-    timeout-minutes: 7
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash -n scripts/ensure-standby-hub-probe.sh
           python3 -m py_compile scripts/standby-hub-auto-inspect.py \
             scripts/standby-authentication.py scripts/standby-auth-state.py
           python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
@@ -46,6 +48,15 @@ jobs:
             /opt/dhole/.env "$RUNNER_TEMP/standby-hub-auto-inspection" >/dev/null
           chmod 600 "$RUNNER_TEMP/standby-hub-auto-inspection/.env.production"
           echo "STANDBY_PRIVATE_ENV=$RUNNER_TEMP/standby-hub-auto-inspection/.env.production" >> "$GITHUB_ENV"
+
+      - name: Ensure current Hub Inspector for unattended verification
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.NUGET_PACKAGES_READ_TOKEN || github.token }}
+          NUGET_PACKAGE_USER: ${{ vars.NUGET_PACKAGES_ACTOR || github.actor }}
+        run: |
+          set -euo pipefail
+          bash scripts/ensure-standby-hub-probe.sh
 
       - name: Verify only current API-authorized Ready standby Hubs
         shell: bash
