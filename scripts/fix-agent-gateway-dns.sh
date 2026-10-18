@@ -2,6 +2,7 @@
 # Fix DNS ambiguity in gateway only. Keep original prod1 worker and all APIs.
 set -Eeuo pipefail
 set +x
+umask 077
 [[ "$GITHUB_REF" == refs/heads/master && -r "$DHOLE_GATEWAY_ENV" ]] || exit 2
 export DHOLE_ENV_FILE="$DHOLE_GATEWAY_ENV" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest
 base=/opt/dhole/docker-compose.services.yml
@@ -38,6 +39,14 @@ assert env(main).get("GenerationOrchestrator__Enabled","").lower()=="true"
 assert len(env(main).get("GenerationOrchestrator__GitHubToken",""))>=20
 assert env(standby).get("GenerationOrchestrator__Enabled","").lower()!="true"
 actual=env(gateway)
+# Preserve the exact already deployed CRM settings; this change must affect
+# ONLY Agent backend routing, not CRM or Dynamics. JSON strings are valid YAML
+# scalars and cannot inject additional Compose keys.
+pin=os.environ["RUNNER_TEMP"]+"/agent-gateway-route/pin.yml"
+with open(pin,"a",encoding="utf-8") as manifest_overrides:
+    for key in ("Gateway__HealthChecks__crm", "Gateway__Routes__12__Destination"):
+        if key in actual:
+            manifest_overrides.write("      "+key+": "+json.dumps(actual[key])+"\n")
 manifest=json.loads(subprocess.check_output(["docker","compose","--env-file",os.environ["DHOLE_ENV_FILE"],
     "-f","/opt/dhole/docker-compose.services.yml",
     "-f",os.environ["RUNNER_TEMP"]+"/agent-gateway-route/pin.yml",
