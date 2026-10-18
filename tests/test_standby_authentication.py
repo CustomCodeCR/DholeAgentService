@@ -106,14 +106,20 @@ class StandbyAuthenticationTests(unittest.TestCase):
              patch.object(auth, "guard_standby"), \
              patch.object(auth, "inspect_existing", return_value=(
                  "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth, "resolve_probe_image", return_value=(
+                 "dhole/agent-workers:standby-inspector-37722453d87e")), \
              patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
                  returncode=0, stdout=json.dumps(identity), stderr="")) as execute:
             output = Path(root) / "verified-identity.json"
             auth.inspect_account("prod2", "a"*32, output)
             self.assertEqual(json.loads(output.read_text()), identity)
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(execute.call_args.args[0][:3],
-                             ["docker", "exec", "standby-viewer-id"])
+            self.assertEqual(execute.call_args.args[0][:5],
+                             ["docker", "run", "--rm", "--pull=never",
+                              "--network"])
+            self.assertIn("container:standby-viewer-id", execute.call_args.args[0])
+            self.assertIn("dhole/agent-workers:standby-inspector-37722453d87e",
+                          execute.call_args.args[0])
             self.assertIn("--standby-account-inspect", execute.call_args.args[0])
 
     def test_hub_evidence_only_is_valid_for_any_isolated_generation(self):
@@ -125,6 +131,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
                  patch.object(auth, "guard_standby"), \
                  patch.object(auth, "inspect_existing", return_value=(
                      "standby-viewer-id", {"State": {"Status": "running"}})), \
+                 patch.object(auth, "resolve_probe_image", return_value="dhole/agent-workers:standby-inspector-37722453d87e"), \
                  patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
                      returncode=0, stdout=json.dumps({"HubAuthenticated": True}), stderr="")):
                 output = Path(root) / "hub-proof.json"
@@ -140,10 +147,33 @@ class StandbyAuthenticationTests(unittest.TestCase):
              patch.object(auth, "guard_standby"), \
              patch.object(auth, "inspect_existing", return_value=(
                  "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth, "resolve_probe_image", return_value=(
+                 "dhole/agent-workers:standby-inspector-37722453d87e")), \
              patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
                  returncode=0, stdout=json.dumps({"Url": "https://maersk.com/hub/"}), stderr="")):
             with self.assertRaisesRegex(RuntimeError, "invalid_standby_hub_proof"):
                 auth.inspect_account("prod2", "a"*32, Path(root) / "hub-proof.json")
+
+    def test_inspection_uses_read_only_sidecar_not_stale_viewer_dll(self):
+        import tempfile
+        import types
+        import json
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(auth, "guard_standby"), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 "verified-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth, "resolve_probe_image",
+                 return_value="dhole/agent-workers:standby-inspector-37722453d87e"), \
+             patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=0, stdout=json.dumps({"HubAuthenticated": True}), stderr="")) as probe:
+            auth.inspect_account("prod3", "a"*32, Path(root) / "proof.json")
+            command = probe.call_args.args[0]
+            self.assertEqual(command[:2], ["docker", "run"])
+            self.assertIn("container:verified-viewer-id", command)
+            self.assertIn("--read-only", command)
+            self.assertIn("--cap-drop", command)
+            self.assertNotIn("exec", command)
+            self.assertFalse(any("volume" in token for token in command))
 
     def test_identity_probe_rejects_unverified_account_without_writing(self):
         import tempfile
@@ -152,6 +182,8 @@ class StandbyAuthenticationTests(unittest.TestCase):
              patch.object(auth, "guard_standby"), \
              patch.object(auth, "inspect_existing", return_value=(
                  "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth, "resolve_probe_image", return_value=(
+                 "dhole/agent-workers:standby-inspector-37722453d87e")), \
              patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
                  returncode=3, stdout="", stderr="safe_error")):
             output = Path(root) / "identity.json"
