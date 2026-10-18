@@ -1,5 +1,6 @@
 name: Diagnose generation handoff gates (read-only)
 # Current-state recheck after fixing PostgreSQL 16 image timeout; read-only.
+# Read-only prod2 gate review after independently verified Maersk Hub on 2026-10-18.
 # 2026-10-16: inspect prod2 standby browser readiness after two failed noVNC preparation runs.
 # 2026-10-16: identify missing/ambiguous API, dormant Worker, Hermes or source API precisely.
 
