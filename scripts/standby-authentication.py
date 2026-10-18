@@ -167,6 +167,30 @@ def prepare(generation, credential, script_path, image_override=None):
         viewer_full_id = None
     # Exclusive use is mandatory before any Chromium Singleton* cleanup.
     require_exclusive_browser_volume(volume, viewer_full_id)
+    # On a newly authorized API preparation, reuse an already healthy isolated
+    # viewer instead of restarting a real operator session. Reauthorization
+    # comes from the API's fresh Requested -> Preparing transition, never here.
+    # A versioned standalone inspector image is required; do not silently
+    # reuse an old primary Worker binary for subsequent account verification.
+    if (image_override is None and existing_info is not None and
+            existing_info["State"]["Status"] == "running" and
+            re.fullmatch(r"dhole/agent-workers:standby-inspector-[0-9a-f]{12}",
+                         existing_info["Config"]["Image"] or "")):
+        cdp = subprocess.run(
+            ["docker", "exec", existing, "curl", "-fsS",
+             "--connect-timeout", "1", "--max-time", "3",
+             "--output", "/dev/null", "http://127.0.0.1:9222/json/version"],
+            capture_output=True, timeout=6, check=False)
+        novnc = subprocess.run(
+            ["curl", "-fsS", "--connect-timeout", "1", "--max-time", "3",
+             "--output", "/dev/null",
+             f"http://127.0.0.1:{viewer_port(generation)}/vnc.html"],
+            capture_output=True, timeout=6, check=False)
+        if cdp.returncode == 0 and novnc.returncode == 0:
+            print("STANDBY_AUTH_VIEWER_REUSED_HEALTHY generation=" + generation)
+            print("STANDBY_AUTH_HOST_LOOPBACK_PORT=" + str(viewer_port(generation)))
+            print("STANDBY_AUTH_WORKER_REMAINS_INACTIVE")
+            return
     if existing:
         # Only the SAME previously verified generation+credential viewer may
         # be reconciled, e.g. when an operator session expires after 30 min.
