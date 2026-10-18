@@ -63,6 +63,7 @@ jobs:
           esac || exit 2
           python3 -m py_compile scripts/standby-authentication.py scripts/standby-auth-state.py
           bash -n docker/start-standby-auth.sh
+          python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
           echo STANDBY_AUTH_INPUTS_VERIFIED
 
       - name: Prepare protected database connection
