@@ -45,8 +45,10 @@ actual=env(gateway)
 pin=os.environ["RUNNER_TEMP"]+"/agent-gateway-route/pin.yml"
 with open(pin,"a",encoding="utf-8") as manifest_overrides:
     for key in ("Gateway__HealthChecks__crm", "Gateway__Routes__12__Destination"):
-        if key in actual:
-            manifest_overrides.write("      "+key+": "+json.dumps(actual[key])+"\n")
+        # Compose's null value omits an environment key that does not
+        # exist in the currently running gateway. Do not introduce it.
+        value=json.dumps(actual[key]) if key in actual else "null"
+        manifest_overrides.write("      "+key+": "+value+"\n")
 manifest=json.loads(subprocess.check_output(["docker","compose","--env-file",os.environ["DHOLE_ENV_FILE"],
     "-f","/opt/dhole/docker-compose.services.yml",
     "-f",os.environ["RUNNER_TEMP"]+"/agent-gateway-route/pin.yml",
@@ -61,7 +63,12 @@ critical=lambda k: k.startswith(("Gateway__","Auth__")) or k in (
     "AGENT_HTTP_URL","CONTENT_HTTP_URL","HERMES_HTTP_URL","INTERNAL_SERVICE_KEY")
 unexpected=[k for k in set(actual)|set(proposed) if critical(k) and k not in expected
             and actual.get(k)!=proposed.get(k)]
-if unexpected: raise SystemExit("GATEWAY_FIX_REFUSED: unrelated gateway config differences="+",".join(sorted(unexpected)))
+if unexpected:
+    for key in sorted(unexpected):
+        print("GATEWAY_FIX_SETTING_DIFFERENCE key="+key+
+              " current_present="+str(key in actual)+
+              " proposed_present="+str(key in proposed))
+    raise SystemExit("GATEWAY_FIX_REFUSED: unrelated gateway config differences="+",".join(sorted(unexpected)))
 state=os.environ["RUNNER_TEMP"]+"/agent-gateway-route"
 os.makedirs(state,mode=0o700,exist_ok=True)
 for name,value in (("gateway-id",gateway["Id"]),("gateway-image",gateway["Image"]),
