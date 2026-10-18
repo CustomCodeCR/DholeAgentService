@@ -1,0 +1,66 @@
+name: Fix live Agent gateway DNS routing to primary API
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/fix-live-agent-gateway-route.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  primary_agent_route:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate scoped gateway-only repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || exit 2
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n scripts/fix-agent-gateway-dns.sh
+          echo GATEWAY_FIX_SOURCE_VERIFIED
+
+      - name: Prepare protected runtime and exact infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          umask 077
+          mkdir -p "$RUNNER_TEMP/agent-gateway-route"
+          chmod 700 "$RUNNER_TEMP/agent-gateway-route"
+          bash .dhole-system/deploy/prepare-environments.sh /opt/dhole/.env "$RUNNER_TEMP/agent-gateway-route" >/dev/null
+          path="$RUNNER_TEMP/agent-gateway-route/.env.production"
+          [[ -f "$path" && ! -L "$path" ]] || exit 2
+          chmod 600 "$path"
+          echo "DHOLE_GATEWAY_ENV=$path" >> "$GITHUB_ENV"
+          docker image inspect curlimages/curl:8.12.1 >/dev/null ||
+            docker pull curlimages/curl:8.12.1 >/dev/null
+
+      - name: Pin gateway's Agent destination and protect prod1
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/fix-agent-gateway-dns.sh
+
+      - name: Clean protected temporary runtime
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          folder="$RUNNER_TEMP/agent-gateway-route"
+          [[ -d "$folder" && ! -L "$folder" ]] || exit 2
+          rm -f "$folder/.env.production" "$folder/.env.staging"
+          rm -f "$folder/gateway-id" "$folder/gateway-image" "$folder/worker-id"
+          rm -f "$folder/worker-image" "$folder/main-api-id" "$folder/standby-api-id"
+          rm -f "$folder/rollback.yml"
