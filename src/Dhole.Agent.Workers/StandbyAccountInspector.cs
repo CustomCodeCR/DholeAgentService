@@ -4,57 +4,38 @@ using Microsoft.Playwright;
 namespace Dhole.Agent.Workers;
 
 /// <summary>
-/// Read-only proof of an authorized Maersk Hub account in the isolated standby browser.
-/// No credentials, cookies, navigation, CAPTCHA interaction or queue services.
-/// Called only via docker exec in the dormant generation's browser-only container.
+/// Confirms a rendered Maersk Hub dashboard in the already running isolated
+/// standby browser. Does not retrieve account names, usernames, customer IDs,
+/// cookies or tokens. Never starts a Worker or navigates the browser.
 /// </summary>
 internal static class StandbyAccountInspector
 {
-    public sealed record Identity(string DisplayName, string Username, string CustomerId);
+    private sealed record HubProof(bool HubAuthenticated);
 
     public static async Task<int> RunAsync()
     {
-        var reason = "no_official_hub_page";
+        var reason = "hub_dashboard_not_visible";
         try
         {
             using var playwright = await Playwright.CreateAsync();
-            // Never close externally owned Chromium or navigate the browser.
-            // Inspection only reads the protected Hub and opens its Account panel.
             var browser = await playwright.Chromium.ConnectOverCDPAsync(
-                "http://127.0.0.1:9222", new BrowserTypeConnectOverCDPOptions
-                {
-                    Timeout = 8_000
-                });
-
+                "http://127.0.0.1:9222",
+                new BrowserTypeConnectOverCDPOptions { Timeout = 8_000 });
             foreach (var context in browser.Contexts)
             foreach (var page in context.Pages)
             {
-                if (!AllowedOfficialPage(page.Url) ||
-                    !Uri.TryCreate(page.Url, UriKind.Absolute, out var uri) ||
-                    !(uri.AbsolutePath.Equals("/hub", StringComparison.OrdinalIgnoreCase) ||
-                      uri.AbsolutePath.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase)))
+                if (!OfficialHubPage(page.Url))
                     continue;
-
-                reason = "hub_identity_not_visible";
-                var identity = await ReadIdentityAsync(page);
-                if (identity is null)
+                reason = "hub_dashboard_not_authenticated";
+                for (var attempt = 0; attempt < 5; attempt++)
                 {
-                    // Only a fixed set of structural reasons is exposed.
-                    // Never dump DOM text, account names, identifiers or tokens.
-                    reason = await page.EvaluateAsync<string>(JavaScriptDiagnostic);
-                    continue;
+                    if (await page.EvaluateAsync<bool>(JavaScriptHubEvidence))
+                    {
+                        PrintProof();
+                        return 0;
+                    }
+                    await Task.Delay(400);
                 }
-
-                if (!ValidIdentity(identity))
-                {
-                    reason = "hub_identity_invalid_format";
-                    continue;
-                }
-
-                // Identity details are sent only to the protected workflow via stdout.
-                // No page HTML, cookies, authentication headers or tokens are logged.
-                Console.WriteLine(JsonSerializer.Serialize(identity));
-                return 0;
             }
         }
         catch (PlaywrightException)
@@ -70,108 +51,90 @@ internal static class StandbyAccountInspector
             reason = "unexpected_inspection_error";
         }
 
-        // A Chrome page can be present in /json/list but absent from the
-        // Playwright context list. Inspect only verified loopback page targets.
+        // An existing Chrome tab can appear through /json/list while
+        // Playwright's connected browser contexts do not enumerate it.
         try
         {
-            var fallback = await InspectDirectPageTargetAsync();
-            if (fallback.Identity is not null)
+            var result = await InspectDirectPageTargetAsync();
+            if (result.Confirmed)
             {
-                Console.WriteLine(JsonSerializer.Serialize(fallback.Identity));
+                PrintProof();
                 return 0;
             }
-            reason = fallback.Reason;
+            reason = result.Reason;
         }
         catch (Exception)
         {
             reason = "cdp_direct_target_inspection_failed";
         }
 
-        Console.Error.WriteLine("STANDBY_MAERSK_ACCOUNT_NOT_VERIFIED reason=" + reason);
+        Console.Error.WriteLine("STANDBY_MAERSK_HUB_NOT_VERIFIED reason=" + reason);
         return 3;
     }
 
+    private static void PrintProof() =>
+        Console.WriteLine(JsonSerializer.Serialize(new HubProof(true)));
 
-    // Playwright may not enumerate an existing Chromium tab even when Chrome's
-    // local /json/list exposes it. Use that local page target as a non-navigating
-    // fallback; only the Account menu may be opened; never read cookies or start jobs.
-    private static async Task<(Identity? Identity, string Reason)> InspectDirectPageTargetAsync()
+    private static async Task<(bool Confirmed, string Reason)> InspectDirectPageTargetAsync()
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
         var targetJson = await http.GetStringAsync("http://127.0.0.1:9222/json/list");
         using var targets = JsonDocument.Parse(targetJson);
         if (targets.RootElement.ValueKind != JsonValueKind.Array)
-            return (null, "cdp_targets_invalid");
+            return (false, "cdp_targets_invalid");
 
-        var pageTargets = 0;
-        var hubTargets = 0;
-        var unusableHubTargets = 0;
+        var pages = 0;
+        var hubs = 0;
+        var unreachable = 0;
         foreach (var target in targets.RootElement.EnumerateArray())
         {
             if (!target.TryGetProperty("type", out var type) ||
-                type.ValueKind != JsonValueKind.String ||
-                type.GetString() != "page")
+                type.ValueKind != JsonValueKind.String || type.GetString() != "page")
                 continue;
 
-            pageTargets++;
-            if (!target.TryGetProperty("url", out var url) ||
-                url.ValueKind != JsonValueKind.String ||
-                !OfficialHubPage(url.GetString()))
+            pages++;
+            if (!target.TryGetProperty("url", out var address) ||
+                address.ValueKind != JsonValueKind.String ||
+                !OfficialHubPage(address.GetString()))
                 continue;
+            hubs++;
 
-            hubTargets++;
-
-            // Chromium may omit the debugger URL from /json/list even while
-            // advertising an existing target. Accept a validated page ID and
-            // construct only a loopback CDP page endpoint. Never follow an
-            // arbitrary remote target or inspect a non-Maersk page.
             Uri? endpoint = null;
             if (target.TryGetProperty("webSocketDebuggerUrl", out var websocket) &&
                 websocket.ValueKind == JsonValueKind.String &&
                 Uri.TryCreate(websocket.GetString(), UriKind.Absolute, out var advertised) &&
                 SafeLocalPageEndpoint(advertised))
-            {
                 endpoint = advertised;
-            }
             else if (target.TryGetProperty("id", out var identifier) &&
                      identifier.ValueKind == JsonValueKind.String &&
                      System.Text.RegularExpressions.Regex.IsMatch(
                          identifier.GetString() ?? "", @"^[A-Za-z0-9-]{8,128}$"))
-            {
-                var id = identifier.GetString();
-                endpoint = new Uri("ws://127.0.0.1:9222/devtools/page/" + id);
-            }
+                endpoint = new Uri("ws://127.0.0.1:9222/devtools/page/" +
+                    identifier.GetString());
 
             if (endpoint is null)
             {
-                unusableHubTargets++;
+                unreachable++;
                 continue;
             }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
             using var socket = new System.Net.WebSockets.ClientWebSocket();
             await socket.ConnectAsync(endpoint, cts.Token);
-
             for (var attempt = 0; attempt < 5; attempt++)
             {
-                var result = await EvaluateViaCDPAsync(socket, "(" + JavaScriptEvidence + ")()", cts.Token);
-                if (result.ValueKind == JsonValueKind.Object)
-                {
-                    var account = result.Deserialize<Identity>();
-                    if (account is not null && ValidIdentity(account))
-                        return (account, "verified");
-                }
-
-                if (attempt == 0)
-                    await EvaluateViaCDPAsync(socket, "(" + JavaScriptOpenAccount + ")()", cts.Token);
+                var evidence = await EvaluateViaCDPAsync(
+                    socket, "(" + JavaScriptHubEvidence + ")()", cts.Token);
+                if (evidence.ValueKind == JsonValueKind.True)
+                    return (true, "verified");
                 await Task.Delay(400, cts.Token);
             }
-            return (null, "cdp_hub_account_identity_not_visible");
+            return (false, "hub_dashboard_not_authenticated");
         }
 
-        return (null, pageTargets == 0 ? "cdp_no_page_targets" :
-            hubTargets == 0 ? "cdp_no_official_hub_page" :
-            unusableHubTargets > 0 ? "cdp_hub_target_unaddressable" :
+        return (false, pages == 0 ? "cdp_no_page_targets" :
+            hubs == 0 ? "cdp_no_official_hub_page" :
+            unreachable > 0 ? "cdp_hub_target_unaddressable" :
             "cdp_hub_target_not_found");
     }
 
@@ -188,10 +151,9 @@ internal static class StandbyAccountInspector
         System.Net.WebSockets.ClientWebSocket socket, string expression,
         CancellationToken cancellationToken)
     {
-        const int requestId = 1;
         var packet = JsonSerializer.SerializeToUtf8Bytes(new
         {
-            id = requestId,
+            id = 1,
             method = "Runtime.evaluate",
             @params = new { expression, returnByValue = true, awaitPromise = true }
         });
@@ -205,9 +167,9 @@ internal static class StandbyAccountInspector
             var received = await socket.ReceiveAsync(
                 new ArraySegment<byte>(buffer), cancellationToken);
             if (received.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
-                throw new InvalidOperationException("Page target closed during inspection");
+                throw new InvalidOperationException("CDP page closed during inspection");
             if (output.Length + received.Count > 1_048_576)
-                throw new InvalidOperationException("CDP reply exceeds size limit");
+                throw new InvalidOperationException("CDP response too large");
             output.Write(buffer, 0, received.Count);
             if (!received.EndOfMessage)
                 continue;
@@ -215,10 +177,8 @@ internal static class StandbyAccountInspector
             using var document = JsonDocument.Parse(output.ToArray());
             output.SetLength(0);
             var response = document.RootElement;
-            if (!response.TryGetProperty("id", out var id) ||
-                id.GetInt32() != requestId)
+            if (!response.TryGetProperty("id", out var id) || id.GetInt32() != 1)
                 continue;
-
             if (response.TryGetProperty("result", out var result) &&
                 result.TryGetProperty("result", out var value) &&
                 value.TryGetProperty("value", out var serialized))
@@ -229,226 +189,48 @@ internal static class StandbyAccountInspector
 
     private static bool OfficialHubPage(string? address)
     {
-        if (!AllowedOfficialPage(address) ||
-            !Uri.TryCreate(address, UriKind.Absolute, out var uri))
+        if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps || uri.Port != 443 ||
+            uri.UserInfo.Length != 0)
+            return false;
+        if (!uri.IdnHost.Equals("maersk.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.IdnHost.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase))
             return false;
         return uri.AbsolutePath.Equals("/hub", StringComparison.OrdinalIgnoreCase) ||
             uri.AbsolutePath.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private const string JavaScriptOpenAccount = """
+    // Require actual personalized Hub dashboard widgets, not just /hub/ in
+    // the address bar or a generic public Maersk landing page.
+    // No account-specific data is extracted or persisted.
+    private const string JavaScriptHubEvidence = """
         () => {
-            const selectors = [
-                'button[aria-label*="account" i]',
-                'button[aria-label*="profile" i]',
-                '[role="button"][aria-label*="account" i]',
-                '[role="button"][aria-label*="profile" i]',
-                'button[title*="account" i]',
-                '[data-testid*="account" i]',
-                '[data-testid*="profile" i]'
-            ];
-            const find = (root, depth) => {
-                if (depth > 6) return null;
-                for (const item of root.querySelectorAll(selectors.join(','))) {
-                    if (item.getClientRects().length && !item.disabled) return item;
-                }
-                for (const item of root.querySelectorAll('*')) {
-                    if (item.shadowRoot) {
-                        const found = find(item.shadowRoot, depth + 1);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            };
-            const control = find(document, 0);
-            if (!control) return false;
-            control.click();
-            return true;
-        }
-        """;
-
-    private static async Task<Identity?> ReadIdentityAsync(IPage page)
-    {
-        // Maersk's account trigger can be a button, an icon with an accessible
-        // name, or a text-bearing element inside a web component. Read the
-        // panel first, since opening an already expanded menu may close it.
-        var candidates = new ILocator[]
-        {
-            page.GetByRole(AriaRole.Button, new() { Name = "Account", Exact = true }),
-            page.Locator("button[aria-label*='account' i], [role='button'][aria-label*='account' i]"),
-            page.GetByText("Account", new() { Exact = true })
-        };
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            var identity = await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
-            if (identity is not null && ValidIdentity(identity))
-                return identity;
-
-            if (attempt == 0)
-            {
-                foreach (var candidate in candidates)
-                {
-                    try
-                    {
-                        if (await candidate.CountAsync() == 0)
-                            continue;
-                        await candidate.First.ClickAsync(new() { Timeout = 1_500 });
-                        break;
-                    }
-                    catch (PlaywrightException)
-                    {
-                        // A hidden candidate should not prevent trying the next
-                        // visible control. Never force-click or navigate.
-                    }
-                }
-            }
-            await Task.Delay(450);
-        }
-
-        // Preserve the distinction between absent and malformed account data.
-        return await page.EvaluateAsync<Identity?>(JavaScriptEvidence);
-    }
-
-    private static bool AllowedOfficialPage(string? location)
-    {
-        if (!Uri.TryCreate(location, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps ||
-            uri.Port != 443 || uri.UserInfo.Length != 0)
-            return false;
-
-        if (!uri.IdnHost.Equals("www.maersk.com", StringComparison.OrdinalIgnoreCase)
-            && !uri.IdnHost.Equals("maersk.com", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return uri.AbsolutePath == "/"
-            || uri.AbsolutePath.Equals("/hub", StringComparison.OrdinalIgnoreCase)
-            || uri.AbsolutePath.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase)
-            || uri.AbsolutePath.Equals("/book", StringComparison.OrdinalIgnoreCase)
-            || uri.AbsolutePath.StartsWith("/book/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool ValidIdentity(Identity identity)
-    {
-        if (string.IsNullOrWhiteSpace(identity.DisplayName) ||
-            identity.DisplayName.Length is < 4 or > 100 ||
-            identity.DisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 2)
-            return false;
-        if (identity.DisplayName.Any(ch => char.IsControl(ch) || ch is '"'))
-            return false;
-        if (identity.Username is null || identity.Username.Length is < 3 or > 128 ||
-            !(System.Text.RegularExpressions.Regex.IsMatch(identity.Username, @"^[A-Za-z0-9_.-]{3,64}$") ||
-              System.Text.RegularExpressions.Regex.IsMatch(identity.Username, @"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")))
-            return false;
-        return identity.CustomerId.Length is >= 8 and <= 15
-            && identity.CustomerId.All(ch => ch is >= '0' and <= '9');
-    }
-
-    private const string JavaScriptDiagnostic = """
-        () => {
-            if (!/^\/hub(?:\/|$)/i.test(location.pathname))
-                return 'not_on_official_hub';
-            const lines = [];
-            const record = value => {
-                if (!value) return;
-                for (const part of value.split('\n')) {
-                    const line = part.trim().toLowerCase().replace(/:$/, '');
-                    if (line && line.length < 180) lines.push(line);
-                }
-            };
-            record(document.body?.innerText || '');
-            const walk = (root, depth) => {
-                if (depth > 8) return;
-                for (const el of root.querySelectorAll('*')) {
-                    if (!el.shadowRoot) continue;
-                    for (const node of el.shadowRoot.querySelectorAll('*')) {
-                        if (!node.children.length && node.getClientRects().length)
-                            record(node.textContent || '');
-                    }
-                    walk(el.shadowRoot, depth + 1);
-                }
-            };
-            walk(document, 0);
-            if (!lines.length) return 'hub_dom_empty';
-            if (lines.some(x => /access denied|verify you are human|captcha required/.test(x)))
-                return 'hub_challenge_detected';
-            const has = (...aliases) => lines.some(line =>
-                aliases.some(alias => line === alias || line.startsWith(alias + ':')));
-            if (!has('name', 'full name', 'display name')) return 'hub_name_label_missing';
-            if (!has('username', 'user name')) return 'hub_username_label_missing';
-            if (!has('customer id', 'customer number')) return 'hub_customer_label_missing';
-            return 'hub_identity_values_not_recognized';
-        }
-        """;
-
-    private const string JavaScriptEvidence = """
-        () => {
-            // An official protected Hub plus a visible real account identity
-            // is required; the URL by itself is never sufficient to attest
-            // the specific credential. Do not read cookies or browser storage.
             if (location.protocol !== 'https:' ||
                 !['www.maersk.com', 'maersk.com'].includes(location.hostname) ||
-                !/^\/hub(?:\/|$)/i.test(location.pathname)) return null;
-            if (!document.body) return null;
+                !/^\/hub(?:\/|$)/i.test(location.pathname) ||
+                !document.body) return false;
 
-            const prohibited = /Access Denied|Verify you are human|captcha required|Sign in to continue/i;
-            const entries = [];
-            const addText = (value) => {
-                if (!value) return;
-                for (const row of value.replace(/\r/g, '').split('\n')) {
-                    const text = row.replace(/\s+/g, ' ').trim();
-                    if (text && text.length <= 180) entries.push(text);
+            const parts = [];
+            const visit = (root, depth) => {
+                if (depth > 7) return;
+                const elements = root.querySelectorAll('*');
+                for (const el of elements) {
+                    if (el.shadowRoot) visit(el.shadowRoot, depth + 1);
                 }
+                const txt = root === document ? document.body.innerText :
+                    root.host ? root.host.shadowRoot?.textContent : '';
+                if (txt && parts.length < 300) parts.push(txt.slice(0, 12000));
             };
-            addText(document.body.innerText || '');
-
-            // Walk *open* shadow roots of Maersk web components. Standard
-            // document.body.innerText does not include their rendered text.
-            const walk = (root, depth) => {
-                if (depth > 8) return;
-                for (const el of root.querySelectorAll('*')) {
-                    if (!el.shadowRoot) continue;
-                    addText(el.shadowRoot.innerText || '');
-                    for (const node of el.shadowRoot.querySelectorAll('*')) {
-                        if (node.children.length === 0 && node.getClientRects().length)
-                            addText(node.innerText || node.textContent || '');
-                    }
-                    walk(el.shadowRoot, depth + 1);
-                }
-            };
-            walk(document, 0);
-            if (prohibited.test(entries.join('\n'))) return null;
-
-            const labels = {
-                DisplayName: ['Name', 'Full name', 'Display name'],
-                Username: ['Username', 'User name'],
-                CustomerId: ['Customer ID', 'Customer Id', 'Customer number']
-            };
-            const valid = {
-                DisplayName: /^[\p{L}][\p{L} .'-]{3,99}$/u,
-                Username: /^(?:[A-Za-z0-9_.-]{3,64}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})$/,
-                CustomerId: /^[0-9]{8,15}$/
-            };
-            const fields = {};
-            for (const [field, aliases] of Object.entries(labels)) {
-                fields[field] = '';
-                for (let i = 0; i < entries.length && !fields[field]; i++) {
-                    for (const alias of aliases) {
-                        const line = entries[i];
-                        const exact = line.toLowerCase().replace(/:$/, '') === alias.toLowerCase();
-                        const inline = line.toLowerCase().startsWith(alias.toLowerCase() + ':');
-                        const value = (exact ? entries[i + 1] : inline
-                            ? line.slice(alias.length + 1).trim() : '') || '';
-                        if (valid[field].test(value)) {
-                            fields[field] = value;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!fields.DisplayName || !fields.Username || !fields.CustomerId)
-                return null;
-            return fields;
+            visit(document, 0);
+            const text = parts.join('\n').replace(/\s+/g, ' ').toLowerCase();
+            if (/access denied|verify you are human|captcha|required to sign in|sign in to continue/i.test(text))
+                return false;
+            const welcome = /welcome to your hub/i.test(text);
+            const navigation = /hub dashboard/i.test(text) &&
+                /manage bookings/i.test(text);
+            const personalized = /pending tasks/i.test(text) &&
+                /shipment overview/i.test(text);
+            return welcome && navigation && personalized;
         }
         """;
 }
