@@ -1,0 +1,57 @@
+name: Diagnose effective standby dispatcher and gateway target
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-live-standby-dispatcher.yml]
+permissions:
+  contents: read
+concurrency:
+  group: dhole-standby-dispatcher-diagnosis
+  cancel-in-progress: false
+jobs:
+  read_only:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect live containers without printing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re,subprocess,urllib.parse
+          def containers(project, service):
+              ids=subprocess.check_output(["docker","ps","-q",
+                  "--filter","label=com.docker.compose.project="+project,
+                  "--filter","label=com.docker.compose.service="+service],text=True).splitlines()
+              print("DIAG_SERVICE project="+project+" service="+service+" running="+str(len(ids)))
+              return [json.loads(subprocess.check_output(["docker","inspect",i],text=True))[0] for i in ids]
+          def options(item):
+              return dict(v.split("=",1) for v in item["Config"]["Env"] if "=" in v)
+          for project,service in (("dhole","dhole-agent-api"),
+                                  ("dhole-agent-prod1","dhole-agent-api-prod1"),
+                                  ("dhole-agent-prod2","dhole-agent-api")):
+              for item in containers(project,service):
+                  env=options(item)
+                  enabled=env.get("GenerationOrchestrator__Enabled","")
+                  token=env.get("GenerationOrchestrator__GitHubToken","")
+                  ref=env.get("GenerationOrchestrator__ActionsRef","")
+                  print("DIAG_AGENT_API project="+project+
+                      " image_tag="+item["Config"]["Image"].split(":")[-1]+
+                      " dispatcher_enabled="+str(enabled.lower()=="true")+
+                      " token_present="+str(bool(token.strip()))+
+                      " token_looks_valid="+str(bool(re.fullmatch(r"[A-Za-z0-9_.-]{20,1024}",token)))+
+                      " actions_ref_master="+str(ref=="master")+
+                      " state="+item["State"]["Status"])
+          for item in containers("dhole","api-gateway"):
+              env=options(item)
+              print("DIAG_GATEWAY agent_http_host="+
+                    str(urllib.parse.urlsplit(env.get("AGENT_HTTP_URL","")).hostname or "missing"))
+              for name,value in env.items():
+                  if re.fullmatch(r"Gateway__Routes__\d+__(Destination|Prefix)",name) and
+                       ("/agents" in value or "agent-api" in value):
+                      safe=urllib.parse.urlsplit(value).hostname if name.endswith("Destination") else value
+                      print("DIAG_GATEWAY_CONFIG key="+name+" value="+str(safe))
+          PY
