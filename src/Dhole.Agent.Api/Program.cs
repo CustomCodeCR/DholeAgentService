@@ -23,7 +23,8 @@ builder.Services.AddCors(options => options.AddPolicy(
             "http://localhost:5173",
             "http://127.0.0.1:5173")
         .AllowAnyHeader()
-        .AllowAnyMethod()));
+        .AllowAnyMethod()
+        .AllowCredentials()));
 builder.Services.AddGrpc();
 builder.Services.AddApplication();
 builder.Services.AddPersistence(builder.Configuration);
@@ -52,7 +53,10 @@ app.MapGet(
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseWebSockets();
 app.MapAgentEndpoints();
+// Viewer proxy is independently secured by short-lived access tickets.
+StandbyViewerGateway.Map(app);
 app.MapGrpcService<AgentGrpcService>();
 
 app.Run();
