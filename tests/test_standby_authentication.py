@@ -101,8 +101,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
         import tempfile
         import types
         import json
-        identity = {"DisplayName": "Example Operator", "Username": "operator@example.com",
-                    "CustomerId": "1234567890"}
+        identity = {"HubAuthenticated": True}
         with tempfile.TemporaryDirectory() as root, \
              patch.object(auth, "guard_standby"), \
              patch.object(auth, "inspect_existing", return_value=(
@@ -117,6 +116,35 @@ class StandbyAuthenticationTests(unittest.TestCase):
                              ["docker", "exec", "standby-viewer-id"])
             self.assertIn("--standby-account-inspect", execute.call_args.args[0])
 
+    def test_hub_evidence_only_is_valid_for_any_isolated_generation(self):
+        import tempfile
+        import types
+        import json
+        for generation in ("prod2", "prod3", "prod10", "prod200"):
+            with self.subTest(generation=generation), tempfile.TemporaryDirectory() as root, \
+                 patch.object(auth, "guard_standby"), \
+                 patch.object(auth, "inspect_existing", return_value=(
+                     "standby-viewer-id", {"State": {"Status": "running"}})), \
+                 patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                     returncode=0, stdout=json.dumps({"HubAuthenticated": True}), stderr="")):
+                output = Path(root) / "hub-proof.json"
+                auth.inspect_account(generation, "a"*32, output)
+                self.assertEqual(json.loads(output.read_text()), {"HubAuthenticated": True})
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_hub_probe_rejects_url_only_without_dashboard(self):
+        import tempfile
+        import types
+        import json
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(auth, "guard_standby"), \
+             patch.object(auth, "inspect_existing", return_value=(
+                 "standby-viewer-id", {"State": {"Status": "running"}})), \
+             patch.object(auth.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=0, stdout=json.dumps({"Url": "https://maersk.com/hub/"}), stderr="")):
+            with self.assertRaisesRegex(RuntimeError, "invalid_standby_hub_proof"):
+                auth.inspect_account("prod2", "a"*32, Path(root) / "hub-proof.json")
+
     def test_identity_probe_rejects_unverified_account_without_writing(self):
         import tempfile
         import types
@@ -128,7 +156,7 @@ class StandbyAuthenticationTests(unittest.TestCase):
                  returncode=3, stdout="", stderr="safe_error")):
             output = Path(root) / "identity.json"
             with self.assertRaisesRegex(RuntimeError,
-                                        "standby_account_not_visible_in_official_menu"):
+                                        "standby_hub_not_authenticated"):
                 auth.inspect_account("prod2", "a"*32, output)
             self.assertFalse(output.exists())
 
