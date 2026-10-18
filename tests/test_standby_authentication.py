@@ -169,6 +169,32 @@ class StandbyAuthenticationTests(unittest.TestCase):
             guard.assert_called_once_with(volume, full_id)
             docker.assert_not_called()
 
+    def test_preparation_reuses_healthy_versioned_viewer_without_stopping_it(self):
+        import types
+        credential = "b" * 32
+        full_id = "a" * 64
+        volume = "dhole-agent-prod2_browser-profiles"
+        existing = {
+            "Id": full_id,
+            "State": {"Status": "running"},
+            "Config": {
+                "Image": "dhole/agent-workers:standby-inspector-e4168dc0d896",
+            },
+        }
+        with patch.object(auth, "guard_standby", return_value=(None, volume)), \
+             patch.object(auth.executor, "find_running_generation", return_value=(
+                 "prod1", {"State": {"Status": "running"}, "Image": "worker-image"})), \
+             patch.object(auth, "find_viewer", return_value=full_id[:12]), \
+             patch.object(auth, "inspect_existing",
+                          return_value=(full_id[:12], existing)), \
+             patch.object(auth, "require_exclusive_browser_volume") as ownership, \
+             patch.object(auth, "safe_run") as destructive, \
+             patch.object(auth.subprocess, "run",
+                          return_value=types.SimpleNamespace(returncode=0)):
+            auth.prepare("prod2", credential, ROOT / "docker/start-standby-auth.sh")
+            ownership.assert_called_once_with(volume, full_id)
+            destructive.assert_not_called()
+
     def test_exclusive_volume_guard_rejects_other_running_container(self):
         import json
         volume = "dhole-agent-prod2_browser-profiles"
