@@ -137,7 +137,8 @@ public sealed class AgentExecutionOrchestrator(
                 ? await circuitBreaker.GetAsync(provider.Id, cancellationToken)
                 : null;
             if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
-                && !(verificationOnly && currentCircuit is { State: "Open" or "Closed", RequiresOperator: true })
+                && !(verificationOnly && currentCircuit?.State == "Open"
+                     && currentCircuit.RequiresOperator)
                 && !await circuitBreaker.TryEnterAsync(provider.Id, execution.Id, cancellationToken))
             {
                 // Denied jobs remain Queued, preserving correlation/snapshots.
