@@ -78,4 +78,42 @@ public sealed class ChromiumStaleSingletonRecoveryTests
         Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, () => false));
         Assert.IsFalse(Directory.Exists(root));
     }
+    [TestMethod]
+    public void PartialOrphanedSingletonSetIsRecoveredWithoutChangingCookies()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "agent-partial-singletons-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "Local State"), "keep-credentials");
+            File.CreateSymbolicLink(Path.Combine(root, "SingletonLock"), "old-container-2000000000");
+            File.CreateSymbolicLink(Path.Combine(root, "SingletonSocket"),
+                "/tmp/missing-socket-" + Guid.NewGuid().ToString("N"));
+
+            Assert.IsTrue(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, out var reason), reason);
+            Assert.AreEqual("keep-credentials", File.ReadAllText(Path.Combine(root, "Local State")));
+            Assert.IsNull(new FileInfo(Path.Combine(root, "SingletonLock")).LinkTarget);
+            var archived = Directory.GetDirectories(root, ".dhole-orphaned-singletons-*");
+            Assert.AreEqual(1, archived.Length);
+            Assert.IsNotNull(new FileInfo(Path.Combine(archived[0], "SingletonSocket")).LinkTarget);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    public void ActiveBrowserFlagOrRegularSingletonNeverRecovered()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "agent-singleton-guard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.CreateSymbolicLink(Path.Combine(root, "SingletonLock"), "old-container-2000000000");
+            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, () => true));
+            File.WriteAllText(Path.Combine(root, "SingletonSocket"), "regular-file");
+            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, out _));
+            Assert.IsNotNull(new FileInfo(Path.Combine(root, "SingletonLock")).LinkTarget);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
 }

@@ -15,6 +15,7 @@ using Dhole.Agent.Infrastructure.Providers.Maersk.Network;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Parsers;
 using Dhole.Agent.Infrastructure.Providers.Maersk.Resolvers;
 using Microsoft.Playwright;
+using Microsoft.Extensions.Logging;
 
 namespace Dhole.Agent.Infrastructure.Providers.Maersk;
 
@@ -32,7 +33,8 @@ public sealed class MaerskAgentProvider(
     ICredentialProtector credentialProtector,
     ISecretProvider legacySecrets,
     IBrowserProfileRepository browserProfiles,
-    IUnitOfWork unitOfWork) : IAgentProvider
+    IUnitOfWork unitOfWork,
+    ILogger<MaerskAgentProvider> logger) : IAgentProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string CurrentMaerskBookingUrl = "https://www.maersk.com/book/";
@@ -165,8 +167,13 @@ public sealed class MaerskAgentProvider(
         {
             openedSession = await OpenWithOrphanedSingletonRecoveryAsync(descriptor, cancellationToken);
         }
-        catch (PlaywrightException)
+        catch (PlaywrightException ex)
         {
+            logger.LogError(ex,
+                "MAERSK_CHROMIUM_LAUNCH_FAILED generation={Generation} execution={ExecutionId} profile={ProfilePath}. " +
+                "Inspect the browser process, Xvfb, filesystem permissions and singleton links; browser data preserved.",
+                Environment.GetEnvironmentVariable("Browser__Generation") ?? "legacy",
+                context.Execution.Id, descriptor.StoragePath);
             // Browser launch failed locally even after its single bounded retry.
             // Do not archive the profile without an explicit technical repair.
             if (browserProfile is not null)
@@ -178,8 +185,12 @@ public sealed class MaerskAgentProvider(
                 "maersk_chromium_launch_failed",
                 "Chromium could not open the existing persistent profile. The session files were preserved.");
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            logger.LogError(ex,
+                "MAERSK_CHROMIUM_PROFILE_IO_FAILED generation={Generation} execution={ExecutionId} profile={ProfilePath}.",
+                Environment.GetEnvironmentVariable("Browser__Generation") ?? "legacy",
+                context.Execution.Id, descriptor.StoragePath);
             if (browserProfile is not null)
             {
                 browserProfile.SetStatus(BrowserProfileStatus.Error);

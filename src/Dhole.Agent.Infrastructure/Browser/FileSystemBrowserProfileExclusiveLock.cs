@@ -14,6 +14,7 @@ public sealed class FileSystemBrowserProfileExclusiveLock(
     IOptions<BrowserOptions> options) : IBrowserProfileExclusiveLock
 {
     private readonly string _root = Path.GetFullPath(options.Value.ProfilesPath);
+    private readonly string? _generation = options.Value.Generation;
     private readonly TimeSpan _wait = TimeSpan.FromSeconds(
         Math.Clamp(options.Value.ProfileLockWaitSeconds, 1, 30));
 
@@ -22,6 +23,7 @@ public sealed class FileSystemBrowserProfileExclusiveLock(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerCode);
+        BrowserGenerationIsolation.EnsureBound(_root, _generation);
 
         var safeProvider = string.Concat(providerCode.ToUpperInvariant()
             .Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'));

@@ -4,6 +4,8 @@ public sealed class BrowserOptions
 {
     public const string SectionName = "Browser";
     public string ProfilesPath { get; set; } = "/data/browser-profiles";
+    // Each Docker production generation binds its persistent volume to its own identity.
+    public string? Generation { get; set; };
     public bool Headless { get; set; } = false;
     public int DefaultTimeoutMs { get; set; } = 60_000;
     public int ProfileLockWaitSeconds { get; set; } = 5;
