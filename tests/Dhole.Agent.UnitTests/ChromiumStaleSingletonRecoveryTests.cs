@@ -25,7 +25,7 @@ public sealed class ChromiumStaleSingletonRecoveryTests
             File.CreateSymbolicLink(Path.Combine(root, "SingletonCookie"),
                 "/tmp/missing-chromium-cookie-" + Guid.NewGuid().ToString("N"));
 
-            Assert.IsTrue(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root));
+            Assert.IsTrue(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, out var diagnostic), diagnostic);
             Assert.IsFalse(File.Exists(Path.Combine(root, "SingletonLock")));
             Assert.IsNull(new FileInfo(Path.Combine(root, "SingletonLock")).LinkTarget);
             var archive = Directory.GetDirectories(root, ".dhole-orphaned-singletons-*");
