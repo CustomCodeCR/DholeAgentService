@@ -1,0 +1,99 @@
+name: Retire historical prod1 containers after prod2 takeover
+
+# One-way removal of obsolete prod1 *containers* only; volumes and sessions
+# are retained for offline archival. Never impacts active prod2 or dhole API.
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/retire-prod1-after-prod2.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Confirm prod2 is sole live Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location(
+              "live_owner", Path("scripts/production-generation-executor.py"))
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          active, info=module.find_running_generation()
+          if active != "prod2" or info["State"]["Status"] != "running":
+              raise SystemExit("RETIRED_PROD1_REFUSED: prod2 must be sole active Worker")
+          print("RETIRED_PROD1_ACTIVE_WORKER_VERIFIED=prod2")
+          PY
+
+      - name: Remove only historical prod1 runtime containers (never volumes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          project=dhole-agent-prod1
+          mapfile -t ids < <(docker ps -aq --filter "label=com.docker.compose.project=$project")
+          if [[ "${#ids[@]}" -eq 0 ]]; then
+            echo 'RETIRED_PROD1_ALREADY_REMOVED'
+            exit 0
+          fi
+          # Check all labels: never remove an unexpected member of this project.
+          allowed='^(dhole-agent-api-prod1|dhole-agent-workers-prod1|hermes-agent-prod1|hermes-config-init)$'
+          for id in "${ids[@]}"; do
+            labels="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
+            [[ "${labels%%|*}" == "$project" && "${labels#*|}" =~ $allowed ]] || {
+              echo 'RETIRED_PROD1_REFUSED: unrecognized component in historical project' >&2
+              exit 2
+            }
+            if [[ "${labels#*|}" == dhole-agent-workers-prod1 &&
+                  "$(docker inspect -f '{{.State.Status}}' "$id")" == running ]]; then
+              echo 'RETIRED_PROD1_REFUSED: historical Worker still active' >&2
+              exit 2
+            fi
+          done
+          # Stop only old APIs/Hermes; the current prod2 Worker is untouched.
+          for id in "${ids[@]}"; do
+            if [[ "$(docker inspect -f '{{.State.Status}}' "$id")" == running ]]; then
+              docker stop --time 40 "$id" >/dev/null
+            fi
+          done
+          docker rm "${ids[@]}" >/dev/null
+          remaining="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
+          [[ -z "$remaining" ]] || {
+            echo 'RETIRED_PROD1_REFUSED: historical containers still exist' >&2
+            exit 2
+          }
+          echo 'RETIRED_PROD1_CONTAINERS_REMOVED=success'
+          echo 'RETIRED_PROD1_VOLUMES_PRESERVED=browser-profiles,agent-keys,hermes-state'
+
+      - name: Recheck sole live generation after retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location(
+              "live_owner", Path("scripts/production-generation-executor.py"))
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          active,info=module.find_running_generation()
+          assert active=="prod2" and info["State"]["Status"]=="running"
+          print("RETIRED_PROD1_VERIFIED active=prod2 old_containers=0")
+          PY
