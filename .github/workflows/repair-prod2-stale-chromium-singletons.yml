@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           id="$(docker ps -q --filter label=com.docker.compose.project=dhole-agent-prod2 --filter label=com.docker.compose.service=dhole-agent-workers)"
           [[ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" == 1 ]] || exit 2
-          docker exec "$id" bash -s <<'INNER'
+          docker exec -i "$id" bash -s <<'INNER'
           set -euo pipefail
           root=/data/browser-profiles
           credential=70ccf773c95a4ed899058df77cd1c126
