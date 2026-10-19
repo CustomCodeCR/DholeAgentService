@@ -1,0 +1,40 @@
+name: Observe current active generation for no-backfill release
+
+# Safe, read-only one-time observation (no worker restart, no circuit reset).
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/observe-active-generation-no-backfill.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Verify a unique live generation Worker without changing anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import importlib.util
+          spec = importlib.util.spec_from_file_location(
+              "generation_executor", Path("scripts/production-generation-executor.py"))
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          active, worker = module.find_running_generation()
+          print("NO_BACKFILL_OWNER_VERIFIED=" + active)
+          print("NO_BACKFILL_OWNER_CONTAINER_STATE=" + worker["State"]["Status"])
+          PY
