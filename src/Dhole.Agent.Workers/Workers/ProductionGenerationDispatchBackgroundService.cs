@@ -335,16 +335,26 @@ public sealed class ProductionGenerationDispatchBackgroundService(
 
     private async Task DispatchPendingAsync(ServiceDbContext db, CancellationToken ct)
     {
-        // A previously queued handoff to an older generation must not be
-        // released after a newer Worker becomes active.
+        // Suppress pending requests for historical environments. Only
+        // future numbered generations are valid destinations.
         await QueryAsync(db, """
             UPDATE agent.runtime_generation_requests request
             SET status='Rejected', diagnostic_code='generation_retired',
                 completed_at_utc=now()
             FROM agent.runtime_generation_state active
             WHERE active.singleton=true AND request.status='Pending'
-              AND (request.target_generation='prod' OR
-                (request.target_generation ~ '^prod[1-9][0-9]*
+              AND (
+                request.target_generation='prod' OR
+                EXISTS (
+                  SELECT 1 FROM agent.runtime_generations g
+                  WHERE g.name=request.target_generation AND g.name <> 'prod'
+                    AND substring(g.name from 5)::numeric <=
+                        CASE WHEN active.active_generation='prod' THEN 0
+                             ELSE substring(active.active_generation from 5)::numeric END
+                ))
+            RETURNING request.id::text
+            """, ct);
+        // Atomic claim, safe across multiple worker replicas.
         var fields = await QueryRowsAsync(db, """
             WITH candidate AS (
               SELECT id FROM agent.runtime_generation_requests
