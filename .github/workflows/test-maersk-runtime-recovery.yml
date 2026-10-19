@@ -1,0 +1,27 @@
+name: Validate Maersk runtime owner recovery
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - scripts/maersk-runtime-recovery.sh
+      - scripts/tests/test-maersk-runtime-recovery.sh
+      - .github/workflows/test-maersk-runtime-recovery.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify fail-closed Worker ownership with fake Docker only
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/maersk-runtime-recovery.sh
+          bash -n scripts/tests/test-maersk-runtime-recovery.sh
+          bash scripts/tests/test-maersk-runtime-recovery.sh
