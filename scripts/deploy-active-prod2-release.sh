@@ -14,7 +14,7 @@ backup_root="${4:?Durable backup root required}"
 # Prepared deploy config must carry the exact effective JWT options of the
 # running primary API; the host's /opt/dhole/.env does not declare those keys.
 # Update only the protected temporary env file, before any container mutation.
-python3 scripts/prepare-prod2-jwt-env.py "$runtime"
+python3 scripts/prepare-prod1-jwt-env.py "$runtime"
 export DHOLE_ENV_FILE="$runtime" DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest AGENT_GENERATION=prod2
 primary=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.services.yml" -p dhole)
 active=(docker compose --env-file "$runtime" -f "$system/deploy/docker-compose.agent-generation.yml" -p dhole-agent-prod2 --profile activated)
@@ -66,7 +66,7 @@ docker run --rm --pull never --network dhole "$probe_image" \
   -fsS --max-time 8 http://dhole-dhole-agent-api-1:8080/health >/dev/null ||
   fail 'primary API baseline health failed before deployment'
 docker run --rm --pull never --network dhole "$probe_image" \
-  -fsS --max-time 8 http://dhole-dhole-agent-api-1:8080/health >/dev/null ||
+  -fsS --max-time 8 http://agent-api-prod2:8080/health >/dev/null ||
   fail 'prod2 API baseline health failed before deployment'
 echo 'PROD2_HOTFIX_HEALTH_PROBE_BASELINE_VERIFIED'
 [[ "$(df -Pk / | awk 'NR==2{print $4}')" -ge 2097152 ]] || fail 'root filesystem too full'
