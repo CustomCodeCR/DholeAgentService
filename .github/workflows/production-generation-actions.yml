@@ -130,6 +130,9 @@ jobs:
           bash .dhole-system/deploy/prepare-environments.sh \
             /opt/dhole/.env "$RUNNER_TEMP/generation-actions" >/dev/null
           chmod 600 "$RUNNER_TEMP/generation-actions/.env.production"
+          # Inherit actual JWT settings from the unique healthy primary API.
+          # The helper never logs or copies browser sessions or bearer tokens.
+          python3 scripts/prepare-prod1-jwt-env.py "$RUNNER_TEMP/generation-actions/.env.production"
           echo "GENERATION_ACTIONS_ENV=$RUNNER_TEMP/generation-actions/.env.production" >> "$GITHUB_ENV"
 
       - name: Claim authorized DholeWeb request using PostgreSQL
