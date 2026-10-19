@@ -105,12 +105,12 @@ public sealed class AgentScheduleDispatcherWorker(
                 var overdue = MaerskScheduleCatchUpPolicy.IsOverdue(effectiveDue.Value, now);
                 if (blocked || overdue)
                 {
-                    var next = calculator.GetNext(schedule, now);
-                    schedule.SkipMissedOccurrence(next);
+                    var skippedNext = calculator.GetNext(schedule, now);
+                    schedule.SkipMissedOccurrence(skippedNext);
                     await unitOfWork.SaveChangesAsync(cancellationToken);
                     logger.LogInformation(
                         "MAERSK_SCHEDULE_MISSED_SKIPPED schedule={ScheduleId} due={DueAt} blocked={Blocked} overdue={Overdue} next={NextExecutionAt} outstanding={Outstanding}",
-                        schedule.Id, effectiveDue.Value, blocked, overdue, next, outstanding);
+                        schedule.Id, effectiveDue.Value, blocked, overdue, skippedNext, outstanding);
                     continue;
                 }
 
