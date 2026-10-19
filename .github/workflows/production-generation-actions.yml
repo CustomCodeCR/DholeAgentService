@@ -157,14 +157,26 @@ jobs:
           REQUEST_ID: ${{ inputs.action_request_id }}
         run: |
           set -euo pipefail
-          python3 scripts/production-generation-actions.py \
+          diagnostic_file="$(mktemp)"
+          chmod 600 "$diagnostic_file"
+          trap 'rm -f "$diagnostic_file"' EXIT
+          if python3 scripts/production-generation-actions.py \
             --operation "$SELECTED_OPERATION" \
             --target "${TARGET_GENERATION:-}" \
             --confirmation "${OPERATOR_CONFIRMATION:-}" \
             --action-request-id "${REQUEST_ID:-}" \
             --system-dir .dhole-system \
             --env-file "$GENERATION_ACTIONS_ENV" \
-            --state-dir "$HOME/.local/state/dhole-production-generation"
+            --state-dir "$HOME/.local/state/dhole-production-generation" 2>"$diagnostic_file"; then
+            echo 'diagnostic=github_workflow_confirmed' >> "$GITHUB_OUTPUT"
+          else
+            # Never echo subprocess stderr: accept one known machine-safe code.
+            code="$(sed -n 's/^GENERATION_ACTIONS_REFUSED: \\([a-z][a-z0-9_]*\\)$/\\1/p' "$diagnostic_file" | tail -n1)"
+            [[ "$code" =~ ^[a-z][a-z0-9_]{2,63}$ ]] || code=guarded_command_failed
+            echo "diagnostic=$code" >> "$GITHUB_OUTPUT"
+            echo "GENERATION_ACTIONS_REFUSED: $code" >&2
+            exit 1
+          fi
 
       - name: Persist web request result from actual runner outcome
         if: ${{ always() && inputs.action_request_id != '' && steps.claim.outcome == 'success' }}
@@ -174,6 +186,7 @@ jobs:
           SELECTED_OPERATION: ${{ inputs.operation }}
           TARGET_GENERATION: ${{ inputs.generation }}
           EXECUTION_OUTCOME: ${{ steps.execute.outcome }}
+          EXECUTION_DIAGNOSTIC: ${{ steps.execute.outputs.diagnostic }}
         run: |
           set -euo pipefail
           status=Failed
@@ -181,4 +194,5 @@ jobs:
           python3 scripts/production-generation-web-action-state.py \
             --id "$REQUEST_ID" --operation "$SELECTED_OPERATION" \
             --generation "$TARGET_GENERATION" --status "$status" \
+            --diagnostic-code "${EXECUTION_DIAGNOSTIC:-}" \
             --env-file "$GENERATION_ACTIONS_ENV"
