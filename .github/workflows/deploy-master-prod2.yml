@@ -2,6 +2,7 @@ name: Deploy Dhole Agent - Production from master (prod2)
 
 # Guarded deployment targeting only the verified active prod2 Worker.
 # It must refuse if a different generation owns the queue.
+# Release 2026-10-19: recover orphaned Chromium singleton links without altering Maersk session data.
 # Release 2026-10-12: verified Maersk reset rejection (HTTP 409) PR #114.
 # Release 2026-10-12: original Maersk session verification deadlock fix PR #119.
 # Retry verified original-session release with absent legacy-worker preflight PR #121.
