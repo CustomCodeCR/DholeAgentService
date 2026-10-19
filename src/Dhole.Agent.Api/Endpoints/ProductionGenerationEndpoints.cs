@@ -166,6 +166,11 @@ internal static class ProductionGenerationEndpoints
             if (!ValidGenerationName(request.Name) || request.Name == "prod")
                 return Results.BadRequest(new { error = "Generation must be prod followed by a positive integer." });
             await EnsureSchemaAsync(db, ct);
+            var activeGeneration = await ScalarAsync(db,
+                "SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true", ct);
+            if (!ProductionGenerationOrder.IsForward(request.Name, activeGeneration))
+                return Results.Conflict(new { code = "generation_retired_or_not_forward",
+                    error = "Only generations numbered above the active Worker may be registered." });
             try
             {
                 await ExecuteAsync(db, """
@@ -204,8 +209,9 @@ internal static class ProductionGenerationEndpoints
             await EnsureSchemaAsync(db, ct);
             var active = await ScalarAsync(db,
                 "SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true", ct);
-            if (active == request.TargetGeneration)
-                return Results.Conflict(new { error = "Target generation is already active." });
+            if (!ProductionGenerationOrder.IsForward(request.TargetGeneration, active))
+                return Results.Conflict(new { code = "generation_retired_or_not_forward",
+                    error = "A retired or active generation cannot be selected as a destination." });
             var registered = await ScalarAsync(db,
                 "SELECT name FROM agent.runtime_generations WHERE name=@name", ct,
                 ("name", request.TargetGeneration));
