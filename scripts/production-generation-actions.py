@@ -24,7 +24,9 @@ def numbered_targets(active, candidate_names):
     n = int(active[4:]) if active != "prod" and NAME.fullmatch(active) else 0
     valid = {v for v in candidate_names if NAME.fullmatch(v) and
              len(v) <= 64 and v != active}
-    return sorted(valid, key=lambda v: (int(v[4:]) <= n, int(v[4:])))
+    # Never wrap to an older, retired environment.
+    return sorted((v for v in valid if int(v[4:]) > n),
+                  key=lambda v: int(v[4:]))
 
 
 def load_module(name, path):
@@ -216,7 +218,7 @@ def main():
     if args.operation == "attest":
         if not args.action_request_id:
             raise ActionRefused("web_authorization_id_required")
-        if not NAME.fullmatch(args.target) or args.target == active:
+        if not NAME.fullmatch(args.target) or int(args.target[4:]) <= (int(active[4:]) if active != "prod" else 0):
             raise ActionRefused("invalid_attestation_target")
         call([
             sys.executable,
@@ -232,7 +234,7 @@ def main():
 
     if args.operation in ("provision-check", "provision"):
         target = args.target
-        if not NAME.fullmatch(target) or len(target) > 64 or target == active:
+        if not NAME.fullmatch(target) or len(target) > 64 or int(target[4:]) <= (int(active[4:]) if active != "prod" else 0):
             raise ActionRefused("invalid_or_active_provision_target")
         system = Path(args.system_dir)
         if not (system / "deploy/docker-compose.agent-generation.yml").is_file():
@@ -284,7 +286,7 @@ def main():
         return
 
     target = args.target
-    if not NAME.fullmatch(target) or len(target) > 64 or target == active:
+    if not NAME.fullmatch(target) or len(target) > 64 or int(target[4:]) <= (int(active[4:]) if active != "prod" else 0):
         raise ActionRefused("invalid_or_active_target")
     preflight(target, active, state, env_file, policy)
     if args.operation == "preflight":
