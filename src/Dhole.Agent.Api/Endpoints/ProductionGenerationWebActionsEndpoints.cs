@@ -25,6 +25,7 @@ internal static class ProductionGenerationWebActionsEndpoints
                 ('inspect','reconcile','provision-check','provision','attest',
                  'preflight','switch','technical-recovery')),
             actor_id uuid NOT NULL,
+            reason text NOT NULL DEFAULT '',
             confirmed_provider_access boolean NOT NULL DEFAULT false,
             status text NOT NULL CHECK (status IN
                 ('Pending','Dispatched','Running','Completed','Rejected','Failed')),
@@ -40,7 +41,7 @@ internal static class ProductionGenerationWebActionsEndpoints
 
     internal sealed record ActionRequest(
         string Operation, string Generation, bool ConfirmedProviderAccess = false,
-        bool ConfirmedHandoff = false);
+        bool ConfirmedHandoff = false, string? Reason = null);
 
     public static void MapWebActions(this RouteGroupBuilder group)
     {
@@ -74,7 +75,8 @@ internal static class ProductionGenerationWebActionsEndpoints
             var allowed = request.Operation is
                 "inspect" or "reconcile" or "provision-check" or "provision" or
                 "attest" or "preflight" or "switch" or "technical-recovery";
-            if (!allowed || !ValidGeneration(request.Generation))
+            if (!allowed || !ValidGeneration(request.Generation) ||
+                (request.Reason?.Length ?? 0) > 500)
                 return Results.BadRequest(new { code = "invalid_generation_action" });
 
             if (request.Operation == "attest" && !request.ConfirmedProviderAccess)
@@ -171,10 +173,11 @@ internal static class ProductionGenerationWebActionsEndpoints
             {
                 await ExecuteAsync(db, """
                     INSERT INTO agent.runtime_generation_web_actions
-                        (id,generation,operation,actor_id,confirmed_provider_access,status)
-                    VALUES (@id,@generation,@operation,@actor,@confirmed,'Pending')
+                        (id,generation,operation,actor_id,reason,confirmed_provider_access,status)
+                    VALUES (@id,@generation,@operation,@actor,@reason,@confirmed,'Pending')
                     """, ct, ("id", id), ("generation", request.Generation),
                     ("operation", request.Operation), ("actor", actor),
+                    ("reason", request.Reason?.Trim() ?? ""),
                     ("confirmed", request.ConfirmedProviderAccess));
             }
             catch (DbException)
