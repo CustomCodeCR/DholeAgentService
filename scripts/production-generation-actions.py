@@ -38,11 +38,32 @@ def executor():
     return load_module("guarded_generation_executor", "scripts/production-generation-executor.py")
 
 
+# Only allowlisted machine-readable diagnostics can leave a subprocess.
+# Raw Docker/env/HTTP outputs may contain credentials and are never echoed.
+SAFE_FAILURE_CODES = {
+    "GENERATION_INVALID_NAME", "GENERATION_INVALID_MODE",
+    "GENERATION_MANIFEST_OR_ENV_MISSING", "GENERATION_API_CONFIG_INCOMPLETE",
+    "GENERATION_EXISTING_INCOMPLETE", "GENERATION_HERMES_NOT_RUNNING",
+    "GENERATION_ACTIVE_WORKER_PROTECTED", "GENERATION_MULTIPLE_STANDBY_WORKERS",
+    "GENERATION_ACTIVE_STANDBY_WORKER_REFUSED", "GENERATION_REQUIRED_SERVICE_MISSING",
+    "GENERATION_WORKER_PERSISTENCE_MISSING", "GENERATION_WORKER_NOVNC_CONFIG_MISSING",
+    "GENERATION_WORKER_MISSING", "GENERATION_WORKER_UNEXPECTEDLY_ACTIVE",
+    "GENERATION_INFRASTRUCTURE_HEALTH_FAILED", "GENERATION_INSUFFICIENT_ROOT_SPACE",
+    "GENERATION_PROVIDER_AUTHORIZATION_NOT_VERIFIED",
+}
+def safe_failure_code(stdout, stderr):
+    failures = []
+    for line in (stderr + "\n" + stdout).splitlines():
+        match = re.match(r"^(GENERATION_[A-Z0-9_]+)(?:[ :]|$)", line.strip())
+        if match and match.group(1) in SAFE_FAILURE_CODES:
+            failures.append(match.group(1).lower())
+    # The explicit final failure supersedes informational preceding lines.
+    return failures[-1] if failures else "guarded_command_failed"
+
 def call(argv, timeout=210):
     outcome = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     if outcome.returncode:
-        # Never leak database, Docker or provider output in Actions logs.
-        raise ActionRefused("guarded_command_failed")
+        raise ActionRefused(safe_failure_code(outcome.stdout, outcome.stderr))
     return outcome.stdout.strip()
 
 
