@@ -46,38 +46,62 @@ get_flag() {
 
 api_id="$(container_id "$project" dhole-agent-api)"
 worker_id="$(container_id "$project" dhole-agent-workers)"
-# A missing or duplicate API/Worker prevents proof that the breaker is enabled.
+# API ownership remains strict. In production the old `prod` Worker may
+# legitimately have been removed after prod1/prodN acquired the queue.
 [[ "$(printf '%s\n' "$api_id" | sed '/^$/d' | wc -l)" -eq 1 ]] ||
   die 'Expected exactly one Agent API container'
-[[ "$(printf '%s\n' "$worker_id" | sed '/^$/d' | wc -l)" -eq 1 ]] ||
-  die 'Expected exactly one Agent Worker container'
-for id in "$api_id" "$worker_id"; do
-  if [[ "$(get_flag "$id" MaerskCircuit__Enabled)" != 1 ]]; then
-    echo 'AGENT_RUNTIME_RECOVERY_INACTIVE: circuit disabled; no automatic rebuild'
-    exit 0
-  fi
-done
+legacy_count="$(printf '%s\n' "$worker_id" | sed '/^$/d' | wc -l)"
+[[ "$legacy_count" -le 1 ]] || die 'Duplicate primary Agent Worker containers'
 
-# The primary `prod` Worker is intentionally stopped while a verified prodN
-# generation owns the queue. Recovery must NOT resurrect it: that would create
-# two independent consumers and defeat the protected one-owner handoff.
-# Read Docker's actual running Workers, never only the generation DB label.
+# Discover all running generation Workers, not dormant/created containers.
+# A handoff must have exactly one owning Worker; do not revive the old one.
 standby_worker_active=0
+standby_worker_id=""
 if [[ "$environment" == production ]]; then
   while IFS= read -r running_id; do
     [[ -n "$running_id" ]] || continue
     labels="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$running_id")"
     generation_project="${labels%%|*}"
     generation_service="${labels#*|}"
-    if [[ "$generation_project" =~ ^dhole-agent-prod[1-9][0-9]*$ &&
-          ( "$generation_service" == dhole-agent-workers ||
-            "$generation_service" == dhole-agent-workers-prod1 ) ]]; then
-      standby_worker_active=1
-      echo "AGENT_RUNTIME_RECOVERY_ACTIVE_STANDBY_PROTECTED generation=$generation_project"
-      break
+    if [[ "$generation_project" =~ ^dhole-agent-prod[1-9][0-9]*$ ]]; then
+      generation_name="${generation_project#dhole-agent-}"
+      if [[ "$generation_service" == dhole-agent-workers ||
+            "$generation_service" == "dhole-agent-workers-$generation_name" ]]; then
+        standby_worker_active=$((standby_worker_active + 1))
+        standby_worker_id="$running_id"
+        echo "AGENT_RUNTIME_RECOVERY_ACTIVE_STANDBY_PROTECTED generation=$generation_project"
+      fi
     fi
   done < <(docker ps -q --filter 'label=com.docker.compose.project')
+  (( standby_worker_active <= 1 )) ||
+    die 'Multiple running generation Workers; recovery refuses ambiguous ownership'
 fi
+
+if (( standby_worker_active == 1 )); then
+  # The old project may contain zero or one stopped Worker; both are valid.
+  if (( legacy_count == 1 )); then
+    legacy_status="$(state_of "$worker_id")"
+    [[ "${legacy_status%%|*}" != running ]] ||
+      die 'Primary and generation Workers are both running'
+  fi
+  circuit_worker_id="$standby_worker_id"
+  (( legacy_count == 1 )) ||
+    echo 'AGENT_RUNTIME_RECOVERY_LEGACY_WORKER_ABSENT_PROTECTED'
+else
+  # Without a running prodN owner the old Worker must still be uniquely
+  # identifiable; never create an unverified new queue owner.
+  (( legacy_count == 1 )) || die 'No uniquely identifiable active generation Worker'
+  circuit_worker_id="$worker_id"
+fi
+
+# Never recover a runtime whose API or actual owning Worker has disabled
+# circuit protection. Inactive/missing old Workers are not queried.
+for id in "$api_id" "$circuit_worker_id"; do
+  if [[ "$(get_flag "$id" MaerskCircuit__Enabled)" != 1 ]]; then
+    echo 'AGENT_RUNTIME_RECOVERY_INACTIVE: circuit disabled; no automatic rebuild'
+    exit 0
+  fi
+done
 
 services=(dhole-agent-api dhole-agent-workers "$hermes_service")
 projects=("$project" "$project" "$infra")
