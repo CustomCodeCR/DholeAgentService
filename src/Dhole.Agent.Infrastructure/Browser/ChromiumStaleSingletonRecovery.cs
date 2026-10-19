@@ -31,7 +31,7 @@ public static partial class ChromiumStaleSingletonRecovery
             // All three must be dangling symbolic links. Never touch regular
             // files or any link whose target is present (including a live socket).
             if (links.Any(link => link.LinkTarget is null ||
-                Path.Exists(link.FullName)))
+                File.Exists(link.FullName) || Directory.Exists(link.FullName)))
                 return false;
 
             var lockTarget = links[0].LinkTarget!;
