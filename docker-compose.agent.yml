@@ -50,6 +50,7 @@ services:
       Hermes__TaskTimeoutSeconds: ${HERMES_AGENT_TASK_TIMEOUT_SECONDS:-300}
       Hermes__MaxParallelTasks: ${HERMES_AGENT_MAX_PARALLEL_TASKS:-2}
       Browser__ProfilesPath: /data/browser-profiles
+      Browser__Generation: prod
       Browser__Headless: "false"
       AGENT_NOVNC_ENABLED: "true"
       AGENT_NOVNC_PORT: "6080"

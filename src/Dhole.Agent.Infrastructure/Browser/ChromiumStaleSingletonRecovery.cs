@@ -1,13 +1,13 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace Dhole.Agent.Infrastructure.Browser;
 
 /// <summary>
-/// Technical recovery for Chromium's three transient singleton symlinks.
-/// Call ONLY while the provider's exclusive profile lock is held, after a
-/// Playwright launch failure. Sessions, cookies, preferences and directories
-/// are never deleted or replaced.
+/// Technical recovery for Chromium's transient singleton symlinks.
+/// Only called while holding the exclusive profile lock after a launch failure.
+/// Never edits authentication, cookies, browser preferences or directories.
 /// </summary>
 public static partial class ChromiumStaleSingletonRecovery
 {
@@ -17,8 +17,13 @@ public static partial class ChromiumStaleSingletonRecovery
     [GeneratedRegex(@"-([0-9]+)$", RegexOptions.CultureInvariant)]
     private static partial Regex LockPidPattern();
 
-    public static bool TryArchiveOrphanedLinks(string profilePath, Func<bool>? chromiumRunning = null) =>
-        TryArchiveOrphanedLinks(profilePath, out _);
+    public static bool TryArchiveOrphanedLinks(string profilePath, Func<bool>? chromiumRunning = null)
+    {
+        if (chromiumRunning?.Invoke() == true)
+            return false;
+
+        return TryArchiveOrphanedLinks(profilePath, out _);
+    }
 
     public static bool TryArchiveOrphanedLinks(string profilePath, out string diagnostic)
     {
@@ -32,29 +37,44 @@ public static partial class ChromiumStaleSingletonRecovery
                 return false;
             }
 
-            var links = Markers.Select(name => new FileInfo(
-                Path.Combine(directory.FullName, name))).ToArray();
+            var links = Markers.Select(name =>
+                new FileInfo(Path.Combine(directory.FullName, name))).ToArray();
 
-            // All three must be dangling symbolic links. Never touch regular
-            // files or any link whose target is present (including a live socket).
-            if (links.Any(link => link.LinkTarget is null ||
-                LinkTargetExists(link)))
+            // The lock is positive evidence of Chromium's owner. Never infer
+            // orphaned state from just a socket/cookie or from an ordinary file.
+            if (links[0].LinkTarget is null)
             {
-                diagnostic = "singleton_links_not_orphaned";
+                diagnostic = "singleton_lock_missing_or_regular";
                 return false;
             }
 
-            var lockTarget = links[0].LinkTarget!;
-            var pidMatch = LockPidPattern().Match(lockTarget);
-            if (!pidMatch.Success || !int.TryParse(pidMatch.Groups[1].Value, out var pid)
-                || pid <= 0)
+            foreach (var link in links)
+            {
+                if (link.LinkTarget is null)
+                {
+                    // Chromium may leave only one or two symlinks after a crash.
+                    // Missing entries are safe; a regular file is NOT.
+                    if (Path.Exists(link.FullName))
+                    {
+                        diagnostic = "singleton_marker_not_symlink";
+                        return false;
+                    }
+                }
+                else if (LinkTargetExists(link))
+                {
+                    diagnostic = "singleton_link_target_exists";
+                    return false;
+                }
+            }
+
+            var pidMatch = LockPidPattern().Match(links[0].LinkTarget!);
+            if (!pidMatch.Success ||
+                !int.TryParse(pidMatch.Groups[1].Value, out var pid) || pid <= 0)
             {
                 diagnostic = "invalid_lock_process_id";
                 return false;
             }
 
-            // PID reuse is common after a Worker restart. An unrelated live PID
-            // does not own Chromium's lock. A real browser process does.
             if (ChromiumOwnsPid(pid))
             {
                 diagnostic = "browser_process_still_running";
@@ -63,10 +83,11 @@ public static partial class ChromiumStaleSingletonRecovery
 
             var archive = Path.Combine(directory.FullName,
                 ".dhole-orphaned-singletons-" +
-                DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff", System.Globalization.CultureInfo.InvariantCulture) +
+                DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff",
+                    System.Globalization.CultureInfo.InvariantCulture) +
                 "-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(archive);
-            foreach (var link in links)
+            foreach (var link in links.Where(item => item.LinkTarget is not null))
                 File.Move(link.FullName, Path.Combine(archive, link.Name));
 
             diagnostic = "orphaned_links_archived";
@@ -86,8 +107,6 @@ public static partial class ChromiumStaleSingletonRecovery
 
     private static bool LinkTargetExists(FileInfo link)
     {
-        // .NET File.Exists/Path.Exists on a broken symlink can report the
-        // directory entry itself. Resolve the link target explicitly.
         var target = link.LinkTarget!;
         var resolved = Path.IsPathFullyQualified(target)
             ? target
@@ -102,15 +121,9 @@ public static partial class ChromiumStaleSingletonRecovery
             using var process = Process.GetProcessById(pid);
             return IsChromiumProcessName(process.ProcessName);
         }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            // Unable to establish ownership: do not rewrite the profile.
-            return true;
-        }
+        catch (ArgumentException) { return false; }
+        catch (InvalidOperationException) { return true; }
+        catch (Win32Exception) { return true; }
     }
 
     private static bool IsChromiumProcessName(string name) =>

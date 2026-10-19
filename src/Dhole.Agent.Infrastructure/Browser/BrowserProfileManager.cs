@@ -6,6 +6,7 @@ namespace Dhole.Agent.Infrastructure.Browser;
 public sealed class BrowserProfileManager(IOptions<BrowserOptions> options) : IBrowserProfileManager
 {
     private readonly string _profilesRoot = Path.GetFullPath(options.Value.ProfilesPath);
+    private readonly string? _generation = options.Value.Generation;
     private readonly int _maxRetainedBackups = Math.Clamp(
         options.Value.MaxRetainedProfileBackups, 1, 500);
 
@@ -68,6 +69,7 @@ public sealed class BrowserProfileManager(IOptions<BrowserOptions> options) : IB
     private string BuildStoragePath(string providerCode, Guid credentialId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerCode);
+        BrowserGenerationIsolation.EnsureBound(_profilesRoot, _generation);
 
         var safeProvider = string.Concat(
             providerCode
