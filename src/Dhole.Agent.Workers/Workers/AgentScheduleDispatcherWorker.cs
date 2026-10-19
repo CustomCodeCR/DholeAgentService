@@ -98,16 +98,30 @@ public sealed class AgentScheduleDispatcherWorker(
                     || !await maerskCircuit.CanScheduleAsync(schedule.ProviderId, cancellationToken);
                 var outstanding = await executions.HasOutstandingForScheduleAsync(
                     schedule.Id, cancellationToken);
-                if (blocked || outstanding)
+                // Do not replay schedules that became due during a circuit
+                // restriction or while the Worker was offline. The one-minute
+                // tolerance allows normal dispatcher jitter without replaying
+                // historical searches when the circuit is reopened.
+                var overdue = effectiveDue.Value < now.AddMinutes(-1);
+                if (blocked || overdue)
                 {
-                    // Phase 4: a provider challenge or outstanding execution is
-                    // NOT a dispatch. Preserve NextExecutionAt and LastExecutionAt.
-                    // In particular, a once-only schedule must not be consumed
-                    // while CAPTCHA/403/429 requires operator verification.
-                    // A later tick may dispatch one due execution once unblocked.
+                    var next = calculator.GetNext(schedule, now);
+                    schedule.SkipMissedOccurrence(next);
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    logger.LogInformation(
+                        "MAERSK_SCHEDULE_MISSED_SKIPPED schedule={ScheduleId} due={DueAt} blocked={Blocked} overdue={Overdue} next={NextExecutionAt} outstanding={Outstanding}",
+                        schedule.Id, effectiveDue.Value, blocked, overdue, next, outstanding);
+                    continue;
+                }
+
+                if (outstanding)
+                {
+                    // Do not queue another job while this schedule already has
+                    // an outstanding execution. A stale due time will be advanced
+                    // without dispatch at the next tick.
                     logger.LogDebug(
-                        "MAERSK_SCHEDULE_DEFERRED schedule={ScheduleId} blocked={Blocked} outstanding={Outstanding}",
-                        schedule.Id, blocked, outstanding);
+                        "MAERSK_SCHEDULE_OUTSTANDING schedule={ScheduleId}",
+                        schedule.Id);
                     continue;
                 }
             }
