@@ -38,7 +38,7 @@ public static partial class ChromiumStaleSingletonRecovery
             // All three must be dangling symbolic links. Never touch regular
             // files or any link whose target is present (including a live socket).
             if (links.Any(link => link.LinkTarget is null ||
-                File.Exists(link.FullName) || Directory.Exists(link.FullName)))
+                LinkTargetExists(link)))
             {
                 diagnostic = "singleton_links_not_orphaned";
                 return false;
@@ -82,6 +82,17 @@ public static partial class ChromiumStaleSingletonRecovery
             diagnostic = "filesystem_permission_error";
             return false;
         }
+    }
+
+    private static bool LinkTargetExists(FileInfo link)
+    {
+        // .NET File.Exists/Path.Exists on a broken symlink can report the
+        // directory entry itself. Resolve the link target explicitly.
+        var target = link.LinkTarget!;
+        var resolved = Path.IsPathFullyQualified(target)
+            ? target
+            : Path.GetFullPath(Path.Combine(link.DirectoryName!, target));
+        return Path.Exists(resolved);
     }
 
     private static bool ChromiumOwnsPid(int pid)
