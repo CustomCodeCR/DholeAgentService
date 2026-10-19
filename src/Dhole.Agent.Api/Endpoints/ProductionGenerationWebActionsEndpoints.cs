@@ -103,9 +103,9 @@ internal static class ProductionGenerationWebActionsEndpoints
 
             var active = await ScalarAsync(db,
                 "SELECT active_generation FROM agent.runtime_generation_state WHERE singleton=true", ct);
-            if (request.Operation is "provision" or "provision-check" or "attest" or "preflight" or "switch"
-                && active == request.Generation)
-                return Results.Conflict(new { code = "generation_already_active" });
+            if (request.Operation is "provision" or "provision-check" or "attest" or "preflight" or "switch" or "technical-recovery"
+                && !ProductionGenerationOrder.IsForward(request.Generation, active))
+                return Results.Conflict(new { code = "generation_retired_or_not_forward" });
 
             if (request.Operation is "provision" or "provision-check" or "attest" or "preflight" or "switch")
             {
