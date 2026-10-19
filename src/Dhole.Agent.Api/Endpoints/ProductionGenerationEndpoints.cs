@@ -87,6 +87,7 @@ internal static class ProductionGenerationEndpoints
     public static void MapProductionGenerationEndpoints(this RouteGroupBuilder root)
     {
         var group = root.MapGroup("/runtime-generations");
+        ProductionGenerationWebActionsEndpoints.MapWebActions(group);
         group.MapGet("/", async (ServiceDbContext db, IConfiguration configuration, CancellationToken ct) =>
         {
             await EnsureSchemaAsync(db, ct);
