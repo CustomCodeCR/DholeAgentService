@@ -53,7 +53,7 @@ public sealed class ChromiumStaleSingletonRecoveryTests
                 "/tmp/missing-chromium-socket-" + Guid.NewGuid().ToString("N"));
             File.CreateSymbolicLink(Path.Combine(root, "SingletonCookie"),
                 "/tmp/missing-chromium-cookie-" + Guid.NewGuid().ToString("N"));
-            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root));
+            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, () => false));
             Assert.AreEqual("not-a-symlink", File.ReadAllText(Path.Combine(root, "SingletonLock")));
 
             File.Delete(Path.Combine(root, "SingletonLock"));
@@ -62,7 +62,7 @@ public sealed class ChromiumStaleSingletonRecoveryTests
             File.WriteAllText(socket, "still-in-use");
             File.Delete(Path.Combine(root, "SingletonSocket"));
             File.CreateSymbolicLink(Path.Combine(root, "SingletonSocket"), socket);
-            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root));
+            Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, () => false));
             Assert.IsTrue(File.Exists(socket));
         }
         finally
@@ -75,7 +75,7 @@ public sealed class ChromiumStaleSingletonRecoveryTests
     public void EmptyAndUnownedProfilesNeverCreateNewDirectories()
     {
         var root = Path.Combine(Path.GetTempPath(), "agent-chromium-empty-" + Guid.NewGuid().ToString("N"));
-        Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root));
+        Assert.IsFalse(ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(root, () => false));
         Assert.IsFalse(Directory.Exists(root));
     }
 }
