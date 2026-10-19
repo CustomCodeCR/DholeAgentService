@@ -1,0 +1,46 @@
+name: Verify production runtime owner (read-only)
+
+# Read-only verification of the current generation-aware runtime recovery code.
+# Does NOT restart Workers, release provider circuit, or touch browser sessions.
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/verify-runtime-generation-owner.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact master code
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Get trusted Compose definitions and private configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/runtime-owner-verify"
+          chmod 700 "$RUNNER_TEMP/runtime-owner-verify"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/runtime-owner-verify" >/dev/null
+          chmod 600 "$RUNNER_TEMP/runtime-owner-verify/.env.production"
+          echo "RUNTIME_OWNER_ENV=$RUNNER_TEMP/runtime-owner-verify/.env.production" >> "$GITHUB_ENV"
+      - name: Assert safe handling of active prodN Worker without mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/test-maersk-runtime-recovery.sh
+          bash scripts/maersk-runtime-recovery.sh \
+            production --check .dhole-system "$RUNTIME_OWNER_ENV"
+          echo 'PRODUCTION_OWNER_READ_ONLY_CHECK_COMPLETED'
