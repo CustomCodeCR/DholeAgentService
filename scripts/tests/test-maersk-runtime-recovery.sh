@@ -30,16 +30,29 @@ cat > "$tmp/bin/docker" <<'FAKE_DOCKER'
 set -euo pipefail
 if [[ "$1" == ps ]]; then
   args="$*"
-  case "$args" in
-    *dhole-agent-api*) echo api-id ;;
-    *dhole-agent-workers*) echo worker-id ;;
-    *hermes-agent-staging*) echo hermes-id ;;
-    *hermes-agent*) echo hermes-id ;;
-    *) exit 1 ;;
-  esac
+  if [[ "$args" == *'label=com.docker.compose.project'* &&
+        "$args" != *'label=com.docker.compose.service'* ]]; then
+    if [[ "${FAKE_ACTIVE_GENERATION:-no}" == yes ]]; then echo prod1-id; fi
+    if [[ "${FAKE_EXTRA_GENERATION:-no}" == yes ]]; then echo prod2-id; fi
+  else
+    case "$args" in
+      *dhole-agent-api*) echo api-id ;;
+      *dhole-agent-workers*)
+        if [[ "${FAKE_LEGACY_MISSING:-no}" != yes ]]; then echo worker-id; fi ;;
+      *hermes-agent-staging*) echo hermes-id ;;
+      *hermes-agent*) echo hermes-id ;;
+      *) exit 1 ;;
+    esac
+  fi
 elif [[ "$1" == inspect ]]; then
   args="$*"
-  if [[ "$args" == *'.Config.Env'* ]]; then
+  if [[ "$args" == *'.Config.Labels'* ]]; then
+    if [[ "$args" == *prod2-id* ]]; then
+      echo 'dhole-agent-prod2|dhole-agent-workers'
+    else
+      echo 'dhole-agent-prod1|dhole-agent-workers-prod1'
+    fi
+  elif [[ "$args" == *'.Config.Env'* ]]; then
     [[ "${FAKE_CIRCUIT:-on}" == on ]] && echo 'MaerskCircuit__Enabled=true' ||
       echo 'MaerskCircuit__Enabled=false'
   elif [[ "$args" == *'.State.Status'* ]]; then
@@ -63,4 +76,23 @@ healthy_output="$(bash "$script" production --check "$tmp" "$tmp/runtime.env")"
 grep -Fq 'AGENT_RUNTIME_RECOVERY_NO_ACTION' <<< "$healthy_output"
 unhealthy_output="$(FAKE_UNHEALTHY=yes bash "$script" staging --check "$tmp" "$tmp/runtime.env")"
 grep -Fq 'AGENT_RUNTIME_RECOVERY_CANDIDATE: staging/dhole-agent-workers' <<< "$unhealthy_output"
+# A verified prod1 Worker may be the only owner after deleting legacy prod.
+owner_output="$(FAKE_LEGACY_MISSING=yes FAKE_ACTIVE_GENERATION=yes \
+  bash "$script" production --check "$tmp" "$tmp/runtime.env")"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_LEGACY_WORKER_ABSENT_PROTECTED' <<< "$owner_output"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_INACTIVE_PRIMARY_WORKER_PRESERVED' <<< "$owner_output"
+grep -Fq 'AGENT_RUNTIME_RECOVERY_NO_ACTION' <<< "$owner_output"
+# A running generation and running legacy Worker would compete for the queue.
+if FAKE_ACTIVE_GENERATION=yes bash "$script" production --check \
+    "$tmp" "$tmp/runtime.env" > "$tmp/duplicate.log" 2>&1; then
+  echo 'Unexpectedly permitted duplicate live Workers' >&2; exit 1
+fi
+grep -Fq 'Primary and generation Workers are both running' "$tmp/duplicate.log"
+# Multiple running numbered generations are also forbidden.
+if FAKE_LEGACY_MISSING=yes FAKE_ACTIVE_GENERATION=yes FAKE_EXTRA_GENERATION=yes \
+    bash "$script" production --check "$tmp" "$tmp/runtime.env" \
+    > "$tmp/multi-generation.log" 2>&1; then
+  echo 'Unexpectedly permitted two numbered generation owners' >&2; exit 1
+fi
+grep -Fq 'Multiple running generation Workers' "$tmp/multi-generation.log"
 echo 'Guarded runtime recovery smoke tests passed.'
