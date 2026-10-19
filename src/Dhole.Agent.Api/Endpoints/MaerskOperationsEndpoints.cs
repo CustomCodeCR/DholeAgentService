@@ -7,6 +7,7 @@ using Dhole.Agent.Application.Runtime;
 using Dhole.Agent.Contracts.Agents;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
+using Dhole.Agent.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -60,8 +61,11 @@ internal static class MaerskOperationsEndpoints
                     x.CreatedAtUtc, x.StartedAt, x.CompletedAt, x.CorrelationId))
                 .ToListAsync(ct);
 
+            var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+            var activeProfilePrefix = MaerskGenerationProfileScope.Prefix(generation);
             var profiles = await db.BrowserProfiles.AsNoTracking()
-                .Where(x => x.ProviderId == provider.Id && !x.IsDeleted)
+                .Where(x => x.ProviderId == provider.Id && !x.IsDeleted
+                            && x.ProfileKey.StartsWith(activeProfilePrefix))
                 .OrderBy(x => x.Name)
                 .Select(x => new MaerskOperationProfileDto(
                     x.Id, x.Name, x.Status.ToString(),

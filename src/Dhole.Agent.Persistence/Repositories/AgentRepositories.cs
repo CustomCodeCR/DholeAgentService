@@ -62,9 +62,20 @@ public sealed class AgentCredentialRepository(ServiceDbContext dbContext)
 public sealed class BrowserProfileRepository(ServiceDbContext dbContext)
     : EfRepository<BrowserProfile, Guid>(dbContext), IBrowserProfileRepository
 {
-    public Task<BrowserProfile?> GetByProviderCredentialAsync(Guid providerId, Guid credentialId, CancellationToken cancellationToken = default)
-        => dbContext.BrowserProfiles.FirstOrDefaultAsync(
-            x => x.ProviderId == providerId && x.CredentialId == credentialId && !x.IsDeleted, cancellationToken);
+    public async Task<BrowserProfile?> GetByProviderCredentialAsync(Guid providerId, Guid credentialId, CancellationToken cancellationToken = default)
+    {
+        var query = dbContext.BrowserProfiles.Where(
+            x => x.ProviderId == providerId && x.CredentialId == credentialId && !x.IsDeleted);
+        var generation = Environment.GetEnvironmentVariable("Browser__Generation");
+        var providerIsMaersk = await dbContext.AgentProviders.AsNoTracking()
+            .AnyAsync(x => x.Id == providerId && x.Code == "MAERSK", cancellationToken);
+        if (providerIsMaersk && !string.IsNullOrWhiteSpace(generation))
+        {
+            var prefix = MaerskGenerationProfileScope.Prefix(generation);
+            query = query.Where(x => x.ProfileKey.StartsWith(prefix));
+        }
+        return await query.FirstOrDefaultAsync(cancellationToken);
+    }
 
     public async Task<IReadOnlyCollection<BrowserProfile>> GetAllAsync(Guid? providerId = null, CancellationToken cancellationToken = default)
     {

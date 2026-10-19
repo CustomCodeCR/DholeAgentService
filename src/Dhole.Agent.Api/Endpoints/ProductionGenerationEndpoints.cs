@@ -31,7 +31,7 @@ internal static class ProductionGenerationEndpoints
             registered_at_utc timestamptz NOT NULL DEFAULT now()
         );
         INSERT INTO agent.runtime_generations(name)
-        VALUES ('prod'), ('prod1') ON CONFLICT (name) DO NOTHING;
+        VALUES ('prod') ON CONFLICT (name) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS agent.runtime_generation_provisions (
             generation text PRIMARY KEY REFERENCES agent.runtime_generations(name),

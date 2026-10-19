@@ -13,6 +13,7 @@ using Dhole.Agent.Contracts.Agents;
 using Dhole.Agent.Contracts.ExtractionProfiles;
 using Dhole.Agent.Domain.Agents;
 using Dhole.Agent.Persistence.DbContexts;
+using Dhole.Agent.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
 namespace Dhole.Agent.Api.Endpoints;
@@ -83,7 +84,19 @@ public static class AgentEndpoints
         extractionProfiles.MapPost("/{profileId:guid}/prompt-preview",async(Guid profileId,AgentPromptPreviewRequest r,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetAgentPromptPreviewQuery(profileId,r),ct),h)).RequireScope(AgentScopeNames.PromptsManage);
 
         var profiles=root.MapGroup("/browser-profiles");
-        profiles.MapGet("/",async(Guid? providerId,IQueryDispatcher d,CancellationToken ct)=>Results.Ok(ApiResponse<IReadOnlyCollection<BrowserProfileDto>>.Ok(await d.DispatchAsync(new GetBrowserProfilesQuery(providerId),ct)))).RequireScope(AgentScopeNames.BrowserProfilesView);
+        profiles.MapGet("/", async (Guid? providerId, IQueryDispatcher d, ServiceDbContext db, CancellationToken ct) =>
+        {
+            var all = await d.DispatchAsync(new GetBrowserProfilesQuery(providerId), ct);
+            var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+            var prefix = MaerskGenerationProfileScope.Prefix(generation);
+            var maerskIds = await db.AgentProviders.AsNoTracking()
+                .Where(p => p.Code == "MAERSK")
+                .Select(p => p.Id).ToListAsync(ct);
+            var visible = all.Where(p =>
+                !maerskIds.Contains(p.ProviderId) ||
+                p.ProfileKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+            return Results.Ok(ApiResponse<IReadOnlyCollection<BrowserProfileDto>>.Ok(visible));
+        }).RequireScope(AgentScopeNames.BrowserProfilesView);
         profiles.MapGet("/{id:guid}",async(Guid id,IQueryDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new GetBrowserProfileByIdQuery(id),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesView);
         profiles.MapPost("/",async(CreateBrowserProfileRequest r,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new CreateBrowserProfileCommand(r.ProviderId,r.CredentialId,r.Name,r.ProfileKey,r.StoragePath,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
         profiles.MapPost("/{id:guid}/authenticate",async(Guid id,ICommandDispatcher d,HttpContext h,CancellationToken ct)=>EndpointResults.FromResult(await d.DispatchAsync(new AuthenticateBrowserProfileCommand(id,h.GetCurrentUserId()),ct),h)).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
@@ -133,9 +146,12 @@ public static class AgentEndpoints
             if (credential is null)
                 return Results.BadRequest(new { code = "maersk_verification_credential_missing" });
 
+            var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+            var profilePrefix = MaerskGenerationProfileScope.Prefix(generation);
             var profileRoot = $"/data/browser-profiles/MAERSK/{credential.Id:N}";
             var profiles = await db.BrowserProfiles
-                .Where(x => x.ProviderId == providerId && !x.IsDeleted && x.IsActive)
+                .Where(x => x.ProviderId == providerId && !x.IsDeleted && x.IsActive
+                            && x.ProfileKey.StartsWith(profilePrefix))
                 .ToListAsync(ct);
             if (profiles.Any(x => x.CredentialId != credential.Id
                                   || x.StoragePath != profileRoot
@@ -174,8 +190,8 @@ public static class AgentEndpoints
             if (profiles.Count == 0)
             {
                 db.BrowserProfiles.Add(BrowserProfile.Create(
-                    providerId, credential.Id, "Maersk prod1 - original Chromium profile",
-                    $"maersk-original-{credential.Id:N}", profileRoot, actorId));
+                    providerId, credential.Id, $"Maersk {generation} - Chromium profile",
+                    $"{profilePrefix}{credential.Id:N}", profileRoot, actorId));
             }
 
             if (definition is null)
@@ -218,11 +234,14 @@ public static class AgentEndpoints
             // browser evidence. A missing profile is a normal, actionable 409.
             // The transactional breaker revalidates these gates on the actual reset.
             var circuitState = await breaker.GetAsync(providerId, ct);
+            var profileGeneration = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+            var activeProfilePrefix = MaerskGenerationProfileScope.Prefix(profileGeneration);
             if (circuitState.State is "Open" or "HalfOpen"
                 && circuitState.RequiresOperator)
             {
                 var registered = await db.BrowserProfiles.AsNoTracking().AnyAsync(
-                    p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive, ct);
+                    p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive
+                         && p.ProfileKey.StartsWith(activeProfilePrefix), ct);
                 if (!registered)
                     return Results.Conflict(new
                     {
@@ -237,6 +256,7 @@ public static class AgentEndpoints
                 var now = DateTime.UtcNow;
                 var verified = await db.BrowserProfiles.AsNoTracking().AnyAsync(
                     p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive
+                         && p.ProfileKey.StartsWith(activeProfilePrefix)
                          && p.Status == BrowserProfileStatus.Authenticated
                          && p.LastLoginAt.HasValue
                          && p.LastLoginAt.Value > restrictedAt
@@ -244,6 +264,7 @@ public static class AgentEndpoints
                          && (!p.SessionExpiresAt.HasValue || p.SessionExpiresAt.Value > now), ct);
                 var unsafeProfile = await db.BrowserProfiles.AsNoTracking().AnyAsync(
                     p => p.ProviderId == providerId && !p.IsDeleted && p.IsActive
+                         && p.ProfileKey.StartsWith(activeProfilePrefix)
                          && (p.Status == BrowserProfileStatus.Blocked
                              || p.Status == BrowserProfileStatus.Expired
                              || p.Status == BrowserProfileStatus.ResetRequested), ct);
