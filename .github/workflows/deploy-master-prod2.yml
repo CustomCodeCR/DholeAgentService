@@ -1,0 +1,143 @@
+name: Deploy Dhole Agent - Production from master (prod2)
+
+# Guarded deployment targeting only the verified active prod2 Worker.
+# It must refuse if a different generation owns the queue.
+# Release 2026-10-12: verified Maersk reset rejection (HTTP 409) PR #114.
+# Release 2026-10-12: original Maersk session verification deadlock fix PR #119.
+# Retry verified original-session release with absent legacy-worker preflight PR #121.
+# Release: preflight checked curl health probe before prod2 switch PR #122.
+# Release 2026-10-12: JSONB semantic auth-only recovery dispatch PR #123.
+# Release 2026-10-12: operator-only original Chromium profile verification PR #135; deploy to active prod2.
+# Release 2026-10-13: detect authenticated Maersk booking-header identity on original profile PR #139.
+# Release 2026-10-13: detect authenticated account on Maersk official homepage and customer-code popover PR #142.
+# Release 2026-10-13: fix offscreen commodity option selection in Maersk searches PR #145.
+# Release 2026-10-15: restore GitHub generation dispatcher credential in protected prod2 runtime.
+# Release 2026-10-16: stage isolated standby Maersk noVNC before generation handoff (PR #151).
+# Release 2026-10-16: verify original standby Maersk Hub account and show username/Customer ID (PR #158).
+# Release 2026-10-16: preserve prod2 isolated noVNC after missing dormant Worker and extend verified operator session PR #164.
+# Release 2026-10-19: audited DholeWeb-origin generation Actions controls and production API endpoints.
+# Release 2026-10-19: skip paused/overdue Maersk schedule occurrences instead of replaying on breaker recovery.
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/deploy-master-prod2.yml
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DEPLOY_MASTER_ACTIVE_PROD2 to confirm this production deployment"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact master source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm master source and explicit release
+        shell: bash
+        env:
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_KIND: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/master ]] || {
+            echo 'MASTER_PROD2_RELEASE_REFUSED: protected master branch required' >&2
+            exit 2
+          }
+          if [[ "$EVENT_KIND" == workflow_dispatch ]]; then
+            [[ "$OPERATOR_CONFIRMATION" == DEPLOY_MASTER_ACTIVE_PROD2 ]] || {
+              echo 'MASTER_PROD2_RELEASE_REFUSED: explicit operator approval required' >&2
+              exit 2
+            }
+          else
+            [[ "$EVENT_KIND" == push && "$GITHUB_SHA" == "$(git rev-parse HEAD)" ]] || exit 2
+          fi
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n scripts/deploy-active-prod2-release.sh
+          bash -n scripts/maersk-phase8-backup.sh
+          python3 -m py_compile scripts/production-generation-executor.py scripts/production-generation-apply-request.py scripts/prepare-prod1-generation-env.py
+          python3 -m unittest discover -s tests -p 'test_prepare_prod1_generation_env.py' -v
+          echo "MASTER_PROD2_RELEASE_SOURCE_VERIFIED sha=$GITHUB_SHA"
+
+      - name: Prepare production infrastructure and private generation dispatcher credentials
+        shell: bash
+        env:
+          GENERATION_ORCHESTRATOR_GITHUB_TOKEN: ${{ secrets.GENERATION_ORCHESTRATOR_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ -n "$GENERATION_ORCHESTRATOR_GITHUB_TOKEN" ]] || {
+            echo 'PROD2_GENERATION_DISPATCH_REFUSED: scoped GitHub Actions secret is missing' >&2
+            exit 2
+          }
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/master-prod2-release"
+          chmod 700 "$RUNNER_TEMP/master-prod2-release"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/master-prod2-release" >/dev/null
+          chmod 600 "$RUNNER_TEMP/master-prod2-release/.env.production"
+          python3 scripts/prepare-prod1-generation-env.py "$RUNNER_TEMP/master-prod2-release/.env.production"
+          echo "MASTER_PROD2_ENV=$RUNNER_TEMP/master-prod2-release/.env.production" >> "$GITHUB_ENV"
+
+      - name: Build API and Worker from master SHA (do not replace latest yet)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$GITHUB_TOKEN" ]] || {
+            echo 'MASTER_PROD2_RELEASE_REFUSED: package token unavailable' >&2
+            exit 2
+          }
+          free_space="$(df -Pk / | awk 'NR==2{print $4}')"
+          [[ "$free_space" =~ ^[0-9]+$ && "$free_space" -ge 5242880 ]] || {
+            echo 'MASTER_PROD2_RELEASE_REFUSED: less than 5 GiB build headroom' >&2
+            exit 2
+          }
+          tag="$(git rev-parse --short=12 HEAD)"
+          echo "MASTER_PROD2_BUILD_REVISION=$tag"
+          docker build --pull --target api-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-api:master-$tag" .
+          free_space="$(df -Pk / | awk 'NR==2{print $4}')"
+          [[ "$free_space" =~ ^[0-9]+$ && "$free_space" -ge 2097152 ]] || {
+            echo 'MASTER_PROD2_RELEASE_REFUSED: less than 2 GiB remaining' >&2
+            exit 2
+          }
+          docker build --pull --target worker-final \
+            --build-arg "GITHUB_ACTOR=$GITHUB_ACTOR" \
+            --secret id=github_token,env=GITHUB_TOKEN \
+            -t "dhole/agent-workers:master-$tag" .
+          docker image inspect "dhole/agent-api:master-$tag" >/dev/null
+          docker image inspect "dhole/agent-workers:master-$tag" >/dev/null
+          echo "MASTER_PROD2_IMAGES_BUILT_FROM_MASTER sha=$GITHUB_SHA"
+
+      - name: Protect prod2 and deploy exact master-built images
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/deploy-active-prod2-release.sh \
+            "$GITHUB_SHA" .dhole-system "$MASTER_PROD2_ENV" \
+            "$HOME/dhole-agent-protected-release-backups"
+          echo "MASTER_PROD2_DEPLOYMENT_CONFIRMED sha=$GITHUB_SHA"
+
+      - name: Record master release result
+        shell: bash
+        run: |
+          echo "DEPLOY_MASTER_COMPLETED master_sha=$GITHUB_SHA active_worker=prod2"
