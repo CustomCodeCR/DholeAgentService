@@ -110,8 +110,8 @@ public sealed class MaerskPhase7AcceptancePostgresTests
                 "encrypted-test-user", "encrypted-test-secret");
             db.AgentCredentials.Add(credential);
             var verifiedProfile = BrowserProfile.Create(
-                seeded.Provider.Id, credential.Id, "verified-profile",
-                Guid.NewGuid().ToString("N"), "/tmp/circuit-verification-test-no-browser");
+                seeded.Provider.Id, credential.Id, "Maersk prod - Chromium profile",
+                "maersk-prod-" + Guid.NewGuid().ToString("N"), "/tmp/circuit-verification-test-no-browser");
             db.BrowserProfiles.Add(verifiedProfile);
             await db.SaveChangesAsync();
             verifiedProfile.Authenticate(DateTime.UtcNow);
