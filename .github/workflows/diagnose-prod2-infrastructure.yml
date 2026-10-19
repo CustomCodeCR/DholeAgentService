@@ -1,0 +1,87 @@
+name: Diagnose existing prod2 infrastructure (read-only)
+
+# One-time diagnostic on creation; later executions are manual only.
+# This workflow does not stop/start a Worker, clear a circuit or touch sessions.
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-prod2-infrastructure.yml]
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: "Existing numbered generation to inspect"
+        required: true
+        type: string
+        default: prod2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Prepare protected read-only context
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -r /opt/dhole/.env ]] || exit 2
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/prod2-diagnostic"
+          chmod 700 "$RUNNER_TEMP/prod2-diagnostic"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/prod2-diagnostic" >/dev/null
+          chmod 600 "$RUNNER_TEMP/prod2-diagnostic/.env.production"
+          python3 scripts/prepare-prod1-jwt-env.py "$RUNNER_TEMP/prod2-diagnostic/.env.production"
+          echo "DIAG_ENV=$RUNNER_TEMP/prod2-diagnostic/.env.production" >> "$GITHUB_ENV"
+      - name: Report only safe infrastructure evidence
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.generation }}
+        run: |
+          set -euo pipefail
+          target="${REQUESTED:-prod2}"
+          [[ "$target" =~ ^prod[1-9][0-9]*$ && "${#target}" -le 64 ]] || exit 2
+          project="dhole-agent-$target"
+          for service in dhole-agent-api hermes-agent dhole-agent-workers; do
+            ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+                    --filter "label=com.docker.compose.service=$service")"
+            count="$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)"
+            printf 'INFRA_DIAGNOSTIC service=%s count=%s\n' "$service" "$count"
+            if [[ "$count" == 1 ]]; then
+              id="$(printf '%s\n' "$ids" | head -n1)"
+              current="$(docker inspect --format '{{.State.Status}}' "$id")"
+              health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-defined{{end}}' "$id")"
+              printf 'INFRA_DIAGNOSTIC service=%s state=%s health=%s\n' "$service" "$current" "$health"
+            fi
+          done
+          for image in dhole/agent-api:latest dhole/agent-workers:latest dhole/hermes-agent:latest curlimages/curl:8.12.1; do
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              echo "INFRA_DIAGNOSTIC image=$image cached=yes"
+            else
+              echo "INFRA_DIAGNOSTIC image=$image cached=no"
+            fi
+          done
+          log="$(mktemp)"
+          chmod 600 "$log"
+          trap 'rm -f "$log"' EXIT
+          if bash scripts/provision-production-generation.sh \
+              "$target" check .dhole-system "$DIAG_ENV" >"$log" 2>&1; then
+            echo 'INFRA_DIAGNOSTIC check=passed'
+          else
+            echo 'INFRA_DIAGNOSTIC check=failed'
+            # Scripts may contain secrets in incidental stderr. Reveal ONLY
+            # known machine markers; never print raw logs or env values.
+            awk '/^GENERATION_[A-Z0-9_]+/ {print $1}' "$log" | sort -u
+            exit 1
+          fi
