@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--operation", choices=sorted(OPERATIONS), required=True)
     parser.add_argument("--generation", required=True)
     parser.add_argument("--status", choices=("Running", "Completed", "Failed"), required=True)
+    parser.add_argument("--diagnostic-code", default="")
     parser.add_argument("--env-file", required=True)
     args = parser.parse_args()
     if str(uuid.UUID(args.id)) != args.id:
@@ -47,6 +48,8 @@ def main():
     else:
         error_code = ("github_workflow_confirmed" if args.status == "Completed"
                       else "github_workflow_failed")
+        if args.status == "Failed" and re.fullmatch(r"[a-z][a-z0-9_]{2,63}", args.diagnostic_code):
+            error_code = args.diagnostic_code
         sql = f"""
             UPDATE agent.runtime_generation_web_actions
             SET status='{args.status}',diagnostic_code='{error_code}',
