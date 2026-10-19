@@ -12,6 +12,7 @@ die() { printf 'Phase 8 backup failed: %s\n' "$*" >&2; exit 1; }
 case "$environment" in
   staging) project="dhole-staging"; network="dhole-staging" ;;
   production) project="dhole"; network="dhole" ;;
+  prod2) project="dhole-agent-prod2"; network="dhole" ;;
   *) die "Invalid environment" ;;
 esac
 
@@ -60,6 +61,14 @@ echo "BACKUP_POSTGRES_MAJOR=$pg_major"
 
 profile_volume="${project}_agent-browser-profiles"
 keys_volume="${project}_agent-data-protection-keys"
+if [[ "$environment" == prod2 ]]; then
+  worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers")"
+  [[ "$(printf '%s\n' "$worker_container" | sed '/^$/d' | wc -l)" == 1 ]] ||
+    die 'Existing prod2 Worker container not uniquely identified'
+  profile_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/browser-profiles"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
+  keys_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/agent-keys"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
+  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing prod2 persistent mounts'
+fi
 docker volume inspect "$profile_volume" >/dev/null || die "Browser-profile volume does not exist: $profile_volume"
 docker volume inspect "$keys_volume" >/dev/null || die "Data-protection volume does not exist: $keys_volume"
 
