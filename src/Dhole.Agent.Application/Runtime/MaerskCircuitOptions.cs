@@ -40,7 +40,8 @@ public sealed record MaerskCircuitSnapshot(
     public bool CanSchedule(DateTime utcNow) => State switch
     {
         "Disabled" => true,
-        "Closed" => true,
+        // Administrative closure does not lift the independent provider hold.
+        "Closed" when !RequiresOperator => true,
         "Open" when !RequiresOperator && OpenUntilUtc <= utcNow => true,
         _ => false
     };
