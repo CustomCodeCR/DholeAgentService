@@ -125,8 +125,6 @@ public sealed class ExecutionPipelineIntegrationTests
         public Task<bool> TryEnterAsync(Guid providerId, Guid executionId, CancellationToken ct = default) => Task.FromResult(true);
         public Task RecordFailureAsync(Guid providerId, Guid executionId, string errorCode, CancellationToken ct = default) => Task.CompletedTask;
         public Task RecordSuccessAsync(Guid providerId, Guid executionId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> CloseAdministrativelyAsync(Guid providerId, Guid actorId, string reason, CancellationToken ct = default)
-            => Task.FromResult(false);
         public Task<bool> ResetByOperatorAsync(Guid providerId, Guid actorId, string reason, bool verifiedWithProvider, CancellationToken ct = default)
             => Task.FromResult(false);
     }
