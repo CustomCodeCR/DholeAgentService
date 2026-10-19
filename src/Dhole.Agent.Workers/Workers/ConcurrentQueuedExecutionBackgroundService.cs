@@ -108,7 +108,7 @@ public sealed class ConcurrentQueuedExecutionBackgroundService(
                 var definition = await definitions.GetByIdAsync(execution.AgentDefinitionId, cancellationToken);
                 var circuit = await maerskCircuit.GetAsync(provider.Id, cancellationToken);
                 if (definition is null
-                    || circuit.State != "Open" || !circuit.RequiresOperator
+                    || circuit.State is not ("Open" or "Closed") || !circuit.RequiresOperator
                     || !MaerskSessionVerification.IsExplicit(execution, definition, provider))
                     continue;
             }
