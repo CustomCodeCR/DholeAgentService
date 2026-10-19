@@ -18,6 +18,7 @@ name: Deploy Dhole Agent - Production from master (prod2)
 # Release 2026-10-16: preserve prod2 isolated noVNC after missing dormant Worker and extend verified operator session PR #164.
 # Release 2026-10-19: audited DholeWeb-origin generation Actions controls and production API endpoints.
 # Release 2026-10-19: skip paused/overdue Maersk schedule occurrences instead of replaying on breaker recovery.
+# Release: bounded stale Chromium singleton recovery for Maersk persistent profiles.
 on:
   push:
     branches: [master]
