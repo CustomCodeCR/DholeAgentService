@@ -1,0 +1,105 @@
+name: Repair orphaned Chromium singleton links on active prod2
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/repair-prod2-stale-chromium-singletons.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Assert prod2 is unique owner and no executions running
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location(
+              "generation", Path("scripts/production-generation-executor.py"))
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          name,container=module.find_running_generation()
+          if name!="prod2" or container["State"]["Status"]!="running":
+              raise SystemExit("CHROMIUM_REPAIR_REFUSED: prod2_not_unique_worker")
+          print("CHROMIUM_REPAIR_PROD2_OWNER_VERIFIED")
+          PY
+          git clone -q --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/chromium-link-repair"
+          chmod 700 "$RUNNER_TEMP/chromium-link-repair"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/chromium-link-repair" >/dev/null
+          chmod 600 "$RUNNER_TEMP/chromium-link-repair/.env.production"
+          python3 - "$RUNNER_TEMP/chromium-link-repair/.env.production" <<'PY'
+          import importlib.util,sys
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location(
+              "sql", Path("scripts/production-generation-apply-request.py"))
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          count=module.sql(module.parse_db(sys.argv[1]),
+              """SELECT count(*) FROM agent."AgentExecutions" WHERE status='Running';""",
+              stage="orphaned_chromium_link_recovery")
+          if str(count).strip()!="0":
+              raise SystemExit("CHROMIUM_REPAIR_REFUSED: running_executions")
+          print("CHROMIUM_REPAIR_NO_RUNNING_EXECUTIONS")
+          PY
+      - name: Archive only orphaned Chromium singleton symlinks
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -q --filter label=com.docker.compose.project=dhole-agent-prod2 --filter label=com.docker.compose.service=dhole-agent-workers)"
+          [[ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" == 1 ]] || exit 2
+          docker exec "$id" bash -s <<'INNER'
+          set -euo pipefail
+          root=/data/browser-profiles
+          credential=70ccf773c95a4ed899058df77cd1c126
+          p="$root/MAERSK/$credential"
+          [[ -d "$p" && ! -L "$p" ]] || { echo CHROMIUM_REPAIR_REFUSED=profile_invalid; exit 2; }
+          lock="$root/.locks/MAERSK/$credential.lock"
+          [[ -f "$lock" && ! -L "$lock" ]] || { echo CHROMIUM_REPAIR_REFUSED=app_lock_missing; exit 2; }
+          command -v flock >/dev/null
+          exec 9>>"$lock"
+          flock -n 9 || { echo CHROMIUM_REPAIR_REFUSED=profile_busy; exit 2; }
+          if ps -eo comm= | grep -Eq '^(chrome|chromium|headless_shell)$'; then
+            echo CHROMIUM_REPAIR_REFUSED=chromium_process_running; exit 2
+          fi
+          for marker in SingletonLock SingletonSocket SingletonCookie; do
+            [[ -L "$p/$marker" && ! -e "$p/$marker" ]] || {
+              echo CHROMIUM_REPAIR_REFUSED=singleton_not_orphan_symlink; exit 2;
+            }
+          done
+          target="$(readlink "$p/SingletonLock")"
+          [[ "$target" =~ -([0-9]+)$ ]] || { echo CHROMIUM_REPAIR_REFUSED=invalid_lock_pid; exit 2; }
+          pid="${BASH_REMATCH[1]}"
+          if [[ -r "/proc/$pid/comm" ]]; then
+            process="$(cat "/proc/$pid/comm")"
+            case "$process" in
+              chrome|chromium|headless_shell)
+                echo CHROMIUM_REPAIR_REFUSED=live_chromium_owner; exit 2;;
+            esac
+          fi
+          archive="$p/.dhole-stale-singletons-$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -m 700 "$archive"
+          for marker in SingletonLock SingletonSocket SingletonCookie; do
+            mv -- "$p/$marker" "$archive/$marker"
+          done
+          [[ ! -e "$p/SingletonLock" && ! -L "$p/SingletonLock" ]] || exit 2
+          echo 'CHROMIUM_REPAIR_STALE_LINKS_ARCHIVED=3'
+          echo 'CHROMIUM_REPAIR_SESSION_FILES_PRESERVED=yes'
+          echo 'CHROMIUM_REPAIR_BROWSER_CONTEXT_NOT_STARTED=yes'
+          INNER
