@@ -17,7 +17,7 @@ public static partial class ChromiumStaleSingletonRecovery
     [GeneratedRegex(@"-([0-9]+)$", RegexOptions.CultureInvariant)]
     private static partial Regex LockPidPattern();
 
-    public static bool TryArchiveOrphanedLinks(string profilePath) =>
+    public static bool TryArchiveOrphanedLinks(string profilePath, Func<bool>? chromiumRunning = null) =>
         TryArchiveOrphanedLinks(profilePath, out _);
 
     public static bool TryArchiveOrphanedLinks(string profilePath, out string diagnostic)
