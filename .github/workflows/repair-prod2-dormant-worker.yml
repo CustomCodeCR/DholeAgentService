@@ -103,8 +103,8 @@ jobs:
           if [[ "$count" -eq 0 ]]; then
             docker compose --env-file "$REPAIR_ENV" \
               -f .dhole-system/deploy/docker-compose.agent-generation.yml \
-              -p dhole-agent-prod2 --profile activated create \
-              --no-deps --no-build --pull never dhole-agent-workers >/dev/null
+              -p dhole-agent-prod2 --profile activated up \
+              --no-start --no-deps --no-build --pull never dhole-agent-workers >/dev/null
           fi
           id="$(docker ps -aq --filter label=com.docker.compose.project=dhole-agent-prod2 \
             --filter label=com.docker.compose.service=dhole-agent-workers)"
