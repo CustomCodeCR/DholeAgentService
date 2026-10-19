@@ -223,6 +223,20 @@ def run(request_id, env_file, state_dir, check_only):
             if completed.splitlines()[-1] != "Completed":
                 raise GateError("Worker switched but persistent completion state needs reconciliation")
             print(f"GENERATION_HANDOFF_CONFIRMED request={request_id} active={target}")
+            # Once ownership is committed, obsolete numbered generations may
+            # be irreversibly retired. Never erase legacy prod or the new owner.
+            if source != "prod" and GENERATION.fullmatch(source):
+                retired = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts/retire-production-generation.py"),
+                     source, "--env-file", env_file, "--apply",
+                     "--confirmation", "DELETE_RETIRED_GENERATION_DATA"],
+                    capture_output=True, text=True, timeout=120)
+                if retired.returncode:
+                    # The handoff itself succeeded. Do not roll back into an
+                    # erased/partially erased generation or hide cleanup failure.
+                    print(f"GENERATION_RETIREMENT_PENDING source={source}")
+                else:
+                    print(f"GENERATION_PREVIOUS_RUNTIME_DELETED source={source}")
         finally:
             event_file.unlink(missing_ok=True)
 
