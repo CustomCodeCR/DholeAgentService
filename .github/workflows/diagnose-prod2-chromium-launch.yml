@@ -76,4 +76,28 @@ jobs:
             done
             ls -d /ms-playwright/chromium-*/chrome-linux/chrome /ms-playwright/chromium-*/chrome-linux64/chrome /ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | sed "s|.*/|BROWSER_DIAG_PLAYWRIGHT_BINARY=|" | head -n 2 || true
           '
+          docker exec "$id" bash -c '
+            set -euo pipefail
+            p=/data/browser-profiles/MAERSK/70ccf773c95a4ed899058df77cd1c126
+            link="$(readlink "$p/SingletonLock")"
+            if [[ "$link" =~ -([0-9]+)$ ]]; then
+              pid="${BASH_REMATCH[1]}"
+              if test -r "/proc/$pid/comm"; then
+                comm="$(cat "/proc/$pid/comm")"
+                case "$comm" in chrome|chromium|headless_shell) echo BROWSER_DIAG_LOCK_OWNER=chromium ;; *)
+                  echo BROWSER_DIAG_LOCK_OWNER=non_browser_process ;;
+                esac
+              else echo BROWSER_DIAG_LOCK_OWNER=process_absent; fi
+            fi
+            bin="$(find /ms-playwright -maxdepth 4 -type f -name chrome -path "*/chrome-linux*/chrome" -print -quit)"
+            if test -z "$bin"; then echo BROWSER_DIAG_EPHEMERAL=browser_binary_missing; exit 0; fi
+            tmp="$(mktemp -d /tmp/dhole-browser-selftest-XXXXXXXX)"
+            trap '\''rm -rf "$tmp"'\'' EXIT
+            timeout 20s "$bin" --headless=new --no-sandbox --disable-dev-shm-usage \
+              --disable-gpu --user-data-dir="$tmp" --dump-dom about:blank \
+              > /dev/null 2> "$tmp/stderr"
+            code=$?
+            if [[ "$code" == 0 ]]; then echo BROWSER_DIAG_EPHEMERAL=success;
+            else echo BROWSER_DIAG_EPHEMERAL=failed_code_$code; fi
+          ' || echo BROWSER_DIAG_EPHEMERAL=command_failed
           echo 'BROWSER_DIAG_READ_ONLY_COMPLETE'
