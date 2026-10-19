@@ -102,7 +102,7 @@ public sealed class AgentScheduleDispatcherWorker(
                 // restriction or while the Worker was offline. The one-minute
                 // tolerance allows normal dispatcher jitter without replaying
                 // historical searches when the circuit is reopened.
-                var overdue = effectiveDue.Value < now.AddMinutes(-1);
+                var overdue = MaerskScheduleCatchUpPolicy.IsOverdue(effectiveDue.Value, now);
                 if (blocked || overdue)
                 {
                     var next = calculator.GetNext(schedule, now);
