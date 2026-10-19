@@ -17,13 +17,20 @@ public static partial class ChromiumStaleSingletonRecovery
     [GeneratedRegex(@"-([0-9]+)$", RegexOptions.CultureInvariant)]
     private static partial Regex LockPidPattern();
 
-    public static bool TryArchiveOrphanedLinks(string profilePath)
+    public static bool TryArchiveOrphanedLinks(string profilePath) =>
+        TryArchiveOrphanedLinks(profilePath, out _);
+
+    public static bool TryArchiveOrphanedLinks(string profilePath, out string diagnostic)
     {
+        diagnostic = "not_eligible";
         try
         {
             var directory = new DirectoryInfo(profilePath);
             if (!directory.Exists || directory.LinkTarget is not null)
+            {
+                diagnostic = "profile_directory_not_safe";
                 return false;
+            }
 
             var links = Markers.Select(name => new FileInfo(
                 Path.Combine(directory.FullName, name))).ToArray();
@@ -32,18 +39,27 @@ public static partial class ChromiumStaleSingletonRecovery
             // files or any link whose target is present (including a live socket).
             if (links.Any(link => link.LinkTarget is null ||
                 File.Exists(link.FullName) || Directory.Exists(link.FullName)))
+            {
+                diagnostic = "singleton_links_not_orphaned";
                 return false;
+            }
 
             var lockTarget = links[0].LinkTarget!;
             var pidMatch = LockPidPattern().Match(lockTarget);
             if (!pidMatch.Success || !int.TryParse(pidMatch.Groups[1].Value, out var pid)
                 || pid <= 0)
+            {
+                diagnostic = "invalid_lock_process_id";
                 return false;
+            }
 
             // PID reuse is common after a Worker restart. An unrelated live PID
             // does not own Chromium's lock. A real browser process does.
             if (AnyChromiumProcessRunning() || ChromiumOwnsPid(pid))
+            {
+                diagnostic = "browser_process_still_running";
                 return false;
+            }
 
             var archive = Path.Combine(directory.FullName,
                 ".dhole-orphaned-singletons-" +
@@ -53,14 +69,17 @@ public static partial class ChromiumStaleSingletonRecovery
             foreach (var link in links)
                 File.Move(link.FullName, Path.Combine(archive, link.Name));
 
+            diagnostic = "orphaned_links_archived";
             return true;
         }
         catch (IOException)
         {
+            diagnostic = "filesystem_io_error";
             return false;
         }
         catch (UnauthorizedAccessException)
         {
+            diagnostic = "filesystem_permission_error";
             return false;
         }
     }
