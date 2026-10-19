@@ -48,7 +48,7 @@ public sealed class BrowserProfileRepairTests
 
             var prod3 = new BrowserProfileManager(Options.Create(
                 new BrowserOptions { ProfilesPath = root, Generation = "prod3" }));
-            Assert.ThrowsException<IOException>(() => prod3.GetStoragePath("MAERSK", credential));
+            Assert.ThrowsExactly<IOException>(() => prod3.GetStoragePath("MAERSK", credential));
             Assert.AreEqual("original-session", File.ReadAllText(Path.Combine(profile, "Local State")));
             Assert.AreEqual("prod2", File.ReadAllText(Path.Combine(root, ".dhole-generation")).Trim());
         }
