@@ -12,7 +12,7 @@ spec.loader.exec_module(module)
 class RetirementSafetyTests(unittest.TestCase):
     def test_source_must_be_numbered(self):
         with self.assertRaises(module.RetirementRefused):
-            module.generation_number("prod")
+            module.run("prod", "unused", False, "")
         with self.assertRaises(module.RetirementRefused):
             module.generation_number("prod2; rm")
         self.assertEqual(2, module.generation_number("prod2"))
