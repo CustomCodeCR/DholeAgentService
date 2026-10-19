@@ -1,0 +1,139 @@
+name: Repair missing dormant prod2 Worker (no handoff)
+
+# Single targeted one-time recovery of the missing prod2 Worker. No service
+# currently processing jobs is stopped, replaced or authorized to use Maersk.
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/repair-prod2-dormant-worker.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  repair-dormant-worker:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Load exact protected generation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          mkdir -p "$RUNNER_TEMP/prod2-dormant-repair"
+          chmod 700 "$RUNNER_TEMP/prod2-dormant-repair"
+          bash .dhole-system/deploy/prepare-environments.sh \
+            /opt/dhole/.env "$RUNNER_TEMP/prod2-dormant-repair" >/dev/null
+          chmod 600 "$RUNNER_TEMP/prod2-dormant-repair/.env.production"
+          python3 scripts/prepare-prod1-jwt-env.py "$RUNNER_TEMP/prod2-dormant-repair/.env.production"
+          echo "REPAIR_ENV=$RUNNER_TEMP/prod2-dormant-repair/.env.production" >> "$GITHUB_ENV"
+
+      - name: Verify prod1 ownership and existing prod2 infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location(
+              "owner", Path("scripts/production-generation-executor.py"))
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          if module.find_running_generation()[0] != "prod1":
+              raise SystemExit("DORMANT_REPAIR_REFUSED: prod1_not_uniquely_active")
+          print("DORMANT_REPAIR_ACTIVE_WORKER_UNCHANGED=prod1")
+          PY
+          docker volume inspect dhole_agent_prod2_keys >/dev/null
+          docker image inspect dhole/agent-workers:latest >/dev/null
+          for service in dhole-agent-api hermes-agent; do
+            ids="$(docker ps -aq --filter label=com.docker.compose.project=dhole-agent-prod2 \
+                    --filter "label=com.docker.compose.service=$service")"
+            [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" == 1 ]] || {
+              echo "DORMANT_REPAIR_REFUSED: ambiguous_$service" >&2; exit 2;
+            }
+            [[ "$(docker inspect --format '{{.State.Status}}' "$ids")" == running ]] || {
+              echo "DORMANT_REPAIR_REFUSED: stopped_$service" >&2; exit 2;
+            }
+            if [[ "$service" == hermes-agent ]]; then
+              [[ "$(docker inspect --format '{{.State.Health.Status}}' "$ids")" == healthy ]] || {
+                echo "DORMANT_REPAIR_REFUSED: unhealthy_hermes" >&2; exit 2;
+              }
+            fi
+          done
+          export AGENT_GENERATION=prod2 DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest
+          export DHOLE_ENV_FILE="$REPAIR_ENV"
+          docker compose --env-file "$REPAIR_ENV" \
+            -f .dhole-system/deploy/docker-compose.agent-generation.yml \
+            -p dhole-agent-prod2 --profile activated config -q
+          echo 'DORMANT_REPAIR_EXISTING_INFRASTRUCTURE_VERIFIED'
+
+      - name: Cache HTTP health probe before changing any containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! docker image inspect curlimages/curl:8.12.1 >/dev/null 2>&1; then
+            docker pull curlimages/curl:8.12.1 >/dev/null
+          fi
+          docker image inspect curlimages/curl:8.12.1 >/dev/null
+          echo 'DORMANT_REPAIR_HEALTH_PROBE_AVAILABLE'
+
+      - name: Create ONLY missing stopped prod2 Worker (no dependencies)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AGENT_GENERATION=prod2 DHOLE_NETWORK=dhole DHOLE_IMAGE_TAG=latest
+          export DHOLE_ENV_FILE="$REPAIR_ENV"
+          existing="$(docker ps -aq --filter label=com.docker.compose.project=dhole-agent-prod2 \
+            --filter label=com.docker.compose.service=dhole-agent-workers)"
+          count="$(printf '%s\n' "$existing" | sed '/^$/d' | wc -l)"
+          [[ "$count" -le 1 ]] || {
+            echo 'DORMANT_REPAIR_REFUSED: multiple_existing_workers' >&2; exit 2;
+          }
+          if [[ "$count" -eq 0 ]]; then
+            docker compose --env-file "$REPAIR_ENV" \
+              -f .dhole-system/deploy/docker-compose.agent-generation.yml \
+              -p dhole-agent-prod2 --profile activated create \
+              --no-deps --no-build --pull never dhole-agent-workers >/dev/null
+          fi
+          id="$(docker ps -aq --filter label=com.docker.compose.project=dhole-agent-prod2 \
+            --filter label=com.docker.compose.service=dhole-agent-workers)"
+          [[ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" == 1 ]] || exit 2
+          state="$(docker inspect --format '{{.State.Status}}' "$id")"
+          [[ "$state" == created || "$state" == exited ]] || {
+            echo 'DORMANT_REPAIR_REFUSED: alternate_worker_running' >&2; exit 2;
+          }
+          for mount in /data/browser-profiles /data/agent-keys; do
+            [[ "$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$id" |
+                 grep -Fxc "$mount" || true)" == 1 ]] || {
+              echo 'DORMANT_REPAIR_REFUSED: required_persistent_volume_missing' >&2; exit 2;
+            }
+          done
+          echo 'DORMANT_REPAIR_WORKER_CREATED_OR_VERIFIED_STOPPED=prod2'
+
+      - name: Independently verify isolated prod2 infrastructure after repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/provision-production-generation.sh \
+            prod2 check .dhole-system "$REPAIR_ENV"
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location(
+              "owner", Path("scripts/production-generation-executor.py"))
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          assert module.find_running_generation()[0] == "prod1"
+          print("DORMANT_REPAIR_FINISHED prod2_worker=dormant active=prod1")
+          PY
