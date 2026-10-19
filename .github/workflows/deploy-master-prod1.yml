@@ -15,6 +15,7 @@ name: Deploy Dhole Agent - Production from master (prod1)
 # Release 2026-10-16: stage isolated standby Maersk noVNC before generation handoff (PR #151).
 # Release 2026-10-16: verify original standby Maersk Hub account and show username/Customer ID (PR #158).
 # Release 2026-10-16: preserve prod2 isolated noVNC after missing dormant Worker and extend verified operator session PR #164.
+# Release 2026-10-19: audited DholeWeb-origin generation Actions controls and production API endpoints.
 on:
   push:
     branches: [master]
