@@ -45,8 +45,8 @@ public sealed class MaerskPhase5ResumePostgresTests
         var credential = AgentCredential.CreateEncrypted(
             provider.Id, "original-session", "encrypted-user", "encrypted-secret");
         var profile = BrowserProfile.Create(
-            provider.Id, credential.Id, "original-browser",
-            Guid.NewGuid().ToString("N"), "/unused/test-profile");
+            provider.Id, credential.Id, "Maersk prod - Chromium profile",
+            "maersk-prod-" + Guid.NewGuid().ToString("N"), "/unused/test-profile");
         var execution = AgentExecution.Create(
             definition.Id, provider.Id, null, credential.Id,
             AgentExecutionType.Scheduled, 1,

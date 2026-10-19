@@ -339,7 +339,7 @@ public sealed class MaerskCircuitPostgresIntegrationTests
             providerId, "circuit-test-credential", "encrypted-test-user", "encrypted-test-secret");
         db.AgentCredentials.Add(credential);
         var profile = BrowserProfile.Create(providerId, credential.Id,
-            "circuit-test-profile", Guid.NewGuid().ToString("N"),
+            "Maersk prod - Chromium profile", "maersk-prod-" + Guid.NewGuid().ToString("N"),
             "/tmp/maersk-circuit-test-not-used");
         db.BrowserProfiles.Add(profile);
         await db.SaveChangesAsync();
