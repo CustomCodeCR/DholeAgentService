@@ -1,0 +1,58 @@
+name: Diagnose active prod2 Chromium launch (read-only)
+
+on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/diagnose-prod2-chromium-launch.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhole-agent-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: [self-hosted, linux, x64, dhole]
+    timeout-minutes: 5
+    steps:
+      - name: Diagnose browser prerequisites without inspecting sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(docker ps -q --filter label=com.docker.compose.project=dhole-agent-prod2 --filter label=com.docker.compose.service=dhole-agent-workers)"
+          [[ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" == 1 ]] || { echo "BROWSER_DIAG=ambiguous_worker"; exit 2; }
+          [[ "$(docker inspect -f '{{.State.Status}}' "$id")" == running ]] || { echo "BROWSER_DIAG=worker_not_running"; exit 2; }
+          printf 'BROWSER_DIAG_WORKER_IMAGE=%s\n' "$(docker inspect -f '{{.Image}}' "$id" | cut -c1-22)"
+          docker exec "$id" bash -c '
+            set -euo pipefail
+            echo "BROWSER_DIAG_DISPLAY=${DISPLAY:-missing}"
+            echo "BROWSER_DIAG_UID=$(id -u)"
+            if command -v chromium >/dev/null; then echo "BROWSER_DIAG_CHROMIUM=present"; else echo "BROWSER_DIAG_CHROMIUM=missing"; fi
+            if command -v Xvfb >/dev/null; then echo "BROWSER_DIAG_XVFB=present"; else echo "BROWSER_DIAG_XVFB=missing"; fi
+            for path in /tmp/.X11-unix/X99 /ms-playwright /data/browser-profiles; do
+              if test -e "$path"; then echo "BROWSER_DIAG_PATH_${path##*/}=present"; else echo "BROWSER_DIAG_PATH_${path##*/}=missing"; fi
+            done
+            echo "BROWSER_DIAG_CHROMIUM_PROCESSES=$(ps -eo comm= | grep -Ec "^(chrome|chromium|chrome-headless)" || true)"
+            echo "BROWSER_DIAG_XVFB_PROCESSES=$(ps -eo comm= | grep -Ec "^Xvfb$" || true)"
+            echo "BROWSER_DIAG_PROFILE_USER_WRITABLE=$(test -w /data/browser-profiles && echo yes || echo no)"
+            echo "BROWSER_DIAG_DISK_MB=$(df -Pm /data/browser-profiles | awk "NR==2 {print \\$4}")"
+            echo "BROWSER_DIAG_SHM_MB=$(df -Pm /dev/shm | awk "NR==2 {print \\$4}")"
+            p=/data/browser-profiles/MAERSK/70ccf773c95a4ed899058df77cd1c126
+            if test -d "$p"; then
+              echo "BROWSER_DIAG_PROFILE=present"
+              echo "BROWSER_DIAG_PROFILE_WRITABLE=$(test -w "$p" && echo yes || echo no)"
+              for f in SingletonLock SingletonSocket SingletonCookie; do
+                if test -e "$p/$f" || test -L "$p/$f"; then echo "BROWSER_DIAG_$f=present"; else echo "BROWSER_DIAG_$f=absent"; fi
+              done
+            else
+              echo "BROWSER_DIAG_PROFILE=missing"
+            fi
+            for path in /tmp/agent-xvfb.log /tmp/agent-x11vnc.log; do
+              if test -s "$path"; then echo "BROWSER_DIAG_LOG_${path##*/}=nonempty"; else echo "BROWSER_DIAG_LOG_${path##*/}=empty_or_missing"; fi
+            done
+          '
+          echo 'BROWSER_DIAG_READ_ONLY_COMPLETE'
