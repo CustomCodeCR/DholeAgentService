@@ -102,46 +102,6 @@ public static class AgentEndpoints
             return Results.Ok(await breaker.GetAsync(providerId, ct));
         }).RequireScope(AgentScopeNames.BrowserProfilesView);
 
-
-        // Explicit admin closure, separate from PROVIDER access clearance.
-        // The breaker may show Closed while requiresOperator remains true:
-        // no Maersk jobs/hand-offs are authorized by this action.
-        circuit.MapPost("/{providerId:guid}/administrative-close", async (
-            Guid providerId, ResetMaerskCircuitRequest request,
-            HttpContext context, IAgentProviderRepository providers,
-            IMaerskCircuitBreaker breaker, CancellationToken ct) =>
-        {
-            var actorId = context.GetCurrentUserId();
-            if (actorId is null || actorId.Value == Guid.Empty)
-                return Results.Unauthorized();
-            var provider = await providers.GetByIdAsync(providerId, ct);
-            if (provider is null || !provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase))
-                return Results.NotFound();
-
-            var reason = string.IsNullOrWhiteSpace(request.Reason)
-                ? "Cierre administrativo manual autorizado por el operador"
-                : request.Reason.Trim();
-            if (reason.Length < 12 || reason.Length > 1000)
-                return Results.BadRequest(new { code = "invalid_administrative_close_reason" });
-
-            var closed = await breaker.CloseAdministrativelyAsync(
-                providerId, actorId.Value, reason, ct);
-            if (!closed)
-                return Results.Conflict(new {
-                    code = "administrative_close_running_job_or_disabled",
-                    error = "An active provider execution or disabled circuit prevents this operation."
-                });
-
-            var status = await breaker.GetAsync(providerId, ct);
-            return Results.Ok(new {
-                reset = true, administrativeClosed = true, state = status.State,
-                providerAccessBlocked = status.RequiresOperator,
-                warning = status.RequiresOperator
-                    ? "Internal breaker closed. Maersk provider restriction remains active; jobs are paused."
-                    : "Internal technical circuit closed."
-            });
-        }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
-
         // Unlike rate-search executions, a single explicitly requested
         // authentication-only execution is allowed while the provider circuit
         // remains Open. Never changes the circuit or the existing Chromium files.
