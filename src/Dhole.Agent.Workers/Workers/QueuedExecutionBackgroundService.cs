@@ -79,7 +79,7 @@ public sealed class QueuedExecutionBackgroundService(
                     var definitions = scope.ServiceProvider.GetRequiredService<IAgentDefinitionRepository>();
                     var definition = await definitions.GetByIdAsync(execution.AgentDefinitionId, cancellationToken);
                     var circuit = await maerskCircuit.GetAsync(provider.Id, cancellationToken);
-                    if (definition is null || circuit.State != "Open"
+                    if (definition is null || circuit.State is not ("Open" or "Closed")
                         || !circuit.RequiresOperator
                         || !MaerskSessionVerification.IsExplicit(execution, definition, provider))
                         continue;
