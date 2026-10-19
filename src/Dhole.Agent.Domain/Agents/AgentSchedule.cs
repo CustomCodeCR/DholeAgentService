@@ -97,6 +97,23 @@ public sealed class AgentSchedule : SoftDeletableAggregateRoot<Guid>
         MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
     }
 
+    /// <summary>
+    /// Advances a schedule past a missed occurrence without claiming that an
+    /// execution was dispatched. One-time schedules are retired when missed.
+    /// </summary>
+    public void SkipMissedOccurrence(DateTime? nextExecutionAt, Guid? updatedBy = null)
+    {
+        if (ScheduleType == AgentScheduleType.Once && nextExecutionAt.HasValue)
+            throw new ArgumentException("A one-time schedule cannot have a next occurrence.", nameof(nextExecutionAt));
+        if (ScheduleType != AgentScheduleType.Once && !nextExecutionAt.HasValue)
+            throw new ArgumentException("Recurring schedules require a future occurrence.", nameof(nextExecutionAt));
+
+        NextExecutionAt = nextExecutionAt;
+        if (ScheduleType == AgentScheduleType.Once) IsActive = false;
+        // Deliberately preserve LastExecutionAt: no job was created or run.
+        MarkAsUpdated(DateTime.UtcNow, updatedBy?.ToString());
+    }
+
     public void SetNextExecution(DateTime? value, Guid? updatedBy = null)
     {
         NextExecutionAt = value;
