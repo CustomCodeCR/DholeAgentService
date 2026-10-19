@@ -137,7 +137,7 @@ public sealed class AgentExecutionOrchestrator(
                 ? await circuitBreaker.GetAsync(provider.Id, cancellationToken)
                 : null;
             if (provider.Code.Equals("MAERSK", StringComparison.OrdinalIgnoreCase)
-                && !(verificationOnly && currentCircuit?.State == "Open"
+                && !(verificationOnly && currentCircuit?.State is "Open" or "Closed"
                      && currentCircuit.RequiresOperator)
                 && !await circuitBreaker.TryEnterAsync(provider.Id, execution.Id, cancellationToken))
             {
