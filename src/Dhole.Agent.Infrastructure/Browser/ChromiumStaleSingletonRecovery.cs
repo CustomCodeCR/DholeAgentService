@@ -55,7 +55,7 @@ public static partial class ChromiumStaleSingletonRecovery
 
             // PID reuse is common after a Worker restart. An unrelated live PID
             // does not own Chromium's lock. A real browser process does.
-            if (AnyChromiumProcessRunning() || ChromiumOwnsPid(pid))
+            if (ChromiumOwnsPid(pid))
             {
                 diagnostic = "browser_process_still_running";
                 return false;
@@ -109,33 +109,6 @@ public static partial class ChromiumStaleSingletonRecovery
         catch (InvalidOperationException)
         {
             // Unable to establish ownership: do not rewrite the profile.
-            return true;
-        }
-    }
-
-    private static bool AnyChromiumProcessRunning()
-    {
-        try
-        {
-            foreach (var process in Process.GetProcesses())
-            {
-                using (process)
-                {
-                    try
-                    {
-                        if (IsChromiumProcessName(process.ProcessName))
-                            return true;
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Exited while enumerating.
-                    }
-                }
-            }
-            return false;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
             return true;
         }
     }
