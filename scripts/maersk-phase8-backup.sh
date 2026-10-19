@@ -13,6 +13,7 @@ case "$environment" in
   staging) project="dhole-staging"; network="dhole-staging"; worker_service="dhole-agent-workers" ;;
   production) project="dhole"; network="dhole"; worker_service="dhole-agent-workers" ;;
   prod1) project="dhole-agent-prod1"; network="dhole"; worker_service="dhole-agent-workers-prod1" ;;
+  prod2) project="dhole-agent-prod2"; network="dhole"; worker_service="dhole-agent-workers" ;;
   *) die "Invalid environment" ;;
 esac
 
@@ -42,7 +43,7 @@ host="${host:-postgres}"
 port="${port:-5432}"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || die "Invalid database configuration"
 
-if [[ "$environment" == prod1 ]]; then
+if [[ "$environment" == prod1 || "$environment" == prod2 ]]; then
   # Discover persistent volume names from the already-provisioned prod1
   # container; never guess paths or copy profiles from the primary generation.
   worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
