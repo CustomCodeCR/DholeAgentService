@@ -335,6 +335,217 @@ public sealed class ProductionGenerationDispatchBackgroundService(
 
     private async Task DispatchPendingAsync(ServiceDbContext db, CancellationToken ct)
     {
+        // A previously queued handoff to an older generation must not be
+        // released after a newer Worker becomes active.
+        await QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests request
+            SET status='Rejected', diagnostic_code='generation_retired',
+                completed_at_utc=now()
+            FROM agent.runtime_generation_state active
+            WHERE active.singleton=true AND request.status='Pending'
+              AND (request.target_generation='prod' OR
+                (request.target_generation ~ '^prod[1-9][0-9]*
+        var fields = await QueryRowsAsync(db, """
+            WITH candidate AS (
+              SELECT id FROM agent.runtime_generation_requests
+              WHERE status='Pending' ORDER BY created_at_utc, id
+              LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE agent.runtime_generation_requests request
+            SET status='Processing', diagnostic_code='github_workflow_dispatched'
+            FROM candidate WHERE request.id=candidate.id
+            RETURNING request.id::text,request.target_generation,request.trigger_code
+            """, ct);
+        if (fields.Count == 0) return;
+        var id = fields[0][0];
+        var target = fields[0][1];
+        var trigger = fields[0][2];
+        var token = configuration["GenerationOrchestrator:GitHubToken"];
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            await SetStatusAsync(db, id, "Failed", "github_actions_token_missing", ct);
+            logger.LogWarning("GENERATION_GITHUB_TOKEN_MISSING request={RequestId}", id);
+            return;
+        }
+
+        try
+        {
+            var branch = configuration["GenerationOrchestrator:ActionsRef"] ?? "master";
+            if (branch != "master") throw new InvalidOperationException("Only protected master workflow is permitted.");
+            var repository = "CustomCodeCR/DholeAgentService";
+            using var message = new HttpRequestMessage(HttpMethod.Post,
+                $"https://api.github.com/repos/{repository}/actions/workflows/production-generation-apply.yml/dispatches");
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            message.Headers.UserAgent.ParseAdd("DholeAgent-generation-orchestrator/1.0");
+            message.Content = JsonContent.Create(new
+            {
+                @ref = branch,
+                inputs = new { request_id = id }
+            });
+            using var response = await _github.SendAsync(message, ct);
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.Created)
+                throw new InvalidOperationException("GitHub workflow_dispatch was rejected (HTTP " + (int)response.StatusCode + ")");
+            await SetStatusAsync(db, id, "Processing", "github_workflow_dispatched", ct);
+            logger.LogInformation("GENERATION_GITHUB_DISPATCHED request={RequestId} target={Target} trigger={Trigger}",
+                id, target, trigger);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogError("GENERATION_GITHUB_DISPATCH_FAILED request={RequestId} reason={Reason}", id, ex.GetType().Name);
+            await SetStatusAsync(db, id, "Failed", "github_dispatch_failed", ct);
+        }
+    }
+
+    private static Task SetStatusAsync(ServiceDbContext db, string id, string status, string reason, CancellationToken ct) =>
+        QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests
+            SET status=@status, diagnostic_code=@reason,
+                completed_at_utc=CASE WHEN @status='Failed' THEN now() ELSE completed_at_utc END
+            WHERE id=@id::uuid AND status='Processing'
+            RETURNING id::text
+            """, ct, ("status", status), ("reason", reason), ("id", id));
+
+    private static async Task<string?> QueryAsync(ServiceDbContext db, string sql,
+        CancellationToken ct, params (string, object)[] args)
+    {
+        var rows = await QueryRowsAsync(db, sql, ct, args);
+        return rows.Count == 0 ? null : rows[0][0];
+    }
+
+    private static async Task<List<string[]>> QueryRowsAsync(ServiceDbContext db, string sql,
+        CancellationToken ct, params (string, object)[] args)
+    {
+        var result = new List<string[]>();
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = db.Database.GetDbConnection().CreateCommand();
+            command.CommandText = sql;
+            foreach (var (name, value) in args)
+            {
+                var parameter = command.CreateParameter();
+                parameter.ParameterName = name;
+                parameter.Value = value;
+                command.Parameters.Add(parameter);
+            }
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var row = new string[reader.FieldCount];
+                for (var i = 0; i < row.Length; i++)
+                    row[i] = reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString() ?? "";
+                result.Add(row);
+            }
+        }
+        finally { await db.Database.CloseConnectionAsync(); }
+        return result;
+    }
+}
+
+                 AND substring(request.target_generation from 5)::numeric <=
+                   CASE WHEN active.active_generation ~ '^prod[1-9][0-9]*
+        var fields = await QueryRowsAsync(db, """
+            WITH candidate AS (
+              SELECT id FROM agent.runtime_generation_requests
+              WHERE status='Pending' ORDER BY created_at_utc, id
+              LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE agent.runtime_generation_requests request
+            SET status='Processing', diagnostic_code='github_workflow_dispatched'
+            FROM candidate WHERE request.id=candidate.id
+            RETURNING request.id::text,request.target_generation,request.trigger_code
+            """, ct);
+        if (fields.Count == 0) return;
+        var id = fields[0][0];
+        var target = fields[0][1];
+        var trigger = fields[0][2];
+        var token = configuration["GenerationOrchestrator:GitHubToken"];
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            await SetStatusAsync(db, id, "Failed", "github_actions_token_missing", ct);
+            logger.LogWarning("GENERATION_GITHUB_TOKEN_MISSING request={RequestId}", id);
+            return;
+        }
+
+        try
+        {
+            var branch = configuration["GenerationOrchestrator:ActionsRef"] ?? "master";
+            if (branch != "master") throw new InvalidOperationException("Only protected master workflow is permitted.");
+            var repository = "CustomCodeCR/DholeAgentService";
+            using var message = new HttpRequestMessage(HttpMethod.Post,
+                $"https://api.github.com/repos/{repository}/actions/workflows/production-generation-apply.yml/dispatches");
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            message.Headers.UserAgent.ParseAdd("DholeAgent-generation-orchestrator/1.0");
+            message.Content = JsonContent.Create(new
+            {
+                @ref = branch,
+                inputs = new { request_id = id }
+            });
+            using var response = await _github.SendAsync(message, ct);
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.Created)
+                throw new InvalidOperationException("GitHub workflow_dispatch was rejected (HTTP " + (int)response.StatusCode + ")");
+            await SetStatusAsync(db, id, "Processing", "github_workflow_dispatched", ct);
+            logger.LogInformation("GENERATION_GITHUB_DISPATCHED request={RequestId} target={Target} trigger={Trigger}",
+                id, target, trigger);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogError("GENERATION_GITHUB_DISPATCH_FAILED request={RequestId} reason={Reason}", id, ex.GetType().Name);
+            await SetStatusAsync(db, id, "Failed", "github_dispatch_failed", ct);
+        }
+    }
+
+    private static Task SetStatusAsync(ServiceDbContext db, string id, string status, string reason, CancellationToken ct) =>
+        QueryAsync(db, """
+            UPDATE agent.runtime_generation_requests
+            SET status=@status, diagnostic_code=@reason,
+                completed_at_utc=CASE WHEN @status='Failed' THEN now() ELSE completed_at_utc END
+            WHERE id=@id::uuid AND status='Processing'
+            RETURNING id::text
+            """, ct, ("status", status), ("reason", reason), ("id", id));
+
+    private static async Task<string?> QueryAsync(ServiceDbContext db, string sql,
+        CancellationToken ct, params (string, object)[] args)
+    {
+        var rows = await QueryRowsAsync(db, sql, ct, args);
+        return rows.Count == 0 ? null : rows[0][0];
+    }
+
+    private static async Task<List<string[]>> QueryRowsAsync(ServiceDbContext db, string sql,
+        CancellationToken ct, params (string, object)[] args)
+    {
+        var result = new List<string[]>();
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = db.Database.GetDbConnection().CreateCommand();
+            command.CommandText = sql;
+            foreach (var (name, value) in args)
+            {
+                var parameter = command.CreateParameter();
+                parameter.ParameterName = name;
+                parameter.Value = value;
+                command.Parameters.Add(parameter);
+            }
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var row = new string[reader.FieldCount];
+                for (var i = 0; i < row.Length; i++)
+                    row[i] = reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString() ?? "";
+                result.Add(row);
+            }
+        }
+        finally { await db.Database.CloseConnectionAsync(); }
+        return result;
+    }
+}
+
+                        THEN substring(active.active_generation from 5)::numeric ELSE 0 END))
+            RETURNING request.id::text
+            """, ct);
         // Atomic claim, safe across multiple worker replicas.
         var fields = await QueryRowsAsync(db, """
             WITH candidate AS (
