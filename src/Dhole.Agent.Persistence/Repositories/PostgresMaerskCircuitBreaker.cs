@@ -236,9 +236,12 @@ public sealed class PostgresMaerskCircuitBreaker(
             // reject blocked/expired active profiles. No Chromium action or
             // browser profile repair is initiated by this endpoint.
             var now = DateTime.UtcNow;
+            var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+            var activeProfilePrefix = MaerskGenerationProfileScope.Prefix(generation);
             var latestVerifiedSession = await db.BrowserProfiles.AsNoTracking()
                 .AnyAsync(p => p.ProviderId == providerId
                     && !p.IsDeleted && p.IsActive
+                    && p.ProfileKey.StartsWith(activeProfilePrefix)
                     && p.Status == BrowserProfileStatus.Authenticated
                     && p.LastLoginAt.HasValue
                     && p.LastLoginAt.Value > current.UpdatedAtUtc
@@ -247,6 +250,7 @@ public sealed class PostgresMaerskCircuitBreaker(
             var unsafeProfile = await db.BrowserProfiles.AsNoTracking()
                 .AnyAsync(p => p.ProviderId == providerId
                     && !p.IsDeleted && p.IsActive
+                    && p.ProfileKey.StartsWith(activeProfilePrefix)
                     && (p.Status == BrowserProfileStatus.Blocked
                         || p.Status == BrowserProfileStatus.Expired
                         || p.Status == BrowserProfileStatus.ResetRequested), ct);
