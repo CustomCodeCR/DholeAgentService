@@ -64,8 +64,8 @@ public sealed class PostgresMaerskCircuitBreaker(
             """, ct);
 
         var state = await GetAsync(providerId, ct);
-        return state.State == "Closed"
-            || (state.State == "HalfOpen" && state.ProbeExecutionId == executionId);
+        return !state.RequiresOperator && (state.State == "Closed"
+            || (state.State == "HalfOpen" && state.ProbeExecutionId == executionId));
     }
 
     public async Task RecordFailureAsync(
@@ -200,6 +200,77 @@ public sealed class PostgresMaerskCircuitBreaker(
                     false, "Prueba técnica satisfactoria", ct);
             }
             await tx.CommitAsync(ct);
+        });
+    }
+
+
+    /// <summary>
+    /// Closes the INTERNAL circuit at the operator's discretion. An outstanding
+    /// provider hold (RequiresOperator) is deliberately preserved. All Maersk
+    /// dispatch entry points must honor that hold even while State is Closed.
+    /// </summary>
+    public async Task<bool> CloseAdministrativelyAsync(
+        Guid providerId, Guid actorId, string reason, CancellationToken ct = default)
+    {
+        if (!_options.Enabled) return false;
+        ValidateProvider(providerId);
+        if (actorId == Guid.Empty || string.IsNullOrWhiteSpace(reason)
+            || reason.Trim().Length < 12 || reason.Length > 1000)
+            throw new ArgumentException("Authenticated operator and documented reason are required.");
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var current = await db.Set<MaerskCircuitRecord>().FromSqlInterpolated(
+                $"SELECT * FROM agent.maersk_circuits WHERE provider_id = {providerId} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+            if (current is null)
+            {
+                await tx.CommitAsync(ct);
+                return false;
+            }
+
+            // An already administratively closed circuit is idempotent.
+            if (current.State == "Closed")
+            {
+                await tx.CommitAsync(ct);
+                return true;
+            }
+            if (current.State is not ("Open" or "HalfOpen"))
+            {
+                await tx.CommitAsync(ct);
+                return false;
+            }
+
+            // Do not mutate a live execution; retain independent provider hold.
+            var affected = await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                UPDATE agent.maersk_circuits
+                SET state = 'Closed',
+                    requires_operator = {current.RequiresOperator},
+                    reason_code = CASE WHEN {current.RequiresOperator} THEN reason_code ELSE NULL END,
+                    open_until_utc = NULL,
+                    consecutive_failures = 0, probe_execution_id = NULL,
+                    updated_at_utc = NOW()
+                WHERE provider_id = {providerId}
+                  AND state IN ('Open', 'HalfOpen')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM agent."AgentExecutions" e
+                      WHERE e.provider_id = {providerId} AND e.status = 'Running'
+                  )
+                """, ct);
+            if (affected == 1)
+            {
+                await AuditAsync(providerId, "AdministrativeClosed", current.ReasonCode,
+                    actorId, reason.Trim(), ct);
+                await EnqueueCircuitEmailAsync(providerId, "Closed", current.ReasonCode,
+                    current.RequiresOperator, current.RequiresOperator
+                        ? "Cierre administrativo: solicitudes a Maersk siguen suspendidas hasta verificar acceso autorizado."
+                        : "Cierre administrativo de incidencia técnica.", ct);
+            }
+            await tx.CommitAsync(ct);
+            return affected == 1;
         });
     }
 
