@@ -19,6 +19,6 @@ public sealed class MaerskGenerationProfileScopeTests
     [DataRow("prod2;drop")]
     [DataRow("")]
     public void InvalidGenerationCannotSelectAnotherProfile(string generation)
-        => Assert.ThrowsException<ArgumentException>(() =>
+        => Assert.ThrowsExactly<ArgumentException>(() =>
             MaerskGenerationProfileScope.Prefix(generation));
 }
