@@ -54,6 +54,32 @@ class GenerationActionsTests(unittest.TestCase):
             alias.symlink_to(original)
             self.assertFalse(actions.marker_verified(alias, "prod2", 3600))
 
+    def test_subprocess_diagnostic_only_exposes_allowlisted_codes(self):
+        self.assertEqual(
+            actions.safe_failure_code(
+                "", "GENERATION_EXISTING_INCOMPLETE: service=dhole-agent-api\\n"),
+            "generation_existing_incomplete")
+        self.assertEqual(
+            actions.safe_failure_code(
+                "GENERATION_HEALTH_DETAIL service=api state=exited\\n"
+                "GENERATION_INFRASTRUCTURE_HEALTH_FAILED: prod2\\n", ""),
+            "generation_infrastructure_health_failed")
+        self.assertEqual(
+            actions.safe_failure_code(
+                "password=sensitive\\n", "TOKEN=secret\\n"),
+            "guarded_command_failed")
+        self.assertEqual(
+            actions.safe_failure_code(
+                "", "GENERATION_API_CONFIG_INCOMPLETE: verify options\\n"),
+            "generation_api_config_incomplete")
+
+    def test_workflow_uses_protected_jwt_material_and_persists_failure_code(self):
+        workflow = (SCRIPT.parents[1] / ".github/workflows/production-generation-actions.yml").read_text()
+        self.assertIn('python3 scripts/prepare-prod1-jwt-env.py', workflow)
+        self.assertIn('EXECUTION_DIAGNOSTIC:', workflow)
+        self.assertIn('status=Failed', workflow)
+        self.assertIn('--diagnostic-code', workflow)
+
     def test_automatic_trigger_requires_real_docker_failure(self):
         class FakeDocker:
             @staticmethod
