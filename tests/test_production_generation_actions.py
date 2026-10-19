@@ -13,14 +13,15 @@ SPEC.loader.exec_module(actions)
 
 
 class GenerationActionsTests(unittest.TestCase):
-    def test_numeric_successor_and_wrap(self):
+    def test_numeric_successor_never_reuses_retired_generation(self):
         pool = ["prod3", "prod10", "prod1", "prod2"]
         self.assertEqual(actions.numbered_targets("prod1", pool),
                          ["prod2", "prod3", "prod10"])
         self.assertEqual(actions.numbered_targets("prod2", pool),
-                         ["prod3", "prod10", "prod1"])
-        self.assertEqual(actions.numbered_targets("prod10", pool),
-                         ["prod1", "prod2", "prod3"])
+                         ["prod3", "prod10"])
+        self.assertEqual(actions.numbered_targets("prod10", pool), [])
+        self.assertEqual(actions.numbered_targets("prod", pool),
+                         ["prod1", "prod2", "prod3", "prod10"])
 
     def test_invalid_destination_rejected(self):
         self.assertEqual(actions.numbered_targets("prod", [
