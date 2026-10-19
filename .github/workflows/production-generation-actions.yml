@@ -19,6 +19,11 @@ on:
           - preflight
           - switch
           - technical-recovery
+          - attest
+      action_request_id:
+        description: "Opaque UUID of an authorized DholeWeb request (optional)"
+        type: string
+        required: false
       generation:
         description: "Destination prodN (used by provision, preflight and switch)"
         type: string
@@ -35,6 +40,8 @@ on:
     paths:
       - .github/workflows/production-generation-actions.yml
       - scripts/production-generation-actions.py
+      - scripts/production-generation-web-action-state.py
+      - scripts/operator-attest-generation-readiness.py
       - tests/test_production_generation_actions.py
 
 permissions:
@@ -55,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/production-generation-actions.py
+          python3 -m py_compile scripts/production-generation-actions.py scripts/production-generation-web-action-state.py scripts/operator-attest-generation-readiness.py
           python3 -m unittest discover -s tests -p 'test_production_generation_actions.py' -v
           bash -n scripts/provision-production-generation.sh
           bash -n scripts/production-generation-status-sync.sh
@@ -86,7 +93,7 @@ jobs:
             echo 'GENERATION_ACTIONS_REFUSED: production_env_missing' >&2; exit 2;
           }
           case "$SELECTED_OPERATION" in
-            inspect|reconcile|provision-check|provision|preflight|switch|technical-recovery) ;;
+            inspect|reconcile|provision-check|provision|preflight|switch|technical-recovery|attest) ;;
             *) echo 'GENERATION_ACTIONS_REFUSED: invalid_operation' >&2; exit 2 ;;
           esac
           if [[ "$SELECTED_OPERATION" == provision || "$SELECTED_OPERATION" == switch ]]; then
@@ -96,7 +103,7 @@ jobs:
               [[ "$OPERATOR_CONFIRMATION" == AUTHORIZE_VERIFIED_WORKER_HANDOFF ]] || exit 2
             fi
           fi
-          if [[ "$SELECTED_OPERATION" == provision* || "$SELECTED_OPERATION" == preflight || "$SELECTED_OPERATION" == switch ]]; then
+          if [[ "$SELECTED_OPERATION" == provision* || "$SELECTED_OPERATION" == preflight || "$SELECTED_OPERATION" == switch || "$SELECTED_OPERATION" == attest ]]; then
             [[ "$TARGET_GENERATION" =~ ^prod[1-9][0-9]*$ && "${#TARGET_GENERATION}" -le 64 ]] || exit 2
           fi
           python3 -m py_compile scripts/production-generation-actions.py
@@ -125,18 +132,53 @@ jobs:
           chmod 600 "$RUNNER_TEMP/generation-actions/.env.production"
           echo "GENERATION_ACTIONS_ENV=$RUNNER_TEMP/generation-actions/.env.production" >> "$GITHUB_ENV"
 
+      - name: Claim authorized DholeWeb request using PostgreSQL
+        id: claim
+        if: ${{ inputs.action_request_id != '' && github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.action_request_id }}
+          SELECTED_OPERATION: ${{ inputs.operation }}
+          TARGET_GENERATION: ${{ inputs.generation }}
+        run: |
+          set -euo pipefail
+          python3 scripts/production-generation-web-action-state.py \
+            --id "$REQUEST_ID" --operation "$SELECTED_OPERATION" \
+            --generation "$TARGET_GENERATION" --status Running \
+            --env-file "$GENERATION_ACTIONS_ENV"
+
       - name: Execute verified generation control on the host
+        id: execute
         shell: bash
         env:
           SELECTED_OPERATION: ${{ github.event_name == 'schedule' && 'technical-recovery' || inputs.operation }}
           TARGET_GENERATION: ${{ inputs.generation }}
           OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
+          REQUEST_ID: ${{ inputs.action_request_id }}
         run: |
           set -euo pipefail
           python3 scripts/production-generation-actions.py \
             --operation "$SELECTED_OPERATION" \
             --target "${TARGET_GENERATION:-}" \
             --confirmation "${OPERATOR_CONFIRMATION:-}" \
+            --action-request-id "${REQUEST_ID:-}" \
             --system-dir .dhole-system \
             --env-file "$GENERATION_ACTIONS_ENV" \
             --state-dir "$HOME/.local/state/dhole-production-generation"
+
+      - name: Persist web request result from actual runner outcome
+        if: ${{ always() && inputs.action_request_id != '' && steps.claim.outcome == 'success' }}
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.action_request_id }}
+          SELECTED_OPERATION: ${{ inputs.operation }}
+          TARGET_GENERATION: ${{ inputs.generation }}
+          EXECUTION_OUTCOME: ${{ steps.execute.outcome }}
+        run: |
+          set -euo pipefail
+          status=Failed
+          if [[ "$EXECUTION_OUTCOME" == success ]]; then status=Completed; fi
+          python3 scripts/production-generation-web-action-state.py \
+            --id "$REQUEST_ID" --operation "$SELECTED_OPERATION" \
+            --generation "$TARGET_GENERATION" --status "$status" \
+            --env-file "$GENERATION_ACTIONS_ENV"
