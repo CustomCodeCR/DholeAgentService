@@ -163,7 +163,7 @@ public sealed class MaerskAgentProvider(
         IBrowserSession openedSession;
         try
         {
-            openedSession = await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+            openedSession = await OpenWithOrphanedSingletonRecoveryAsync(descriptor, cancellationToken);
         }
         catch (PlaywrightException)
         {
@@ -480,6 +480,24 @@ public sealed class MaerskAgentProvider(
                 "OceanFreightRates",
                 "3.0",
                 outputJson);
+    }
+
+
+    private async Task<IBrowserSession> OpenWithOrphanedSingletonRecoveryAsync(
+        BrowserProfileDescriptor descriptor, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        }
+        catch (PlaywrightException) when (!cancellationToken.IsCancellationRequested &&
+            ChromiumStaleSingletonRecovery.TryArchiveOrphanedLinks(descriptor.StoragePath))
+        {
+            // One technical retry of the SAME profile. Only orphaned links
+            // were moved to a local archive; cookies/session remain untouched.
+            // The calling execution still holds the exclusive profile lock.
+            return await browsers.OpenPersistentAsync(descriptor, cancellationToken);
+        }
     }
 
     private async Task<CapturedMaerskOfferResponse> ExecuteSearchWithUiRecoveryAsync(
