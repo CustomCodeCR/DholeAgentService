@@ -171,7 +171,7 @@ jobs:
             echo 'diagnostic=github_workflow_confirmed' >> "$GITHUB_OUTPUT"
           else
             # Never echo subprocess stderr: accept one known machine-safe code.
-            code="$(sed -n 's/^GENERATION_ACTIONS_REFUSED: \\([a-z][a-z0-9_]*\\)$/\\1/p' "$diagnostic_file" | tail -n1)"
+            code="$(awk '/^GENERATION_ACTIONS_REFUSED: [a-z][a-z0-9_]*$/ {print $2}' "$diagnostic_file" | tail -n1)"
             [[ "$code" =~ ^[a-z][a-z0-9_]{2,63}$ ]] || code=guarded_command_failed
             echo "diagnostic=$code" >> "$GITHUB_OUTPUT"
             echo "GENERATION_ACTIONS_REFUSED: $code" >&2
