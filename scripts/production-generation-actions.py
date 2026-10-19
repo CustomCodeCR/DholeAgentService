@@ -174,12 +174,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--operation", required=True, choices=(
         "inspect", "provision-check", "provision", "reconcile",
-        "preflight", "switch", "technical-recovery"))
+        "preflight", "switch", "technical-recovery", "attest"))
     parser.add_argument("--target", default="")
     parser.add_argument("--env-file", required=True)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--system-dir", default="")
     parser.add_argument("--confirmation", default="")
+    parser.add_argument("--action-request-id", default="")
     args = parser.parse_args()
     env_file, state = Path(args.env_file), Path(args.state_dir).expanduser()
     if not env_file.is_file() or state.is_symlink():
@@ -190,6 +191,23 @@ def main():
         active, worker = e.find_running_generation()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         raise ActionRefused("active_worker_not_uniquely_identified")
+
+    if args.operation == "attest":
+        if not args.action_request_id:
+            raise ActionRefused("web_authorization_id_required")
+        if not NAME.fullmatch(args.target) or args.target == active:
+            raise ActionRefused("invalid_attestation_target")
+        call([
+            sys.executable,
+            str(ROOT / "scripts/operator-attest-generation-readiness.py"),
+            "--generation", args.target,
+            "--confirmation", "I_INDEPENDENTLY_VERIFIED_AUTHORIZED_PROVIDER_ACCESS",
+            "--web-request-id", args.action_request_id,
+            "--env-file", str(env_file),
+            "--state-dir", str(state),
+        ], timeout=120)
+        print("GENERATION_WEB_AUTHORIZED_STANDBY=" + args.target)
+        return
 
     if args.operation in ("provision-check", "provision"):
         target = args.target
