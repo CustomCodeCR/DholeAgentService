@@ -1,0 +1,27 @@
+name: Validate retired Agent generation cleanup
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - scripts/retire-production-generation.py
+      - scripts/production-generation-apply-request.py
+      - tests/test_retire_production_generation.py
+      - .github/workflows/validate-generation-retirement.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check syntax and retirement safety
+        run: |
+          python3 -m py_compile scripts/retire-production-generation.py scripts/production-generation-apply-request.py
+          python3 -m unittest discover -s tests -p 'test_retire_production_generation.py' -v
