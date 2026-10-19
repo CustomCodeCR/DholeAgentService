@@ -189,13 +189,13 @@ public sealed class ProductionGenerationDispatchBackgroundService(
                AND length(trim(a.verified_by)) >= 3
                AND a.verified_at_utc <= now()
                AND a.verified_at_utc > now() - interval '60 minutes'
-            WHERE g.name <> @active AND g.name ~ '^prod[1-9][0-9]*$'
-            -- Choose the first ready numbered generation after the active one.
-            -- Wrap to the lowest eligible number only when no higher one exists.
-            -- Provider authorization and closed-circuit guards above are mandatory.
-            ORDER BY CASE
-                WHEN substring(g.name from 5)::numeric >
-                    CASE WHEN @active ~ '^prod[1-9][0-9]*
+            WHERE g.name ~ '^prod[1-9][0-9]*$'
+              AND substring(g.name from 5)::numeric >
+                  CASE WHEN @active ~ '^prod[1-9][0-9]*$'
+                       THEN substring(@active from 5)::numeric ELSE 0 END
+            -- Retired generations may never be selected automatically.
+            ORDER BY substring(g.name from 5)::numeric
+            LIMIT 1
             """, ct, ("active", active));
         if (string.IsNullOrEmpty(destination)) return;
 
