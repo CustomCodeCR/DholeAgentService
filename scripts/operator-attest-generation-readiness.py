@@ -148,15 +148,52 @@ def main():
     parser.add_argument("--confirmation", required=True)
     parser.add_argument("--env-file", required=True)
     parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--web-request-id", default="")
     args = parser.parse_args()
 
     actor = os.environ.get("GITHUB_ACTOR", "")
     if (os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
-            or os.environ.get("GITHUB_REF") != "refs/heads/master"
-            or not re.fullmatch(r"[A-Za-z0-9-]{3,39}", actor)):
-        refuse("manual_master_operator_workflow_required")
+            or os.environ.get("GITHUB_REF") != "refs/heads/master"):
+        refuse("master_actions_workflow_required")
     if args.confirmation != CONFIRMATION:
         refuse("independent_provider_verification_not_attested")
+    if args.web_request_id:
+        # The authenticating operator is the authenticated web user, not the
+        # GitHub App/robot account that dispatched the workflow.
+        try:
+            import uuid
+            request_id = str(uuid.UUID(args.web_request_id))
+            if request_id != args.web_request_id:
+                refuse("invalid_web_authorization_id")
+            spec = importlib.util.spec_from_file_location(
+                "web_generation_db", ROOT / "scripts/production-generation-apply-request.py")
+            db = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(db)
+            config = db.parse_db(args.env_file)
+            evidence = db.sql(config, f"""
+                SELECT action.actor_id::text
+                FROM agent.runtime_generation_web_actions action
+                WHERE action.id='{request_id}'::uuid
+                  AND action.generation='{args.generation}'
+                  AND action.operation='attest'
+                  AND action.confirmed_provider_access
+                  AND action.status='Running'
+                  AND action.created_at_utc > now()-interval '5 minutes'
+                  AND EXISTS (
+                    SELECT 1 FROM agent.runtime_generation_auth_sessions session
+                    WHERE session.generation=action.generation
+                      AND session.status='Verified'
+                      AND session.account_verified_at_utc > now()-interval '5 minutes'
+                      AND session.account_verified_at_utc <= now()
+                  )
+            """, stage="verified_web_attestation")
+            if not re.fullmatch(r"[0-9a-f-]{36}", evidence):
+                refuse("fresh_independent_hub_evidence_required")
+            actor = evidence
+        except (ValueError, KeyError, OSError):
+            refuse("web_authorization_not_verified")
+    elif not re.fullmatch(r"[A-Za-z0-9-]{3,39}", actor):
+        refuse("manual_operator_identity_required")
     if (not re.fullmatch(r"prod[1-9][0-9]*", args.generation)
             or len(args.generation) > 64
             or int(args.generation[4:]) > 200):
