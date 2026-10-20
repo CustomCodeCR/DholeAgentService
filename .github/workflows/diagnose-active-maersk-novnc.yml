@@ -25,53 +25,44 @@ jobs:
           set -euo pipefail
           mapfile -t ids < <(docker ps -q --filter 'label=com.docker.compose.service=dhole-agent-workers')
           echo "NOVNC_ACTIVE_WORKER_COUNT=${#ids[@]}"
-          if [[ "${#ids[@]}" -ne 1 ]]; then
-            echo 'NOVNC_DIAG=active_worker_missing_or_ambiguous'
+          if [[ "${#ids[@]}" -eq 0 ]]; then
+            echo 'NOVNC_DIAG=no_running_agent_worker'
             exit 2
           fi
-          id="${ids[0]}"
-          project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$id")"
-          echo "NOVNC_ACTIVE_PROJECT=$project"
-          case "$project" in
-            dhole-agent-prod[1-9]*|dhole) ;;
-            *) echo 'NOVNC_DIAG=unexpected_project'; exit 2 ;;
-          esac
-          status="$(docker inspect -f '{{.State.Status}}' "$id")"
-          echo "NOVNC_WORKER_STATUS=$status"
-          [[ "$status" == running ]] || exit 2
-          env_port="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" | sed -n 's/^AGENT_NOVNC_PORT=//p' | head -n1)"
-          echo "NOVNC_WORKER_INTERNAL_PORT=${env_port:-unset}"
-          echo 'NOVNC_HOST_MAPPING_BEGIN'
-          docker inspect -f '{{range $proto, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{printf "NOVNC_HOST_MAPPING %s %s:%s\n" $proto .HostIp .HostPort}}{{end}}{{end}}' "$id"
-          echo 'NOVNC_HOST_MAPPING_END'
-          docker exec "$id" bash -c '
-            set -euo pipefail
-            for service in Xvfb x11vnc websockify; do
-              if pgrep -x "$service" >/dev/null 2>&1; then
-                echo "NOVNC_PROCESS_${service}=running"
+          for id in "${ids[@]}"; do
+            project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$id")"
+            service="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
+            echo "NOVNC_WORKER_PROJECT=$project"
+            echo "NOVNC_WORKER_SERVICE=$service"
+            status="$(docker inspect -f '{{.State.Status}}' "$id")"
+            echo "NOVNC_WORKER_STATUS=$status"
+            env_port="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" | sed -n 's/^AGENT_NOVNC_PORT=//p' | head -n1)"
+            echo "NOVNC_WORKER_INTERNAL_PORT=${env_port:-unset}"
+            echo 'NOVNC_HOST_MAPPING_BEGIN'
+            docker inspect -f '{{range $proto, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{printf "NOVNC_HOST_MAPPING %s %s:%s\n" $proto .HostIp .HostPort}}{{end}}{{end}}' "$id"
+            echo 'NOVNC_HOST_MAPPING_END'
+            docker exec "$id" bash -c '
+              set -euo pipefail
+              for service in Xvfb x11vnc websockify; do
+                if pgrep -x "$service" >/dev/null 2>&1; then
+                  echo "NOVNC_PROCESS_${service}=running"
+                else
+                  echo "NOVNC_PROCESS_${service}=missing"
+                fi
+              done
+              for port in 5900 6080; do
+                if timeout 3 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                  echo "NOVNC_INTERNAL_PORT_${port}=open"
+                else
+                  echo "NOVNC_INTERNAL_PORT_${port}=closed"
+                fi
+              done
+              if [[ -S /tmp/.X11-unix/X99 ]]; then
+                echo "NOVNC_X11_SOCKET=present"
               else
-                echo "NOVNC_PROCESS_${service}=missing"
+                echo "NOVNC_X11_SOCKET=missing"
               fi
-            done
-            for port in 5900 6080; do
-              if timeout 3 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
-                echo "NOVNC_INTERNAL_PORT_${port}=open"
-              else
-                echo "NOVNC_INTERNAL_PORT_${port}=closed"
-              fi
-            done
-            if [[ -S /tmp/.X11-unix/X99 ]]; then
-              echo "NOVNC_X11_SOCKET=present"
-            else
-              echo "NOVNC_X11_SOCKET=missing"
-            fi
-            echo "NOVNC_CHROMIUM_PROCESS_COUNT=$(pgrep -fa "(chromium|chrome)" 2>/dev/null | grep -v "pgrep -fa" | grep -Ec "(chromium|chrome)" || true)"
-            for file in /tmp/agent-x11vnc.log /tmp/agent-novnc.log /tmp/agent-xvfb.log; do
-              if [[ -s "$file" ]]; then
-                echo "NOVNC_LOG_${file##*/}=present"
-              else
-                echo "NOVNC_LOG_${file##*/}=empty_or_missing"
-              fi
-            done
-          '
+              echo "NOVNC_CHROMIUM_PROCESS_COUNT=$(pgrep -fa "(chromium|chrome)" 2>/dev/null | grep -v "pgrep -fa" | grep -Ec "(chromium|chrome)" || true)"
+            '
+          done
           echo 'NOVNC_DIAG_COMPLETE_READ_ONLY'
