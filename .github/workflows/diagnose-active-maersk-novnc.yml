@@ -33,6 +33,14 @@ jobs:
             project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$id")"
             service="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
             echo "NOVNC_WORKER_PROJECT=$project"
+            if [[ "$project" == dhole-agent-prod2 ]]; then
+              internal_ip="$(docker inspect -f '{{with index .NetworkSettings.Networks "dhole"}}{{.IPAddress}}{{end}}' "$id")"
+              if [[ "$internal_ip" =~ ^([0-9]{1,3}\\.){3}[0-9]{1,3}$ ]]; then
+                echo "NOVNC_PROD2_INTERNAL_IP=$internal_ip"
+              else
+                echo "NOVNC_PROD2_INTERNAL_IP=unavailable"
+              fi
+            fi
             echo "NOVNC_WORKER_SERVICE=$service"
             status="$(docker inspect -f '{{.State.Status}}' "$id")"
             echo "NOVNC_WORKER_STATUS=$status"
