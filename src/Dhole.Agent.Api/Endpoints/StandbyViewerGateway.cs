@@ -5,6 +5,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Dhole.Agent.Api.Extensions;
+using Dhole.Agent.Application.Runtime;
+using Dhole.Agent.Domain.Agents;
+using Dhole.Agent.Persistence.Repositories;
 using Dhole.Agent.Persistence.DbContexts;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,7 +20,7 @@ namespace Dhole.Agent.Api.Endpoints;
 /// </summary>
 internal static class StandbyViewerGateway
 {
-    private sealed record Grant(string Generation, Guid Actor, DateTimeOffset Expires);
+    private sealed record Grant(string Generation, Guid Actor, DateTimeOffset Expires, Guid? VerificationExecutionId);
     private static readonly ConcurrentDictionary<string, Grant> Grants = new();
     private static readonly HttpClient Http = new(new HttpClientHandler
     {
@@ -25,10 +28,11 @@ internal static class StandbyViewerGateway
     }) { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly TimeSpan Life = TimeSpan.FromMinutes(10);
     private const string Root = "/api/agents/runtime-generations/authentication/";
+    private const int NoVncPort = 6080; // Fixed by the production worker Compose manifests.
 
     private static bool ValidGeneration(string name) =>
-        Regex.IsMatch(name, @"^prod(?:[2-9]|[1-9][0-9]{1,2})$") &&
-        int.TryParse(name.AsSpan(4), out var n) && n <= 200;
+        (name == "prod" || (Regex.IsMatch(name, @"^prod[1-9][0-9]{0,2}$") &&
+        int.TryParse(name.AsSpan(4), out var n) && n <= 200));
 
     private static string Prefix(string generation) => Root + generation + "/viewer";
     private static string CookieName(string generation) => "dhole_standby_viewer_" + generation;
@@ -37,8 +41,10 @@ internal static class StandbyViewerGateway
 
     // The API can route a request to the browser-only container on the private
     // Docker network. Chromium CDP (9222) remains unreachable from here.
-    private static string InternalViewer(string generation) =>
-        "http://dhole-standby-auth-" + generation + ":6080/";
+    private static string InternalViewer(string generation, bool active = false) => active
+        ? generation == "prod" ? "http://dhole-agent-workers:6080/"
+            : "http://dhole-agent-" + generation + "-dhole-agent-workers-1:6080/"
+        : "http://dhole-standby-auth-" + generation + ":6080/";
 
     public static async Task<IResult> IssueAsync(
         string generation, HttpContext context, ServiceDbContext db,
@@ -69,7 +75,7 @@ internal static class StandbyViewerGateway
 
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var until = DateTimeOffset.UtcNow.Add(Life);
-        Grants[Key(token)] = new Grant(generation, actor.Value, until);
+        Grants[Key(token)] = new Grant(generation, actor.Value, until, null);
         foreach (var entry in Grants)
             if (entry.Value.Expires <= DateTimeOffset.UtcNow)
                 Grants.TryRemove(entry.Key, out _);
@@ -92,6 +98,97 @@ internal static class StandbyViewerGateway
                 Uri.EscapeDataString(path.TrimStart('/') + "/websockify"),
             expiresAtUtc = until
         });
+    }
+
+    // Only a short-lived, explicitly operator-created manual authentication job
+    // on the CURRENT production generation may open the active Worker's noVNC.
+    // This access never resets a provider circuit or replaces Chromium sessions.
+    internal sealed record ActiveViewerRequest(Guid ExecutionId);
+
+    public static async Task<IResult> IssueActiveAsync(
+        Guid providerId, ActiveViewerRequest request, HttpContext context,
+        ServiceDbContext db, CancellationToken ct)
+    {
+        var actor = context.GetCurrentUserId();
+        if (actor is null || actor == Guid.Empty) return Results.Unauthorized();
+        var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
+        if (!ValidGeneration(generation) || request.ExecutionId == Guid.Empty ||
+            !await ActiveVerificationAuthorizedAsync(db, generation, providerId,
+                request.ExecutionId, actor.Value, ct))
+            return Results.Conflict(new { code = "active_maersk_verification_not_running" });
+
+        try
+        {
+            using var response = await Http.GetAsync(InternalViewer(generation, active: true) + "vnc.html",
+                HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+                return Results.Conflict(new { code = "active_maersk_novnc_unavailable",
+                    generation, internalPort = NoVncPort });
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Conflict(new { code = "active_maersk_novnc_unavailable",
+                generation, internalPort = NoVncPort });
+        }
+        catch (TaskCanceledException)
+        {
+            return Results.Conflict(new { code = "active_maersk_novnc_unavailable",
+                generation, internalPort = NoVncPort });
+        }
+
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        var until = DateTimeOffset.UtcNow.AddMinutes(7);
+        Grants[Key(token)] = new Grant(generation, actor.Value, until, request.ExecutionId);
+        foreach (var entry in Grants)
+            if (entry.Value.Expires <= DateTimeOffset.UtcNow)
+                Grants.TryRemove(entry.Key, out _);
+
+        context.Response.Cookies.Append(CookieName(generation), token, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment(),
+            SameSite = context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment()
+                ? SameSiteMode.Lax : SameSiteMode.None,
+            Path = Prefix(generation),
+            MaxAge = TimeSpan.FromMinutes(7),
+            IsEssential = true
+        });
+        context.Response.Headers.CacheControl = "no-store";
+        var path = Prefix(generation);
+        return Results.Ok(new
+        {
+            generation,
+            internalPort = NoVncPort,
+            hostPort = (int?)null, // prodN Compose does not publish noVNC on the host.
+            accessMode = "authenticated-dhole-viewer",
+            url = path + "/vnc.html?autoconnect=true&resize=scale&path=" +
+                Uri.EscapeDataString(path.TrimStart('/') + "/websockify"),
+            expiresAtUtc = until
+        });
+    }
+
+    private static async Task<bool> ActiveVerificationAuthorizedAsync(
+        ServiceDbContext db, string generation, Guid providerId, Guid executionId,
+        Guid actor, CancellationToken ct)
+    {
+        if (await MaerskGenerationProfileScope.GetActiveAsync(db, ct) != generation)
+            return false;
+        var stateChangedAt = await db.Database.SqlQueryRaw<DateTime>(
+            "SELECT updated_at_utc AS \"Value\" FROM agent.runtime_generation_state WHERE singleton=true")
+            .SingleAsync(ct);
+        var earliest = DateTime.UtcNow.AddMinutes(-7);
+        if (stateChangedAt > earliest) earliest = stateChangedAt;
+        return await db.AgentExecutions.AsNoTracking().AnyAsync(e =>
+            e.Id == executionId && e.ProviderId == providerId &&
+            e.CreatedBy == actor.ToString() &&
+            e.CreatedAtUtc >= earliest &&
+            (e.Status == AgentExecutionStatus.Queued || e.Status == AgentExecutionStatus.Running) &&
+            e.ExecutionType == AgentExecutionType.Manual &&
+            e.MaxAttempts == 1 &&
+            db.AgentDefinitions.Any(d => d.Id == e.AgentDefinitionId &&
+                d.ProviderId == providerId &&
+                d.Code == MaerskSessionVerification.DefinitionCode) &&
+            db.AgentProviders.Any(p => p.Id == providerId && p.Code == "MAERSK"), ct);
     }
 
     public static void Map(IEndpointRouteBuilder app)
@@ -124,7 +221,12 @@ internal static class StandbyViewerGateway
     {
         if (!ValidGeneration(generation) || !ValidAsset(asset) ||
             !TryGrant(context, generation, out var grant) ||
-            !await AuthorizedAsync(db, generation, grant.Actor, cancellationToken))
+            !(grant.VerificationExecutionId.HasValue
+                ? await ActiveVerificationAuthorizedAsync(db, generation,
+                    await db.AgentExecutions.Where(e => e.Id == grant.VerificationExecutionId.Value)
+                        .Select(e => e.ProviderId).FirstOrDefaultAsync(cancellationToken),
+                    grant.VerificationExecutionId.Value, grant.Actor, cancellationToken)
+                : await AuthorizedAsync(db, generation, grant.Actor, cancellationToken)))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -148,7 +250,7 @@ internal static class StandbyViewerGateway
             using var upstream = new ClientWebSocket();
             try
             {
-                await upstream.ConnectAsync(new Uri(InternalViewer(generation)
+                await upstream.ConnectAsync(new Uri(InternalViewer(generation, grant.VerificationExecutionId.HasValue)
                     .Replace("http://", "ws://") + "websockify"), cancellationToken);
                 using var client = await context.WebSockets.AcceptWebSocketAsync();
                 using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -169,7 +271,7 @@ internal static class StandbyViewerGateway
         }
 
         using var response = await Http.GetAsync(
-            InternalViewer(generation) + asset,
+            InternalViewer(generation, grant.VerificationExecutionId.HasValue) + asset,
             HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
