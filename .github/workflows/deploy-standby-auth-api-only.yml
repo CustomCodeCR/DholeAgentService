@@ -1,4 +1,4 @@
-name: Fix standby authentication completion on the live Agent API
+name: Deploy protected Agent API noVNC WebSocket origin fix (API only)
 
 on:
   push:
@@ -32,6 +32,7 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || exit 2
           bash -n scripts/deploy-standby-auth-api-only.sh
           python3 -m unittest discover -s tests -p test_standby_auth_completion_contract.py -v
+          python3 -m unittest discover -s tests -p test_standby_novnc_api_only_deploy.py -v
           python3 -m unittest discover -s tests -p 'test_standby_auth*.py' -v
 
       - name: Prepare private runtime with existing authorized dispatcher
@@ -84,5 +85,6 @@ jobs:
           rm -f "$folder/.env.production"
           rm -f "$RUNNER_TEMP/standby-api-only/worker-id" \
             "$RUNNER_TEMP/standby-api-only/worker-image" \
+            "$RUNNER_TEMP/standby-api-only/worker-browser-volume" \
             "$RUNNER_TEMP/standby-api-only/key-volume" \
             "$RUNNER_TEMP/standby-api-only/old-api-image"
