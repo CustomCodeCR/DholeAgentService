@@ -10,12 +10,12 @@ import importlib.util,json,os,subprocess
 spec=importlib.util.spec_from_file_location("owner","scripts/production-generation-executor.py")
 owner=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner)
-assert owner.find_running_generation()[0]=="prod1","API_ONLY_REFUSED: prod1 not owner"
+assert owner.find_running_generation()[0]=="prod2","API_ONLY_REFUSED: prod2 is not the active queue owner"
 def item(project,service):
     ids=subprocess.check_output(["docker","ps","-aq","--filter","label=com.docker.compose.project="+project,"--filter","label=com.docker.compose.service="+service],text=True).splitlines()
     assert len(ids)==1,"API_ONLY_REFUSED: ambiguous service"
     return json.loads(subprocess.check_output(["docker","inspect",ids[0]],text=True))[0]
-worker=item("dhole-agent-prod1","dhole-agent-workers-prod1")
+worker=item("dhole-agent-prod2","dhole-agent-workers")
 api=item("dhole","dhole-agent-api")
 assert worker["State"]["Status"]=="running" and api["State"]["Status"]=="running"
 current=dict(row.split("=",1) for row in api["Config"]["Env"] if "=" in row)
@@ -28,7 +28,9 @@ mounts=[m["Name"] for m in api["Mounts"] if m["Destination"]=="/data/agent-keys"
 assert len(mounts)==1
 state=os.environ["RUNNER_TEMP"]+"/standby-api-only"
 os.makedirs(state,mode=0o700,exist_ok=True)
-for key,value in (("worker-id",worker["Id"]),("worker-image",worker["Image"]),("key-volume",mounts[0]),("old-api-image",api["Image"])):
+worker_browser_mounts=[m.get("Name") for m in worker["Mounts"] if m["Destination"]=="/data/browser-profiles" and m.get("Name")]
+assert len(worker_browser_mounts)==1,"API_ONLY_REFUSED: active browser volume ambiguous"
+for key,value in (("worker-id",worker["Id"]),("worker-image",worker["Image"]),("worker-browser-volume",worker_browser_mounts[0]),("key-volume",mounts[0]),("old-api-image",api["Image"])):
     with open(state+"/"+key,"w") as output: output.write(value)
 print("API_ONLY_RUNTIME_AND_WORKER_VERIFIED")
 PY
@@ -66,12 +68,13 @@ assert api["State"]["Status"]=="running" and api["Image"]==image
 assert next(m["Name"] for m in api["Mounts"] if m["Destination"]=="/data/agent-keys")==open(state+"key-volume").read()
 worker=json.loads(subprocess.check_output(["docker","inspect",open(state+"worker-id").read()],text=True))[0]
 assert worker["State"]["Status"]=="running" and worker["Image"]==open(state+"worker-image").read()
-print("API_ONLY_PROD1_WORKER_AND_KEYS_PRESERVED")
+assert any(m["Destination"]=="/data/browser-profiles" and m.get("Name")==open(state+"worker-browser-volume").read() for m in worker["Mounts"])
+print("API_ONLY_ACTIVE_PROD2_WORKER_BROWSER_AND_KEYS_PRESERVED")
 PY
 docker image inspect curlimages/curl:8.12.1 >/dev/null || docker pull curlimages/curl:8.12.1 >/dev/null
 healthy=0
 for attempt in $(seq 1 30); do
-  if docker run --rm --pull never --network dhole curlimages/curl:8.12.1 -fsS --max-time 4 http://dhole-agent-api:8080/health >/dev/null 2>&1; then healthy=1;break;fi
+  if docker run --rm --pull never --network dhole curlimages/curl:8.12.1 -fsS --max-time 4 http://dhole-dhole-agent-api-1:8080/health >/dev/null 2>&1; then healthy=1;break;fi
   sleep 2
 done
 [[ "$healthy" == 1 ]] || exit 2
