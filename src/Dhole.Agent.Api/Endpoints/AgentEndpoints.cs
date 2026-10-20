@@ -118,6 +118,9 @@ public static class AgentEndpoints
         // Unlike rate-search executions, a single explicitly requested
         // authentication-only execution is allowed while the provider circuit
         // remains Open. Never changes the circuit or the existing Chromium files.
+        circuit.MapPost("/{providerId:guid}/viewer/access", StandbyViewerGateway.IssueActiveAsync)
+            .RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
+
         circuit.MapPost("/{providerId:guid}/verify-session", async (
             Guid providerId, VerifyOriginalMaerskSessionRequest request,
             HttpContext http, ServiceDbContext db, IMaerskCircuitBreaker breaker,
@@ -148,6 +151,9 @@ public static class AgentEndpoints
 
             var generation = await MaerskGenerationProfileScope.GetActiveAsync(db, ct);
             var profilePrefix = MaerskGenerationProfileScope.Prefix(generation);
+            var activeSince = await db.Database.SqlQueryRaw<DateTime>(
+                "SELECT updated_at_utc AS \"Value\" FROM agent.runtime_generation_state WHERE singleton=true")
+                .SingleAsync(ct);
             var profileRoot = $"/data/browser-profiles/MAERSK/{credential.Id:N}";
             var profiles = await db.BrowserProfiles
                 .Where(x => x.ProviderId == providerId && !x.IsDeleted && x.IsActive
@@ -174,6 +180,8 @@ public static class AgentEndpoints
             {
                 var pending = await db.AgentExecutions.AsNoTracking()
                     .Where(x => x.AgentDefinitionId == definition.Id
+                              && x.CreatedBy == actorId.Value.ToString()
+                              && x.CreatedAtUtc >= activeSince
                              && x.ProviderId == providerId
                              && x.CredentialId == credential.Id
                              && x.InputJson == MaerskSessionVerification.InputJson
@@ -184,7 +192,8 @@ public static class AgentEndpoints
                 if (pending != Guid.Empty)
                     return Results.Accepted($"/api/agents/executions/{pending}",
                         new { executionId = pending, status = "QueuedOrRunning",
-                              circuit = state.State, verificationOnly = true });
+                              circuit = state.State, verificationOnly = true,
+                              activeGeneration = generation, noVncPort = 6080 });
             }
 
             if (profiles.Count == 0)
@@ -213,7 +222,8 @@ public static class AgentEndpoints
             await db.SaveChangesAsync(ct);
             return Results.Accepted($"/api/agents/executions/{execution.Id}",
                 new { executionId = execution.Id, status = "Queued", circuit = state.State,
-                      verificationOnly = true, browserProfileStatus = "AwaitingManualVerification" });
+                      verificationOnly = true, browserProfileStatus = "AwaitingManualVerification",
+                       activeGeneration = generation, noVncPort = 6080 });
         }).RequireScope(AgentScopeNames.BrowserProfilesAuthenticate);
 
         circuit.MapPost("/{providerId:guid}/reset", async (Guid providerId,
