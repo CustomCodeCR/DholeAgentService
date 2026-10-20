@@ -304,8 +304,15 @@ internal static class StandbyViewerGateway
         var origin = context.Request.Headers.Origin.ToString();
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
             return false;
+        // The noVNC page is served by the Agent API origin itself. Its browser
+        // WebSocket Origin is api.logisticacastrofallas.com (or dhole-api in
+        // secondary installations), not the SPA origin. The API Gateway
+        // forwards that Origin to this handler while changing Request.Host
+        // to the private API upstream; never rely on matching Request.Host.
         return (uri.Scheme == "https" && (uri.Host == "dhole.customcodecr.com" ||
-            uri.Host == "sistema.logisticacastrofallas.com")) ||
+            uri.Host == "sistema.logisticacastrofallas.com" ||
+            uri.Host == "api.logisticacastrofallas.com" ||
+            uri.Host == "dhole-api.customcodecr.com")) ||
             (uri.Scheme == "http" && (uri.Host == "localhost" ||
             uri.Host == "127.0.0.1") && uri.Port == 5173) ||
             // The API is normally behind TLS termination. Its internal
