@@ -6,7 +6,7 @@ staging="$root/.github/workflows/deploy-staging.yml"
 production="$root/.github/workflows/deploy-production.yml"
 backup="$root/.github/workflows/maersk-phase8-backup.yml"
 
-for workflow in "$staging" "$production"; do
+for workflow in "$staging"; do
   [[ -s "$workflow" ]] || { echo "Missing workflow: $workflow" >&2; exit 1; }
   grep -Fq 'workflow_dispatch:' "$workflow"
   grep -Fq 'confirmation:' "$workflow"
@@ -52,17 +52,24 @@ for workflow in "$staging" "$production"; do
   fi
 done
 
-grep -Fq 'staging_run_id:' "$production"
-grep -Fq 'Require successful recent staging acceptance' "$production"
-grep -Fq 'run.get("event") == "workflow_dispatch"' "$production"
-grep -Fq 'EXPECTED_STAGING_SHA:' "$production"
-grep -Fq 'Checkout approved Agent revision' "$production"
-grep -Fq "ref: \${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'develop' }}" "$production"
-grep -Fq 'github.event.workflow_run.head_sha' "$production"
-grep -Fq 'else os.environ["CURRENT_DEVELOP_SHA"]' "$production"
-grep -Fq 'run.get("head_sha") == target_sha' "$production"
-grep -Fq 'DEPLOY_AGENT_PRODUCTION' "$production"
-grep -Fq 'DEPLOY_AGENT_STAGING' "$staging"
+[[ -s "$production" ]] || { echo "Production workflow missing" >&2; exit 1; }
+grep -Fq 'branches: [master]' "$production"
+grep -Fq 'push:' "$production"
+grep -Fq 'workflow_dispatch:' "$production"
+grep -Fq 'cancel-in-progress: false' "$production"
+grep -Fq 'scripts/check-active-worker-release.py' "$production"
+grep -Fq 'scripts/deploy-active-prod1-npgsql-hotfix.sh' "$production"
+grep -Fq 'scripts/deploy-active-prod2-release.sh' "$production"
+grep -Fq 'GITHUB_SHA' "$production"
+grep -Fq 'dhole-agent-protected-release-backups' "$production"
+grep -Fq 'MASTER_AGENT_DEPLOYMENT_CONFIRMED' "$production"
+if grep -Fq 'workflow_run:' "$production" || grep -Fq 'confirmation:' "$production"; then echo 'Legacy approval gate forbidden' >&2; exit 1; fi
+for guarded in "$root/scripts/deploy-active-prod1-npgsql-hotfix.sh" "$root/scripts/deploy-active-prod2-release.sh"; do
+ [[ -s "$guarded" ]] || exit 1
+ grep -Fq 'SHA256SUMS' "$guarded"
+ grep -Fq 'find_running_generation()' "$guarded"
+ grep -Fq 'rollback' "$guarded"
+done
 [[ -s "$backup" ]] || { echo "Missing guarded manual backup workflow" >&2; exit 1; }
 for expected in 'workflow_dispatch:' 'BACKUP_AGENT_STAGING' 'BACKUP_AGENT_PRODUCTION' \
   'maersk-phase8-backup.sh' 'maersk-phase8-preflight.sh' \
