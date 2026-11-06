@@ -14,6 +14,7 @@ case "$environment" in
   production) project="dhole"; network="dhole"; worker_service="dhole-agent-workers" ;;
   prod1) project="dhole-agent-prod1"; network="dhole"; worker_service="dhole-agent-workers-prod1" ;;
   prod2) project="dhole-agent-prod2"; network="dhole"; worker_service="dhole-agent-workers" ;;
+  prod3) project="dhole-agent-prod3"; network="dhole"; worker_service="dhole-agent-workers" ;;
   *) die "Invalid environment" ;;
 esac
 
@@ -43,15 +44,15 @@ host="${host:-postgres}"
 port="${port:-5432}"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || die "Invalid database configuration"
 
-if [[ "$environment" == prod1 || "$environment" == prod2 ]]; then
+if [[ "$environment" == prod1 || "$environment" == prod2 || "$environment" == prod3 ]]; then
   # Discover persistent volume names from the already-provisioned prod1
   # container; never guess paths or copy profiles from the primary generation.
   worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
     --filter "label=com.docker.compose.service=$worker_service")"
-  [[ -n "$worker_container" ]] || die 'Existing prod1 Worker container missing'
+  [[ -n "$worker_container" ]] || die 'Existing generation Worker container missing'
   profile_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/browser-profiles"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
   keys_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/agent-keys"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
-  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing prod1 persistent mount'
+  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing generation persistent mount'
 else
   profile_volume="${project}_agent-browser-profiles"
   keys_volume="${project}_agent-data-protection-keys"

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2] - 2026-11-05
+
+- Admite prod3 como Worker activo con backups, rollback y verificación de exclusividad.
+- Clonación resiliente de DholeSystem ante errores DNS transitorios.
+
+
 ## [1.2.1] - 2026-11-05
 
 - Deploy Agent automático por push a master sin activación del Worker legacy.
