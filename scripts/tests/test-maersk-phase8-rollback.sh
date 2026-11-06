@@ -57,7 +57,7 @@ grep -Fq 'image tag dhole/agent-workers:phase8-prev-staging-9876543 dhole/agent-
 grep -Fq 'up -d --no-deps --force-recreate --pull never dhole-agent-api dhole-agent-workers' "$DOCKER_MOCK_LOG"
 
 # Verify previous tags remain protected and both deployments can revert on failure.
-for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/workflows/deploy-production.yml"; do
+for workflow in "$repo/.github/workflows/deploy-staging.yml"; do
   # A deployment must validate the snapshot and migrated schema. The
   # destructive full-database restore drill is exercised in the separate,
   # operator-controlled backup workflow against an isolated database.
@@ -74,6 +74,13 @@ for workflow in "$repo/.github/workflows/deploy-staging.yml" "$repo/.github/work
   fi
 done
 
+# Production uses the verified generation-specific scripts rather than the legacy image rollback.
+production="$repo/.github/workflows/deploy-production.yml"
+grep -Fq 'Protect active generation' "$production" || grep -Fq 'Deploy exact SHA to verified active generation' "$production"
+grep -Fq 'scripts/deploy-active-prod1-npgsql-hotfix.sh' "$production"
+grep -Fq 'scripts/deploy-active-prod2-release.sh' "$production"
+grep -Fq 'dhole-agent-protected-release-backups' "$production"
+grep -Fq 'MASTER_AGENT_DEPLOYMENT_CONFIRMED' "$production"
 # Backup workflow retains the separate full restore verification; this must
 # never be mistaken for an image-deployment precondition.
 grep -Fq 'maersk-phase8-restore-drill.sh' "$repo/.github/workflows/maersk-phase8-backup.yml"
