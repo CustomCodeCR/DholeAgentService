@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/master
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh scripts/deploy-active-prod2-release.sh
+          bash -n scripts/deploy-active-prod1-npgsql-hotfix.sh scripts/deploy-active-prod2-release.sh scripts/deploy-active-prod3-release.sh
           bash -n scripts/maersk-phase8-backup.sh
           python3 -m py_compile scripts/production-generation-executor.py scripts/production-generation-apply-request.py scripts/prepare-prod1-generation-env.py
           python3 -m unittest discover -s tests -p 'test_prepare_prod1_generation_env.py' -v
@@ -63,7 +63,20 @@ jobs:
             echo 'PROD2_GENERATION_DISPATCH_REFUSED: scoped GitHub Actions secret is missing' >&2
             exit 2
           }
-          git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system
+          rm -rf .dhole-system
+          for attempt in 1 2 3 4 5; do
+            if git clone --depth 1 --branch master https://github.com/CustomCodeCR/DholeSystem.git .dhole-system; then
+              break
+            fi
+            rm -rf .dhole-system
+            if (( attempt == 5 )); then
+              echo '::error::DholeSystem checkout unavailable after 5 attempts; verify runner DNS and HTTPS.'
+              getent ahostsv4 github.com || true
+              exit 1
+            fi
+            echo "::warning::Transient clone failure, retry $attempt/5"
+            sleep $((attempt * 5))
+          done
           mkdir -p "$RUNNER_TEMP/master-prod2-release"
           chmod 700 "$RUNNER_TEMP/master-prod2-release"
           bash .dhole-system/deploy/prepare-environments.sh \
@@ -116,6 +129,9 @@ jobs:
               ;;
             prod2)
               bash scripts/deploy-active-prod2-release.sh "$GITHUB_SHA" .dhole-system "$MASTER_PROD2_ENV" "$HOME/dhole-agent-protected-release-backups"
+              ;;
+            prod3)
+              bash scripts/deploy-active-prod3-release.sh "$GITHUB_SHA" .dhole-system "$MASTER_PROD2_ENV" "$HOME/dhole-agent-protected-release-backups"
               ;;
             *) echo '::error::Unsupported Agent worker generation'; exit 1 ;;
           esac
