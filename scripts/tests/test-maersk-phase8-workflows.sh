@@ -33,7 +33,7 @@ for workflow in "$staging"; do
   if grep -Eq '^[[:space:]]+push:' "$workflow"; then
     [[ "$workflow" == "$staging" ]] || { echo "Only staging may use a narrowly scoped push trigger" >&2; exit 1; }
     grep -Fq 'branches: [develop]' "$workflow"
-    grep -Fq '.github/workflows/deploy-staging.yml' "$workflow"
+    if grep -Fq '    paths:' "$workflow"; then echo 'Staging must deploy every develop push' >&2; exit 1; fi
     grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
     grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
   fi
