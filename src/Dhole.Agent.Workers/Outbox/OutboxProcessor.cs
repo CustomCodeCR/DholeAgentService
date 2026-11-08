@@ -46,10 +46,12 @@ internal sealed class OutboxProcessor(
                 await dbContext.SaveChangesAsync(cancellationToken);
 
                 var payload = JsonSerializer.Deserialize<object>(message.PayloadJson);
-                var stream =
-                    configuration[$"Redis:Streams:Destinations:{message.EventName}"] ??
-                    configuration["Redis:Streams:DefaultStreamName"] ??
-                    "dhole.agent.events";
+                var stream = message.EventName is "agent.execution.changed.v1"
+                    or "agent.definition.changed.v1" or "agent.schedule.changed.v1"
+                    ? "dhole.agent.realtime.v1"
+                    : configuration[$"Redis:Streams:Destinations:{message.EventName}"] ??
+                      configuration["Redis:Streams:DefaultStreamName"] ??
+                      "dhole.agent.events";
 
                 await publisher.PublishAsync(
                     new RedisStreamMessage
