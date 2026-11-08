@@ -64,7 +64,7 @@ public sealed class ServiceDbContext(DbContextOptions<ServiceDbContext> options,
             return;
         ChangeTracker.DetectChanges();
         foreach (var entry in ChangeTracker.Entries()
-            .Where(x => x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
+            .Where(x => x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).ToArray())
         {
             var resource = entry.Entity switch
             {
