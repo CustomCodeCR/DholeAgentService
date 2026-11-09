@@ -24,6 +24,7 @@ jobs:
           git config user.name 'Dhole Realtime Branch Sync'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin develop master
+          git diff origin/develop...HEAD -- src/Dhole.Agent.Workers/Outbox/OutboxProcessor.cs > /tmp/agent-resource-realtime.patch
           for target in develop master; do
             if git merge-base --is-ancestor "origin/$target" HEAD; then
               echo "$target already included"
@@ -85,6 +86,9 @@ jobs:
                 git add "$path"
               done <<< "$conflicts"
               git restore --source=HEAD --staged --worktree -- .github/workflows
+              if [[ "$target" == "master" && -s /tmp/agent-resource-realtime.patch ]]; then
+                git apply --3way --index /tmp/agent-resource-realtime.patch
+              fi
               unresolved="$(git diff --name-only --diff-filter=U)"
               if [ -n "$unresolved" ]; then
                 echo "::error::Code conflicts with $target: $unresolved. Nothing pushed."
