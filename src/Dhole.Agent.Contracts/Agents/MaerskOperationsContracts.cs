@@ -5,12 +5,7 @@ namespace Dhole.Agent.Contracts.Agents;
 public sealed record MaerskOperationCircuitDto(
     bool FeatureEnabled, string State, bool RequiresOperator,
     string? ReasonCode, DateTime? OpenUntilUtc,
-    int ConsecutiveFailures, Guid? ProbeExecutionId)
-{
-    public DateTime? UpdatedAtUtc { get; init; }
-    public string? PersistedState { get; init; }
-    public string ConfigurationSource { get; init; } = "Default";
-}
+    int ConsecutiveFailures, Guid? ProbeExecutionId);
 
 public sealed record MaerskOperationCountersDto(
     int Queued, int Running, int WaitingForAuthentication,

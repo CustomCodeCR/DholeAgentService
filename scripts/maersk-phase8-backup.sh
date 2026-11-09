@@ -10,10 +10,11 @@ backup_root="${2:?Durable backup root required}"
 die() { printf 'Phase 8 backup failed: %s\n' "$*" >&2; exit 1; }
 
 case "$environment" in
-  staging) project="dhole-staging"; network="dhole-staging" ;;
-  production) project="dhole"; network="dhole" ;;
-  prod2) project="dhole-agent-prod2"; network="dhole" ;;
-  prod3) project="dhole-agent-prod3"; network="dhole" ;;
+  staging) project="dhole-staging"; network="dhole-staging"; worker_service="dhole-agent-workers" ;;
+  production) project="dhole"; network="dhole"; worker_service="dhole-agent-workers" ;;
+  prod1) project="dhole-agent-prod1"; network="dhole"; worker_service="dhole-agent-workers-prod1" ;;
+  prod2) project="dhole-agent-prod2"; network="dhole"; worker_service="dhole-agent-workers" ;;
+  prod3) project="dhole-agent-prod3"; network="dhole"; worker_service="dhole-agent-workers" ;;
   *) die "Invalid environment" ;;
 esac
 
@@ -26,7 +27,7 @@ command -v docker >/dev/null || die "Docker is required"
 # Do not copy a live Chromium profile, and never interrupt a running execution.
 # Operators must drain the job queue and stop just this worker beforehand.
 worker="$(docker ps -q --filter "label=com.docker.compose.project=$project" \
-  --filter "label=com.docker.compose.service=dhole-agent-workers" | head -n 1)"
+  --filter "label=com.docker.compose.service=$worker_service" | head -n 1)"
 [[ -z "$worker" ]] || die "Agent worker is running; drain jobs and stop it before taking a consistent profile snapshot"
 
 connection="$(sed -n 's/^AGENT_POSTGRES_CONNECTION_STRING=//p' "$DHOLE_ENV_FILE" | head -n 1 | tr -d '\r')"
@@ -43,32 +44,18 @@ host="${host:-postgres}"
 port="${port:-5432}"
 [[ "$database" =~ ^[A-Za-z0-9_]+$ && -n "$username" && -n "$password" ]] || die "Invalid database configuration"
 
-# pg_dump must be at least the server's major version. Staging currently
-# runs PostgreSQL 17 while production may have a different major.
-# Query the existing server with a read-only client; never upgrade servers.
-server_version_num="$(docker run --rm --network "$network" -e PGPASSWORD="$password" \
-  -e PGOPTIONS='-c default_transaction_read_only=on' postgres:17-alpine \
-  psql -X -v ON_ERROR_STOP=1 -At -h "$host" -p "$port" -U "$username" -d "$database" \
-  -c 'SHOW server_version_num;')"
-[[ "$server_version_num" =~ ^[0-9]+$ ]] || die 'Could not detect PostgreSQL server version'
-pg_major="$((server_version_num / 10000))"
-case "$pg_major" in
-  16|17) ;;
-  *) die "PostgreSQL server major $pg_major not yet supported by backup verification" ;;
-esac
-backup_image="postgres:$pg_major-alpine"
-docker image inspect "$backup_image" >/dev/null 2>&1 || die "Required matching PostgreSQL image absent: $backup_image"
-echo "BACKUP_POSTGRES_MAJOR=$pg_major"
-
-profile_volume="${project}_agent-browser-profiles"
-keys_volume="${project}_agent-data-protection-keys"
-if [[ "$environment" == prod2 || "$environment" == prod3 ]]; then
-  worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dhole-agent-workers")"
-  [[ "$(printf '%s\n' "$worker_container" | sed '/^$/d' | wc -l)" == 1 ]] ||
-    die 'Existing generation Worker container not uniquely identified'
+if [[ "$environment" == prod1 || "$environment" == prod2 || "$environment" == prod3 ]]; then
+  # Discover persistent volume names from the already-provisioned prod1
+  # container; never guess paths or copy profiles from the primary generation.
+  worker_container="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+    --filter "label=com.docker.compose.service=$worker_service")"
+  [[ -n "$worker_container" ]] || die 'Existing generation Worker container missing'
   profile_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/browser-profiles"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
   keys_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/agent-keys"}}{{.Name}}{{end}}{{end}}' "$worker_container")"
-  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing prod2 persistent mounts'
+  [[ -n "$profile_volume" && -n "$keys_volume" ]] || die 'Missing generation persistent mount'
+else
+  profile_volume="${project}_agent-browser-profiles"
+  keys_volume="${project}_agent-data-protection-keys"
 fi
 docker volume inspect "$profile_volume" >/dev/null || die "Browser-profile volume does not exist: $profile_volume"
 docker volume inspect "$keys_volume" >/dev/null || die "Data-protection volume does not exist: $keys_volume"
@@ -85,20 +72,20 @@ mkdir -p "$backup_root/$environment"
 mkdir -m 700 "$output" || die "Could not create unique backup location"
 
 docker run --rm --network "$network" -e PGPASSWORD="$password" \
-  -v "$output:/backup" "$backup_image" \
+  -v "$output:/backup" postgres:17-alpine \
   pg_dump -h "$host" -p "$port" -U "$username" -Fc -f /backup/agent.dump "$database"
 
-docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" "$backup_image" \
+docker run --rm -v "$profile_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
   tar -C /source -czf /backup/browser-profiles.tar.gz .
-docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" "$backup_image" \
+docker run --rm -v "$keys_volume:/source:ro" -v "$output:/backup" alpine:3.20 \
   tar -C /source -czf /backup/agent-keys.tar.gz .
 
-printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\nkeys_volume=%s\npostgres_major=%s\ncreated_epoch=%s\n' \
-  "$environment" "$project" "$database" "$profile_volume" "$keys_volume" "$pg_major" "$(date -u +%s)" > "$output/metadata.txt"
+printf 'environment=%s\ncompose_project=%s\ndatabase_name=%s\nprofile_volume=%s\nkeys_volume=%s\ncreated_epoch=%s\n' \
+  "$environment" "$project" "$database" "$profile_volume" "$keys_volume" "$(date -u +%s)" > "$output/metadata.txt"
 (cd "$output" && sha256sum agent.dump browser-profiles.tar.gz agent-keys.tar.gz metadata.txt > SHA256SUMS)
 # Bind-mounted snapshots are created as container root. Return file ownership
 # to the self-hosted runner while keeping archives private.
-docker run --rm -v "$output:/backup" "$backup_image" sh -c \
+docker run --rm -v "$output:/backup" alpine:3.20 sh -c \
   "chown $(id -u):$(id -g) /backup/* && chmod 600 /backup/*"
 # GitHub Actions output contains only the operator's host path, never backup bytes.
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
