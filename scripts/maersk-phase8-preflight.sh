@@ -39,15 +39,11 @@ created="$(sed -n 's/^created_epoch=//p' "$backup_dir/metadata.txt" | head -n 1)
 (cd "$backup_dir" && sha256sum -c --status SHA256SUMS) || die "Backup checksum mismatch"
 tar -tzf "$backup_dir/browser-profiles.tar.gz" >/dev/null || die "Corrupt browser profile archive"
 tar -tzf "$backup_dir/agent-keys.tar.gz" >/dev/null || die "Corrupt data-protection archive"
-pg_major="$(sed -n 's/^postgres_major=//p' "$backup_dir/metadata.txt" | head -n 1)"
-pg_major="${pg_major:-16}" # Backwards-compatible old PostgreSQL 16 snapshots.
-case "$pg_major" in 16|17) ;; *) die 'Unsupported PostgreSQL dump major version' ;; esac
-docker run --rm -v "$backup_dir:/backup:ro" "postgres:$pg_major-alpine" \
+docker run --rm -v "$backup_dir:/backup:ro" postgres:17-alpine \
   pg_restore --file /dev/null /backup/agent.dump >/dev/null || die "Corrupt PostgreSQL archive"
 
-# First rollout remains opt-in. An already activated installation can
-# upgrade only after the same backup/restore gates and an explicit active
-# redeploy acknowledgment, with both protection and monitoring still on.
+# First activation requires disabled flags. Subsequent redeploys need an
+# explicit declaration, intact backup and live schema with circuit already on.
 read_flag() {
   sed -n "s/^$1=//p" "$env_file" | tail -n 1 | tr -d '\r' | tr '[:upper:]' '[:lower:]'
 }

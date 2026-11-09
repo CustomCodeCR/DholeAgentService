@@ -282,10 +282,8 @@ public sealed class MaerskAgentProvider(
                     "The original Maersk session did not display an authenticated account at /book. " +
                     "The browser profile and circuit were preserved; verify access interactively.");
 
-            // ExecuteSearchAsync navigates to the booking page before the first
-            // search. Do not reload /book a second time during authentication:
-            // repeated navigation increases session churn and can invalidate UI state.
-
+            // Authentication success is recorded only after the login service
+            // has actually verified the original Maersk session.
             if (browserProfile is not null)
             {
                 browserProfile.Authenticate(DateTime.UtcNow);
@@ -319,6 +317,8 @@ public sealed class MaerskAgentProvider(
 
         if (verificationOnly)
         {
+            // No search parameters, offers, UI search, or provider replay.
+            // The circuit remains open until a separate operator reset.
             return AgentProviderExecutionResult.Completed(
                 "{\"verificationOnly\":true,\"provider\":\"MAERSK\",\"sessionVerified\":true}",
                 "MaerskSessionVerification", "1.0",

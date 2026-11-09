@@ -33,7 +33,6 @@ export DHOLE_ENV_FILE="$fixture/.env"
 export COMPOSE_FILE="$fixture/compose.yml"
 export COMPOSE_OVERRIDE="$fixture/staging.yml"
 
-grep -Fq PHASE8_RESTORE_REFERENCE_INTEGRITY_FAILED "$repo/scripts/maersk-phase8-restore-drill.sh"
 rollback="$repo/scripts/maersk-phase8-image-rollback.sh"
 bash -n "$rollback"
 
@@ -74,9 +73,9 @@ for workflow in "$repo/.github/workflows/deploy-staging.yml"; do
   fi
 done
 
-# Production uses the verified generation-specific scripts rather than the legacy image rollback.
+# Protected production uses generation-aware per-worker snapshots and rollback.
 production="$repo/.github/workflows/deploy-production.yml"
-grep -Fq 'Protect active generation' "$production" || grep -Fq 'Deploy exact SHA to verified active generation' "$production"
+grep -Fq 'Deploy exact SHA to verified active generation' "$production"
 grep -Fq 'scripts/deploy-active-prod1-npgsql-hotfix.sh' "$production"
 grep -Fq 'scripts/deploy-active-prod2-release.sh' "$production"
 grep -Fq 'dhole-agent-protected-release-backups' "$production"

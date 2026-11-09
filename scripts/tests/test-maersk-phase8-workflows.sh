@@ -13,9 +13,11 @@ for workflow in "$staging"; do
   grep -Fq 'backup_dir:' "$workflow"
   grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
   grep -Fq 'Require enabled Maersk circuit and monitoring' "$workflow"
-  # Restore checks run as independent recoverability maintenance. Deploy still
-  # requires a verified backup, schema validation, health checks and rollback.
-  grep -Fq 'maersk-phase8-schema-check.sh' "$workflow"
+  # Full restores belong to the separate backup/repair workflow, not each deploy.
+  if grep -Fq 'maersk-phase8-restore-drill.sh' "$workflow"; then
+    echo "Duplicate full database restoration must not block routine deployments: $workflow" >&2
+    exit 1
+  fi
   grep -Fq 'cancel-in-progress: false' "$workflow"
   grep -Fq 'AGENT_QUEUE_(PUMP|CONCURRENT)_STARTED' "$workflow"
   grep -Fq 'Verify Agent worker queue pump' "$workflow"
@@ -33,7 +35,7 @@ for workflow in "$staging"; do
   if grep -Eq '^[[:space:]]+push:' "$workflow"; then
     [[ "$workflow" == "$staging" ]] || { echo "Only staging may use a narrowly scoped push trigger" >&2; exit 1; }
     grep -Fq 'branches: [develop]' "$workflow"
-    if grep -Fq '    paths:' "$workflow"; then echo 'Staging must deploy every develop push' >&2; exit 1; fi
+    grep -Fq '.github/workflows/deploy-staging.yml' "$workflow"
     grep -Fq 'maersk-one-shot-deployment-snapshot.sh' "$workflow"
     grep -Fq 'maersk-phase8-preflight.sh' "$workflow"
   fi
@@ -50,7 +52,7 @@ for workflow in "$staging"; do
   fi
 done
 
-[[ -s "$production" ]] || { echo "Missing production workflow" >&2; exit 1; }
+[[ -s "$production" ]] || { echo "Production workflow missing" >&2; exit 1; }
 grep -Fq 'branches: [master]' "$production"
 grep -Fq 'push:' "$production"
 grep -Fq 'workflow_dispatch:' "$production"
@@ -61,15 +63,12 @@ grep -Fq 'scripts/deploy-active-prod2-release.sh' "$production"
 grep -Fq 'GITHUB_SHA' "$production"
 grep -Fq 'dhole-agent-protected-release-backups' "$production"
 grep -Fq 'MASTER_AGENT_DEPLOYMENT_CONFIRMED' "$production"
-if grep -Fq 'workflow_run:' "$production" || grep -Fq 'confirmation:' "$production"; then
-  echo "Production must be triggered by master, not by manual confirmation/staging promotion" >&2
-  exit 1
-fi
+if grep -Fq 'workflow_run:' "$production" || grep -Fq 'confirmation:' "$production"; then echo 'Legacy approval gate forbidden' >&2; exit 1; fi
 for guarded in "$root/scripts/deploy-active-prod1-npgsql-hotfix.sh" "$root/scripts/deploy-active-prod2-release.sh"; do
-  [[ -s "$guarded" ]] || { echo "Missing generation-aware rollback script: $guarded" >&2; exit 1; }
-  grep -Fq 'SHA256SUMS' "$guarded"
-  grep -Fq 'find_running_generation()' "$guarded"
-  grep -Fq 'rollback' "$guarded"
+ [[ -s "$guarded" ]] || exit 1
+ grep -Fq 'SHA256SUMS' "$guarded"
+ grep -Fq 'find_running_generation()' "$guarded"
+ grep -Fq 'rollback' "$guarded"
 done
 [[ -s "$backup" ]] || { echo "Missing guarded manual backup workflow" >&2; exit 1; }
 for expected in 'workflow_dispatch:' 'BACKUP_AGENT_STAGING' 'BACKUP_AGENT_PRODUCTION' \

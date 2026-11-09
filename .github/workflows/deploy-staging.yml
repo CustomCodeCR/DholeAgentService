@@ -37,6 +37,8 @@ on:
   # guarded staging deploy; ordinary develop pushes remain validation-only.
   push:
     branches: [develop]
+    paths:
+      - '.github/workflows/deploy-staging.yml'
   workflow_dispatch:
     inputs:
       confirmation:
