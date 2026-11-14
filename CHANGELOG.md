@@ -1,3 +1,8 @@
+## [1.5.0] - 2026-11-14 (API Manager REST inventory)
+
+- MINOR: inventario seguro de Agent, sin alterar Hermes ni automatizaciones.
+- Ecosistema 1.56.0.
+
 # Changelog
 
 ## [1.2.2] - 2026-11-05
