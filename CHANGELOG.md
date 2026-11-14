@@ -1,3 +1,8 @@
+## [1.5.0] - 2026-11-14 (API Manager discovery)
+
+- MINOR: inventario HTTP de Agent disponible para el administrador de integraciones autenticado, sin cambiar acciones ni autenticación de operaciones.
+- Global Dhole 1.56.0; preserva Hermes y realtime.
+
 # Changelog
 
 ## [1.4.0] - 2026-11-09 (NotificationsHub universal realtime pilot; candidate)

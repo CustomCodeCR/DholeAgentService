@@ -2,8 +2,9 @@
   "schemaVersion": 1,
   "ecosystem": "Dhole",
   "component": "DholeAgentService",
-  "version": "1.4.0",
-  "ecosystemVersion": "1.14.0",
-  "releaseId": "rt-20261107-01",
-  "releaseStatus": "candidate-notificationshub-staging-not-deployed"
+  "version": "1.5.0",
+  "ecosystemVersion": "1.56.0",
+  "releaseId": "DH-20261114-API-MANAGER-ROUTE-DISCOVERY-143",
+  "releaseStatus": "candidate-ci-and-staging-pending",
+  "businessReleaseId": "DH-20261114-API-MANAGER-ROUTE-DISCOVERY-143"
 }
